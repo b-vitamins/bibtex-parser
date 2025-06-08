@@ -1,0 +1,30 @@
+% This file contains malformed entries for error testing
+
+@article{missing_comma
+    author = "John Doe"
+    title = "Missing Comma Between Fields"
+}
+
+@book{unmatched_brace,
+    author = "Jane Smith",
+    title = "Unmatched {Brace",
+    year = 2023
+}
+
+@misc{bad_string_ref,
+    author = undefined_string,
+    title = "References undefined string"
+}
+
+@article{,
+    author = "No Key",
+    title = "Entry without citation key"
+}
+
+@weird_type{unknown,
+    title = "Unknown entry type"
+}
+
+@article{unclosed,
+    author = "Not Closed",
+    title = "Entry not properly closed"
