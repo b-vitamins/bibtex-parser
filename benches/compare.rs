@@ -46,7 +46,7 @@ fn generate_realistic_bibtex(n_entries: usize) -> String {
                 let entry = format!(
                     r#"@article{{entry{},
     author = "Author {} and Coauthor {} and Third Author",
-    title = {{A Comprehensive Study of {} in Modern Computing Systems}},
+    title = {{A Comprehensive Study of Topic {} in Modern Computing Systems}},
     journal = "{}",
     year = {},
     volume = {},
@@ -64,7 +64,7 @@ fn generate_realistic_bibtex(n_entries: usize) -> String {
                     i,
                     i % 100,
                     i % 50,
-                    format!("Topic {}", i % 20),
+                    i % 20,
                     journals[i % journals.len()],
                     2000 + (i % 25),
                     i % 50 + 1,
@@ -80,7 +80,7 @@ fn generate_realistic_bibtex(n_entries: usize) -> String {
                 let entry = format!(
                     r#"@book{{book{},
     author = "Book Author {} and Editor {}",
-    title = {{Advanced Techniques in {}: A Practitioner's Guide}},
+    title = {{Advanced Techniques in Field {}: A Practitioner's Guide}},
     publisher = "{}",
     year = {},
     edition = "{}",
@@ -93,7 +93,7 @@ fn generate_realistic_bibtex(n_entries: usize) -> String {
                     i,
                     i % 100,
                     i % 50,
-                    format!("Field {}", i % 15),
+                    i % 15,
                     publishers[i % publishers.len()],
                     2005 + (i % 20),
                     match i % 4 {
@@ -113,8 +113,8 @@ fn generate_realistic_bibtex(n_entries: usize) -> String {
                 let entry = format!(
                     r#"@inproceedings{{conf{},
     author = "Presenter {} and Co-author {} and Team Member {}",
-    title = "Innovative Approaches to {} Using Machine Learning",
-    booktitle = "Proceedings of the {}th International Conference on {}",
+    title = "Innovative Approaches to Problem {} Using Machine Learning",
+    booktitle = "Proceedings of the {}th International Conference on Technology {}",
     year = {},
     pages = "{}-{}",
     location = "San Francisco, CA",
@@ -127,9 +127,9 @@ fn generate_realistic_bibtex(n_entries: usize) -> String {
                     i % 100,
                     i % 75,
                     i % 25,
-                    format!("Problem {}", i % 30),
+                    i % 30,
                     i % 50 + 1,
-                    format!("Technology {}", i % 10),
+                    i % 10,
                     2010 + (i % 15),
                     i * 5,
                     i * 5 + 4
@@ -140,7 +140,7 @@ fn generate_realistic_bibtex(n_entries: usize) -> String {
                 let entry = format!(
                     r#"@misc{{misc{},
     author = "Various Authors",
-    title = "Technical Note on {}",
+    title = "Technical Note on Subject {}",
     howpublished = "\url{{https://example.com/note{}}}",
     year = {},
     note = "Accessed: 2024-01-01"
@@ -148,7 +148,7 @@ fn generate_realistic_bibtex(n_entries: usize) -> String {
 
 "#,
                     i,
-                    format!("Subject {}", i % 40),
+                    i % 40,
                     i,
                     2020 + (i % 5)
                 );
@@ -274,8 +274,7 @@ fn bench_operations(c: &mut Criterion) {
     group.finish();
 }
 
-/// Compare with nom-bibtex if available
-#[cfg(feature = "compare_nom_bibtex")]
+/// Compare with nom-bibtex
 fn bench_comparison(c: &mut Criterion) {
     use nom_bibtex::Bibtex;
 
@@ -310,16 +309,6 @@ fn bench_comparison(c: &mut Criterion) {
     group.finish();
 }
 
-// Configure criterion groups based on available features
-#[cfg(not(feature = "compare_nom_bibtex"))]
-criterion_group!(
-    benches,
-    bench_bibtex_parser,
-    bench_memory_patterns,
-    bench_operations
-);
-
-#[cfg(feature = "compare_nom_bibtex")]
 criterion_group!(
     benches,
     bench_bibtex_parser,
