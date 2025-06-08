@@ -15,3 +15,17 @@ target/
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+# Benchmark reports (keep reports, ignore criterion data)
+/target/criterion/
+/benchmarks/reports/*.md
+!/benchmarks/reports/.gitkeep
+
+# Keep the latest symlink for easy access
+!/benchmarks/reports/latest.md
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
