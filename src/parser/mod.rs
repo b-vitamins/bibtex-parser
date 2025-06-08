@@ -20,13 +20,13 @@ pub fn parse_bibtex(input: &str) -> Result<Vec<ParsedItem>> {
     let mut remaining = input;
 
     while !remaining.trim().is_empty() {
-        // Skip whitespace and comments
-        remaining = skip_whitespace_and_comments(remaining);
+        // Skip only whitespace (not comments!)
+        remaining = remaining.trim_start();
         if remaining.is_empty() {
             break;
         }
 
-        // Try to parse an item
+        // Try to parse an item (including comments)
         match parse_item(&mut remaining) {
             Ok(item) => items.push(item),
             Err(e) => {
@@ -142,30 +142,6 @@ fn parse_comment<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
         take_until(1.., "@").verify(|s: &str| !s.trim().is_empty()),
     ))
     .parse_next(input)
-}
-
-/// Skip whitespace and comments at the beginning of input
-fn skip_whitespace_and_comments(mut input: &str) -> &str {
-    loop {
-        let trimmed = input.trim_start();
-        if trimmed.starts_with('%') {
-            // Skip line comment
-            if let Some(pos) = trimmed.find('\n') {
-                input = &trimmed[pos + 1..];
-            } else {
-                return "";
-            }
-        } else if !trimmed.starts_with('@') && !trimmed.is_empty() {
-            // Non-@ text is a comment
-            if let Some(pos) = trimmed.find('@') {
-                input = &trimmed[pos..];
-            } else {
-                return "";
-            }
-        } else {
-            return trimmed;
-        }
-    }
 }
 
 /// Calculate line and column from position
