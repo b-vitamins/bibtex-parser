@@ -1,0 +1,42 @@
+[package]
+name = "bibtex-parser"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+authors = ["Ayan Das <bvits@riseup.net>"]
+description = "Yet another bibtex-parser"
+documentation = "https://docs.rs/bibtex-parser"
+repository = "https://github.com/b-vitamins/bibtex-parser"
+readme = "README.md"
+keywords = ["bibtex", "parser", "latex", "bibliography", "citation"]
+categories = ["parser-implementations", "text-processing"]
+license = "MIT OR Apache-2.0"
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+winnow = "0.5"
+thiserror = "1.0"
+memchr = "2.7"
+ahash = "0.8"
+unicode-normalization = "0.1"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+pretty_assertions = "1.4"
+insta = { version = "1.34", features = ["yaml"] }
+proptest = "1.4"
+
+[[bench]]
+name = "parser"
+harness = false
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+
+[profile.bench]
+inherits = "release"
