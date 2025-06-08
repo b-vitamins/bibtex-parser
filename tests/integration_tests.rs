@@ -19,7 +19,7 @@ fn test_parse_simple_file() {
         Some("Zur Elektrodynamik bewegter Körper")
     );
     assert_eq!(entry.get("journal"), Some("Annalen der Physik"));
-    assert_eq!(entry.get("year"), Some("1905"));
+    assert_eq!(entry.get_as_string("year"), Some("1905".to_string()));
 
     // Check string expansion
     let entry2 = &db.entries()[1];
