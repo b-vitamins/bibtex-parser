@@ -7,4 +7,5 @@
    "python-rich"
    "git"
    "make"
-   "coreutils"))
+   "coreutils"
+   "valgrind"))
