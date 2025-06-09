@@ -44,6 +44,22 @@ path = "src/bin/tracealloc.rs"
 name = "diagnose"
 path = "src/bin/diagnose.rs"
 
+[[bin]]
+name = "analyze"
+path = "src/bin/analyze_patterns.rs"
+
+[[bin]]
+name = "simd"
+path = "src/bin/simd_potential.rs"
+
+[[bin]]
+name = "profile"
+path = "src/bin/profile_parser.rs"
+
+[[bin]]
+name = "fixtures"
+path = "src/bin/test_fixtures.rs"
+
 [[bench]]
 name = "performance"
 harness = false
