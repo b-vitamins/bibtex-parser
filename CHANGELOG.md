@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Vector shrink_to_fit optimization eliminating over-allocation
   - Memory test suite validating struct sizes
   - Realistic test fixtures based on actual academic entries (src/fixtures.rs)
+- **Phase 1.3 In Progress** - SIMD Acceleration Analysis (2025-06-09)
+  - Created comprehensive profiling tools (`analyze_patterns.rs`, `simd_potential.rs`, `profile_parser.rs`)
+  - Collected detailed performance data with perf, flame graphs, and custom analysis
+  - Generated pattern distribution analysis for realistic BibTeX files
+  - Discovered critical insights about optimization targets
 - Memory profiling with custom allocator
   - Tracks peak memory allocation
   - Calculates memory overhead ratio (memory used / input size)
@@ -26,6 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `src/bin/memanalysis.rs` - Structure size and allocation analysis
   - `src/bin/tracealloc.rs` - Allocation tracing with backtraces
   - `src/bin/diagnose.rs` - Comprehensive memory diagnostic with field distribution analysis
+  - `src/bin/analyze_patterns.rs` - Pattern distribution analysis for SIMD opportunities
+  - `src/bin/simd_potential.rs` - SIMD optimization potential estimation
+  - `src/bin/profile_parser.rs` - Component-level performance profiling
 - Automated benchmark reporting with Python script
   - Rich terminal output with tables and color coding
   - Markdown report generation with historical tracking
@@ -56,11 +64,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Abandoned string interning approach (increased memory by 20-126%!)
   - Abandoned SmallVec approach (caused 2.83x - 5.31x file-specific variability)
   - Focused on fixing structural issues instead of complex optimizations
+- **Phase 1.3 Strategy Revision** - SIMD optimization targets updated based on profiling
+  - De-prioritized whitespace skipping (average run only 1.4 bytes)
+  - Prioritized delimiter finding as primary SIMD target
+  - Added field value extraction as secondary target
+  - Identified identifier validation as tertiary target
 
 ### Fixed
 - Zero-copy regression in `database.rs` where string expansion was creating unnecessary owned values
 - Parser handling of `%` comments which were being consumed by whitespace skipping
 - Memory overhead now within target range (was 2.76x - 5.31x, now 0.75x - 1.14x)
+- Benchmark warmup issues causing inconsistent results
+  - Added comprehensive process-level warmup
+  - Warmed up both bibtex-parser and nom-bibtex before measurements
+  - Increased warmup duration to 3 seconds
 
 ### Performance
 - **Throughput**: 359 MB/s average (improved from 341 MB/s)
@@ -97,6 +114,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Was 456 bytes due to padding/alignment issues
   - Should have been 64 bytes
   - Single biggest source of memory waste
+- **Phase 1.3 Profiling Insights** (2025-06-09)
+  - **Whitespace patterns unsuitable for SIMD**
+    - Average run length only 1.4 bytes in realistic files
+    - 17.9% of content is whitespace, but highly fragmented
+    - Zero runs ≥16 bytes (SIMD minimum for efficiency)
+  - **Delimiter finding is the real bottleneck**
+    - 60,000+ delimiters in 1000-entry file
+    - Currently requires sequential scanning
+    - memchr demonstrates 28x speedup potential
+  - **Parser already highly efficient**
+    - Current throughput: ~600 MB/s on realistic data
+    - Only 15.7µs to parse 10 entries
+    - Flame graphs show parsing dominates, not memory allocation
+  - **Academic BibTeX files have unique characteristics**
+    - Dense format with minimal whitespace
+    - Short field names but long values (abstracts)
+    - High delimiter density compared to regular text
 
 ## [0.1.0] - TBD
 
@@ -104,7 +138,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Phase 1**: Performance optimizations
   - [x] Measurement infrastructure ✓
   - [x] Fix structural overhead ✓
-  - [ ] SIMD acceleration
+  - [ ] SIMD acceleration (revised approach)
   - [ ] Parallel parsing
   - [ ] Memory-mapped files
 - **Phase 2**: Features
@@ -155,13 +189,48 @@ Successfully reduced memory overhead to target levels:
 - **Result**: 0% wasted capacity
 - **Impact**: Saved 100-400 KB on typical files
 
-### Phase 1.3 - SIMD Acceleration (Next)
-Planning to accelerate hot paths:
-1. Whitespace skipping (currently uses basic loops)
-2. Delimiter finding (can use SIMD string search)
-3. Balanced brace parsing (parallel scanning)
+### Phase 1.3 - SIMD Acceleration (In Progress)
+Deep profiling revealed need to revise approach:
 
-Expected impact: 2-3x speedup on lexing operations
+#### 1.3a - Profiling Infrastructure (✅ Complete)
+- **Tools Created**:
+  - `analyze_patterns.rs` - Character distribution and pattern analysis
+  - `simd_potential.rs` - SIMD speedup estimation
+  - `profile_parser.rs` - Component timing breakdown
+  - Shell script for comprehensive data collection
+- **Data Collected**:
+  - Flame graphs showing parsing hotspots
+  - Pattern distribution for 10-1000 entry files
+  - CPU performance counters
+  - Comparison of realistic vs synthetic data
+
+#### 1.3b - Revised SIMD Strategy
+Based on profiling data:
+
+1. **Delimiter Finding** (PRIMARY TARGET)
+   - Current: Sequential byte scanning
+   - Opportunity: 28x speedup demonstrated by memchr
+   - Plan: Multi-delimiter SIMD search for @, {, }, =, ,
+   - Impact: Could improve overall performance by 15-25%
+
+2. **Field Value Extraction** (SECONDARY)
+   - Current: Byte-by-byte until delimiter
+   - Opportunity: SIMD scan for field terminators
+   - Plan: Vectorized search for comma/brace in values
+   - Impact: Benefits long abstracts and descriptions
+
+3. **Identifier Validation** (TERTIARY)
+   - Current: Per-character validation
+   - Opportunity: Validate 16 bytes at once
+   - Plan: SIMD character class checking
+   - Impact: Minor, but consistent improvement
+
+4. **Whitespace Skipping** (DEPRIORITIZED)
+   - Finding: Average runs too short (1.4 bytes)
+   - Decision: Not worth SIMD complexity
+   - Alternative: Optimize delimiter finding instead
+
+Expected combined impact: 20-40% performance improvement
 
 ### Key Learnings
 1. **Always profile before optimizing** - String interning seemed obvious but made things worse
@@ -169,6 +238,8 @@ Expected impact: 2-3x speedup on lexing operations
 3. **Simple solutions win** - Boxing one variant beat complex schemes
 4. **Realistic benchmarks matter** - Synthetic data hid our actual performance
 5. **Zero-copy works** - 100% of strings remain borrowed in typical usage
+6. **Profile real workloads** - Academic BibTeX has different patterns than expected
+7. **SIMD needs the right patterns** - Short runs make vectorization ineffective
 
 ### Failed Optimization Attempts (Valuable Lessons)
 1. **String Interning with lasso** (2024-12-09)
@@ -181,6 +252,12 @@ Expected impact: 2-3x speedup on lexing operations
    - Result: 2.83x - 5.31x overhead depending on field count
    - Why: 416-byte struct, wastes 400 bytes when > 10 fields
    - Lesson: File-specific performance is unacceptable for a parser
+
+3. **SIMD Whitespace Skipping** (2025-06-09) [Not implemented, analysis only]
+   - Hypothesis: Vectorize whitespace processing for speedup
+   - Finding: Average whitespace run only 1.4 bytes
+   - Decision: Abandon in favor of delimiter-focused SIMD
+   - Lesson: Profile before implementing complex optimizations
 
 ### Memory Optimization Results Summary
 ```
