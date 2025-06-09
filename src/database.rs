@@ -47,6 +47,10 @@ impl<'a> Database<'a> {
                         let old_value = std::mem::replace(&mut field.value, Value::Number(0));
                         field.value = db.smart_expand_value(old_value)?;
                     }
+
+                    // OPTIMIZATION: Shrink Vec to exact size to save memory
+                    entry.fields.shrink_to_fit();
+
                     db.entries.push(entry);
                 }
                 crate::parser::ParsedItem::Preamble(value) => {
@@ -61,6 +65,11 @@ impl<'a> Database<'a> {
                 }
             }
         }
+
+        // OPTIMIZATION: Shrink all database vectors to exact size
+        db.entries.shrink_to_fit();
+        db.preambles.shrink_to_fit();
+        db.comments.shrink_to_fit();
 
         Ok(db)
     }
@@ -135,7 +144,7 @@ impl<'a> Database<'a> {
             }
 
             // Concatenations need special handling
-            Value::Concat(parts) => self.expand_concatenation(parts),
+            Value::Concat(parts) => self.expand_concatenation(*parts),
         }
     }
 
@@ -154,7 +163,7 @@ impl<'a> Database<'a> {
 
             // Concatenations need cloning
             Value::Concat(parts) => {
-                let cloned_parts = parts.clone();
+                let cloned_parts = (**parts).clone();
                 self.expand_concatenation(cloned_parts)
             }
         }
@@ -186,10 +195,10 @@ impl<'a> Database<'a> {
             Ok(Value::Literal(Cow::Owned(combined)))
         } else if needs_flattening {
             // Complex concatenation, keep as concat
-            Ok(Value::Concat(expanded_parts))
+            Ok(Value::Concat(Box::new(expanded_parts)))
         } else {
             // Keep the structure
-            Ok(Value::Concat(expanded_parts))
+            Ok(Value::Concat(Box::new(expanded_parts)))
         }
     }
 
@@ -205,7 +214,7 @@ impl<'a> Database<'a> {
                 .and_then(|v| self.get_expanded_string(v)),
             Value::Concat(parts) => {
                 let mut result = String::new();
-                for part in parts {
+                for part in parts.iter() {
                     result.push_str(&self.get_expanded_string(part)?);
                 }
                 Ok(result)
@@ -431,6 +440,36 @@ mod tests {
 
         // Concatenation should create an owned string
         assert_eq!(entry.get_as_string("title").unwrap(), "Hello, World");
+    }
+
+    #[test]
+    fn test_boxed_concat_memory_optimization() {
+        // Verify that Value enum is 24 bytes or less (was 32 before optimization)
+        assert!(
+            std::mem::size_of::<Value>() <= 24,
+            "Value enum is {} bytes, should be 24 or less",
+            std::mem::size_of::<Value>()
+        );
+    }
+
+    #[test]
+    fn test_vec_shrink_optimization() {
+        let input = r#"
+            @article{test,
+                a = "1", b = "2", c = "3", d = "4", e = "5",
+                f = "6", g = "7", h = "8", i = "9", j = "10"
+            }
+        "#;
+
+        let db = Database::parse(input).unwrap();
+        let entry = &db.entries()[0];
+
+        // After optimization, capacity should equal length (no waste)
+        assert_eq!(
+            entry.fields.len(),
+            entry.fields.capacity(),
+            "Vec should be shrunk to exact size"
+        );
     }
 
     #[test]

@@ -155,6 +155,7 @@ impl<W: Write> Writer<W> {
             Value::Number(n) => write!(self.writer, "{n}")?,
             Value::Variable(name) => write!(self.writer, "{name}")?,
             Value::Concat(parts) => {
+                // Parts is now Box<Vec<Value>>
                 for (i, part) in parts.iter().enumerate() {
                     if i > 0 {
                         write!(self.writer, " # ")?;

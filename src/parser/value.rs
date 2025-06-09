@@ -18,7 +18,7 @@ fn parse_concatenated_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
 
     match parts.len() {
         1 => Ok(parts.into_iter().next().unwrap()),
-        _ => Ok(Value::Concat(parts)),
+        _ => Ok(Value::Concat(Box::new(parts))), // Box the Vec to keep enum small
     }
 }
 
