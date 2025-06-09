@@ -8,4 +8,6 @@
    "git"
    "make"
    "coreutils"
-   "valgrind"))
+   "valgrind"
+   "rust-inferno"
+   "perf"))
