@@ -75,7 +75,11 @@ fn measure_parse_memory(entries: usize) -> (usize, usize, f64) {
 
     // Show what we're testing
     if entries <= 10 {
-        eprintln!("Testing {} entries (~{} bytes/entry)", entries, input_size / entries);
+        eprintln!(
+            "Testing {} entries (~{} bytes/entry)",
+            entries,
+            input_size / entries
+        );
     }
 
     reset_memory_stats();
@@ -93,9 +97,17 @@ fn measure_parse_memory(entries: usize) -> (usize, usize, f64) {
     #[cfg(debug_assertions)]
     {
         use std::mem;
-        assert_eq!(mem::size_of::<bibtex_parser::Entry>(), 64, "Entry should be 64 bytes");
-        assert_eq!(mem::size_of::<bibtex_parser::Value>(), 24, "Value should be 24 bytes");
-        
+        assert_eq!(
+            mem::size_of::<bibtex_parser::Entry>(),
+            64,
+            "Entry should be 64 bytes"
+        );
+        assert_eq!(
+            mem::size_of::<bibtex_parser::Value>(),
+            24,
+            "Value should be 24 bytes"
+        );
+
         // Check that vectors are shrunk
         for entry in db.entries() {
             assert_eq!(
@@ -111,12 +123,15 @@ fn measure_parse_memory(entries: usize) -> (usize, usize, f64) {
 
 fn main() {
     println!("memory_parse");
-    
+
     // Test different entry counts
     let test_sizes = [10, 50, 100, 500, 1000, 5000];
 
     eprintln!("\n📊 Testing with REALISTIC academic entries:");
-    eprintln!("  - Average entry size: ~{} bytes", average_bytes_per_entry());
+    eprintln!(
+        "  - Average entry size: ~{} bytes",
+        average_bytes_per_entry()
+    );
     eprintln!("  - Includes: long authors, titles, abstracts");
     eprintln!("  - Based on: NeurIPS, ICML, Phys Rev, etc.\n");
 
@@ -130,7 +145,7 @@ fn main() {
             entries, input_size, peak, current, overhead
         );
     }
-    
+
     // Print optimization status and expected results
     eprintln!("\n✅ Memory optimizations active:");
     eprintln!("  - Entry: 64 bytes (was 456)");
