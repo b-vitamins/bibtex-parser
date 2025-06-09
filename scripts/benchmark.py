@@ -2,6 +2,7 @@
 """Generate benchmark reports from existing criterion results."""
 
 import json
+import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -37,6 +38,9 @@ MIN_SPEEDUP_SAMPLES = 2
 # Benchmark parsing constants
 MIN_COMPARISON_PARTS = 3
 PARSER_COMPARISON_PARTS = 3  # parser_comparison/parser-name/entries
+MIN_MEMORY_PARSE_PARTS = 5  # For parsing memory output
+MEMORY_OVERHEAD_EXCELLENT = 1.5
+MEMORY_OVERHEAD_GOOD = 2.0
 
 # Data constants - Updated based on actual measurements
 BYTES_PER_ENTRY_ESTIMATE = {
@@ -97,6 +101,13 @@ def load_results() -> dict[str, float]:
     criterion_dir = Path("target/criterion")
     results = {}
 
+    # If only running memory benchmarks, criterion results are optional
+    if "--memory" in sys.argv and not criterion_dir.exists():
+        console.print(
+            "[yellow]No criterion results found, running memory benchmarks only.[/yellow]"
+        )
+        return {}
+
     if not criterion_dir.exists():
         console.print("[red]No criterion results found![/red]")
         console.print("Run benchmarks first: [yellow]cargo bench[/yellow]")
@@ -106,6 +117,11 @@ def load_results() -> dict[str, float]:
     json_files = list(criterion_dir.glob("**/base/estimates.json"))
 
     if not json_files:
+        if "--memory" in sys.argv:
+            console.print(
+                "[yellow]No benchmark results found, running memory benchmarks only.[/yellow]"
+            )
+            return {}
         console.print("[red]No benchmark results found![/red]")
         console.print("Make sure benchmarks completed successfully.")
         sys.exit(1)
@@ -142,25 +158,6 @@ def load_results() -> dict[str, float]:
             console.print(f"[dim]Error reading {bench_name}: {e}[/dim]")
 
     return results
-
-
-def extract_entry_count(name: str) -> int | None:
-    """Extract entry count from benchmark name parts."""
-    parts = name.replace("-", "/").replace("_", "/").split("/")
-    for part in reversed(parts):
-        try:
-            return int(part)
-        except ValueError:
-            continue
-    return None
-
-
-def parse_simple_entry_count(name: str) -> int | None:
-    """Try to parse name as simple integer."""
-    try:
-        return int(name)
-    except ValueError:
-        return None
 
 
 def parse_parser_comparison(
@@ -373,8 +370,8 @@ def show_operations_performance(ops_benches: dict) -> None:
     console.print()
 
 
-def show_memory_performance(memory_benches: dict) -> None:
-    """Display memory usage patterns."""
+def show_memory_time_performance(memory_benches: dict) -> None:
+    """Display memory usage patterns from criterion benchmarks."""
     if not memory_benches:
         return
 
@@ -400,23 +397,97 @@ def show_memory_performance(memory_benches: dict) -> None:
         console.print()
 
 
-def show_summary(parse_benches: dict, nom_benches: dict) -> None:
-    """Display performance summary with goals."""
-    if not parse_benches:
+def run_memory_profiling() -> dict[str, dict]:
+    """Run memory profiling and parse results."""
+    console.print("\n[yellow]Running memory profiling benchmark...[/yellow]")
+
+    try:
+        # Run the memory benchmark (S603, S607: cargo is expected to be in PATH)
+        result = subprocess.run(  # noqa: S603
+            ["cargo", "bench", "--bench", "memory"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        # Parse the output
+        memory_data = {}
+        lines = result.stdout.strip().split("\n")
+
+        for line in lines:
+            if line.startswith("memory_parse/"):
+                parts = line.split("\t")
+                if len(parts) >= MIN_MEMORY_PARSE_PARTS:
+                    # memory_parse/entries  input_size  peak  current  overhead
+                    entries = int(parts[0].split("/")[1])
+                    memory_data[entries] = {
+                        "input_size": int(parts[1]),
+                        "peak": int(parts[2]),
+                        "current": int(parts[3]),
+                        "overhead": float(parts[4]),
+                    }
+
+        if memory_data:
+            console.print(
+                f"[green]Memory profiling complete - {len(memory_data)} data points collected[/green]"
+            )
+        else:
+            console.print(
+                "[yellow]No memory data collected - check benchmark output[/yellow]"
+            )
+
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]Memory profiling failed: {e}[/red]")
+        if e.stderr:
+            console.print(f"[dim]stderr: {e.stderr}[/dim]")
+        return {}
+    except (ValueError, IndexError) as e:
+        console.print(f"[red]Error parsing memory data: {e}[/red]")
+        return {}
+    else:
+        return memory_data
+
+
+def show_memory_performance(memory_data: dict) -> None:
+    """Display memory usage table."""
+    if not memory_data:
         return
 
-    # Calculate averages
+    table = Table(title="Memory Usage Analysis", box=box.ROUNDED)
+    table.add_column("Entries", justify="right", style="cyan")
+    table.add_column("Input Size", justify="right", style="dim")
+    table.add_column("Peak Memory", justify="right")
+    table.add_column("Memory Overhead", justify="right", style="yellow")
+
+    for entries in sorted(memory_data.keys()):
+        data = memory_data[entries]
+
+        # Format memory sizes
+        input_size = format_memory(data["input_size"])
+        peak_memory = format_memory(data["peak"])
+        overhead = data["overhead"]
+
+        # Color code overhead
+        if overhead < MEMORY_OVERHEAD_EXCELLENT:
+            overhead_str = f"[green]{overhead:.2f}x[/green]"
+        elif overhead < MEMORY_OVERHEAD_GOOD:
+            overhead_str = f"[yellow]{overhead:.2f}x[/yellow]"
+        else:
+            overhead_str = f"[red]{overhead:.2f}x[/red]"
+
+        table.add_row(f"{entries:,}", input_size, peak_memory, overhead_str)
+
+    console.print(table)
+    console.print()
+
+
+def calculate_performance_metrics(parse_benches: dict) -> tuple[float, dict]:
+    """Calculate average throughput and time metrics."""
     throughputs = [calc_throughput(e, t) for e, t in parse_benches.items()]
     avg_throughput = sum(throughputs) / len(throughputs) if throughputs else 0
 
-    summary_lines = []
-
-    # Throughput
-    summary_lines.append(
-        f"[green]Average throughput: {avg_throughput:.0f} MB/s[/green]"
-    )
-
-    # Time for specific sizes (Phase 1 goals)
+    # Check specific size goals
+    time_metrics = {}
     size_goals = [
         (1000, 5, "1K entries"),  # < 5ms goal
         (10000, 50, "10K entries"),  # < 50ms goal (extrapolated)
@@ -425,7 +496,63 @@ def show_summary(parse_benches: dict, nom_benches: dict) -> None:
     for size, goal_ms, label in size_goals:
         if size in parse_benches:
             time_ms = parse_benches[size] / NS_TO_MS
-            if time_ms < goal_ms:
+            time_metrics[label] = (time_ms, goal_ms, time_ms < goal_ms)
+
+    return avg_throughput, time_metrics
+
+
+def calculate_speedup_metrics(
+    parse_benches: dict, nom_benches: dict
+) -> dict | None:
+    """Calculate speedup metrics vs nom-bibtex."""
+    if not nom_benches or len(nom_benches) < MIN_SPEEDUP_SAMPLES:
+        return None
+
+    speedups = []
+    for entries, time in parse_benches.items():
+        if entries in nom_benches:
+            speedups.append(nom_benches[entries] / time)
+
+    if speedups:
+        return {
+            "avg": sum(speedups) / len(speedups),
+            "min": min(speedups),
+            "max": max(speedups),
+        }
+    return None
+
+
+def calculate_memory_metrics(memory_data: dict | None) -> tuple[float, bool]:
+    """Calculate memory overhead metrics."""
+    if not memory_data:
+        return 0.0, False
+
+    overheads = [data["overhead"] for data in memory_data.values()]
+    if overheads:
+        avg_overhead = sum(overheads) / len(overheads)
+        meets_goal = avg_overhead < MEMORY_OVERHEAD_EXCELLENT
+        return avg_overhead, meets_goal
+    return 0.0, False
+
+
+def format_summary_lines(
+    avg_throughput: float,
+    time_metrics: dict,
+    speedup_metrics: dict | None,
+    memory_metrics: tuple[float, bool],
+) -> list[str]:
+    """Format all summary lines."""
+    summary_lines = []
+
+    # Only show throughput if we have data
+    if avg_throughput > 0:
+        summary_lines.append(
+            f"[green]Average throughput: {avg_throughput:.0f} MB/s[/green]"
+        )
+
+        # Time goals
+        for label, (time_ms, goal_ms, meets_goal) in time_metrics.items():
+            if meets_goal:
                 status = (
                     f"[green]✓ {time_ms:.1f}ms[/green] (goal: <{goal_ms}ms)"
                 )
@@ -435,31 +562,70 @@ def show_summary(parse_benches: dict, nom_benches: dict) -> None:
                 )
             summary_lines.append(f"{label}: {status}")
 
-    # Speedup vs nom-bibtex
-    if nom_benches and len(nom_benches) >= MIN_SPEEDUP_SAMPLES:
-        speedups = []
-        for entries, time in parse_benches.items():
-            if entries in nom_benches:
-                speedups.append(nom_benches[entries] / time)
-        if speedups:
-            avg_speedup = sum(speedups) / len(speedups)
-            min_speedup = min(speedups)
-            max_speedup = max(speedups)
+        # Speedup vs nom-bibtex
+        if speedup_metrics:
             summary_lines.append(
-                f"[green]vs nom-bibtex: {avg_speedup:.2f}x avg "
-                f"({min_speedup:.2f}x - {max_speedup:.2f}x)[/green]"
+                f"[green]vs nom-bibtex: {speedup_metrics['avg']:.2f}x avg "
+                f"({speedup_metrics['min']:.2f}x - {speedup_metrics['max']:.2f}x)[/green]"
             )
-    elif not nom_benches:
-        summary_lines.append(
-            "[yellow]Note: nom-bibtex comparison not available[/yellow]"
-        )
-        summary_lines.append("[dim]Run: cargo bench --bench compare[/dim]")
+        else:
+            summary_lines.append(
+                "[yellow]Note: nom-bibtex comparison not available[/yellow]"
+            )
+            summary_lines.append("[dim]Run: cargo bench --bench compare[/dim]")
 
-    # Phase 1 Goals Progress
+    # Memory overhead
+    avg_overhead, meets_memory_goal = memory_metrics
+    if avg_overhead > 0:
+        status = (
+            "[green]✓[/green]" if meets_memory_goal else "[yellow]![/yellow]"
+        )
+        summary_lines.append(
+            f"Memory overhead: {avg_overhead:.2f}x {status} (goal: <{MEMORY_OVERHEAD_EXCELLENT}x)"
+        )
+
+    # Phase 1 Goals
     summary_lines.append("\n[bold]Phase 1 Goals:[/bold]")
     summary_lines.append("[ ] 10x performance improvement")
-    summary_lines.append("[ ] Memory < 1.5x file size")
+
+    if avg_overhead > 0:
+        if meets_memory_goal:
+            summary_lines.append("[x] Memory < 1.5x file size")
+        else:
+            summary_lines.append("[ ] Memory < 1.5x file size")
+    else:
+        summary_lines.append("[ ] Memory < 1.5x file size")
+
     summary_lines.append("[ ] Parse 1MB in < 5ms")
+
+    return summary_lines
+
+
+def show_summary(
+    parse_benches: dict, nom_benches: dict, memory_data: dict | None = None
+) -> None:
+    """Display performance summary with goals."""
+    # Handle case where we only have memory data
+    if not parse_benches and not memory_data:
+        return
+
+    # Calculate all metrics
+    avg_throughput = 0.0
+    time_metrics = {}
+    speedup_metrics = None
+
+    if parse_benches:
+        avg_throughput, time_metrics = calculate_performance_metrics(
+            parse_benches
+        )
+        speedup_metrics = calculate_speedup_metrics(parse_benches, nom_benches)
+
+    memory_metrics = calculate_memory_metrics(memory_data)
+
+    # Format and display
+    summary_lines = format_summary_lines(
+        avg_throughput, time_metrics, speedup_metrics, memory_metrics
+    )
 
     console.print(
         Panel("\n".join(summary_lines), title="Summary", box=box.DOUBLE)
@@ -475,34 +641,42 @@ def write_report_header(f: TextIO, timestamp: datetime) -> None:
 
 
 def write_report_summary(
-    f: TextIO, parse_benches: dict, nom_benches: dict
+    f: TextIO,
+    parse_benches: dict,
+    nom_benches: dict,
+    memory_data: dict | None = None,
 ) -> None:
     """Write report summary section."""
-    if not parse_benches:
-        return
-
     f.write("## Summary\n\n")
 
-    # Average throughput
-    throughputs = [calc_throughput(e, t) for e, t in parse_benches.items()]
-    avg_throughput = sum(throughputs) / len(throughputs)
-    f.write(f"- **Average throughput**: {avg_throughput:.0f} MB/s\n")
+    # Average throughput (if available)
+    if parse_benches:
+        throughputs = [calc_throughput(e, t) for e, t in parse_benches.items()]
+        avg_throughput = sum(throughputs) / len(throughputs)
+        f.write(f"- **Average throughput**: {avg_throughput:.0f} MB/s\n")
 
-    # Specific benchmarks
-    for entries in [100, 1000, 5000]:
-        if entries in parse_benches:
-            time_str = format_time(parse_benches[entries])
-            f.write(f"- **Parse {entries:,} entries**: {time_str}\n")
+        # Specific benchmarks
+        for entries in [100, 1000, 5000]:
+            if entries in parse_benches:
+                time_str = format_time(parse_benches[entries])
+                f.write(f"- **Parse {entries:,} entries**: {time_str}\n")
 
-    # nom-bibtex comparison
-    if nom_benches:
-        speedups = []
-        for e, t in parse_benches.items():
-            if e in nom_benches:
-                speedups.append(nom_benches[e] / t)
-        if speedups:
-            avg_speedup = sum(speedups) / len(speedups)
-            f.write(f"- **vs nom-bibtex**: {avg_speedup:.2f}x average\n")
+        # nom-bibtex comparison
+        if nom_benches:
+            speedups = []
+            for e, t in parse_benches.items():
+                if e in nom_benches:
+                    speedups.append(nom_benches[e] / t)
+            if speedups:
+                avg_speedup = sum(speedups) / len(speedups)
+                f.write(f"- **vs nom-bibtex**: {avg_speedup:.2f}x average\n")
+
+    # Memory overhead
+    if memory_data:
+        overheads = [data["overhead"] for data in memory_data.values()]
+        if overheads:
+            avg_overhead = sum(overheads) / len(overheads)
+            f.write(f"- **Memory overhead**: {avg_overhead:.2f}x average\n")
 
     f.write("\n")
 
@@ -511,6 +685,9 @@ def write_performance_table(
     f: TextIO, parse_benches: dict, nom_benches: dict
 ) -> None:
     """Write parse performance table."""
+    if not parse_benches:
+        return
+
     f.write("## Parse Performance\n\n")
     f.write("| Entries | Time | Throughput | vs nom-bibtex |\n")
     f.write("|---------|------|------------|---------------|\n")
@@ -532,7 +709,31 @@ def write_performance_table(
     f.write("\n")
 
 
-def save_report(results: dict[str, float]) -> None:
+def write_memory_table(f: TextIO, memory_data: dict) -> None:
+    """Write memory usage table to report."""
+    if not memory_data:
+        return
+
+    f.write("## Memory Usage\n\n")
+    f.write("| Entries | Input Size | Peak Memory | Overhead |\n")
+    f.write("|---------|------------|-------------|----------|\n")
+
+    for entries in sorted(memory_data.keys()):
+        data = memory_data[entries]
+        input_size = format_memory(data["input_size"])
+        peak_memory = format_memory(data["peak"])
+        overhead = data["overhead"]
+
+        f.write(
+            f"| {entries:,} | {input_size} | {peak_memory} | {overhead:.2f}x |\n"
+        )
+
+    f.write("\n")
+
+
+def save_report(
+    results: dict[str, float], memory_data: dict | None = None
+) -> None:
     """Save results to markdown report."""
     report_dir = Path("benchmarks/reports")
     report_dir.mkdir(parents=True, exist_ok=True)
@@ -542,20 +743,39 @@ def save_report(results: dict[str, float]) -> None:
         report_dir / f"report_{timestamp.strftime('%Y%m%d_%H%M%S')}.md"
     )
 
-    parse_benches, ops_benches, nom_benches, _ = parse_benchmark_results(
-        results
-    )
+    parse_benches = {}
+    ops_benches = {}
+    nom_benches = {}
+
+    if results:
+        parse_benches, ops_benches, nom_benches, _ = parse_benchmark_results(
+            results
+        )
 
     with report_file.open("w") as f:
         write_report_header(f, timestamp)
-        write_report_summary(f, parse_benches, nom_benches)
-        write_performance_table(f, parse_benches, nom_benches)
+        write_report_summary(f, parse_benches, nom_benches, memory_data)
+
+        if parse_benches:
+            write_performance_table(f, parse_benches, nom_benches)
+
+        # Add memory table if available
+        if memory_data:
+            write_memory_table(f, memory_data)
 
         # Raw data
         f.write("## Raw Results\n\n")
         f.write("<details>\n<summary>Click to expand</summary>\n\n")
         f.write("```json\n")
-        json.dump(results, f, indent=2, sort_keys=True)
+
+        # Include memory data in raw results
+        all_results = {}
+        if results:
+            all_results["criterion"] = results
+        if memory_data:
+            all_results["memory"] = memory_data
+
+        json.dump(all_results, f, indent=2, sort_keys=True)
         f.write("\n```\n\n</details>\n")
 
     console.print(f"\n[dim]Report saved: {report_file}[/dim]")
@@ -567,8 +787,8 @@ def save_report(results: dict[str, float]) -> None:
     latest.symlink_to(report_file.name)
 
 
-def main() -> None:
-    """Generate benchmark report from existing criterion results."""
+def display_header() -> None:
+    """Display the benchmark report header."""
     console.print(
         Panel.fit(
             "[bold cyan]BibTeX Parser Benchmark Report[/bold cyan]\n"
@@ -578,18 +798,12 @@ def main() -> None:
     )
     console.print()
 
-    # Load results
-    results = load_results()
-    console.print(f"[green]Found {len(results)} benchmark results[/green]\n")
 
-    # Debug mode: show all loaded benchmarks
-    if "--debug" in sys.argv:
-        console.print("[dim]Loaded benchmarks:[/dim]")
-        for name, time in sorted(results.items()):
-            console.print(f"  {name}: {format_time(time)}")
-        console.print()
+def process_criterion_results(results: dict) -> tuple[dict, dict, dict, dict]:
+    """Process criterion benchmark results and display them."""
+    if not results:
+        return {}, {}, {}, {}
 
-    # Display results
     parse_benches, ops_benches, nom_benches, memory_benches = (
         parse_benchmark_results(results)
     )
@@ -599,14 +813,45 @@ def main() -> None:
     if ops_benches:
         show_operations_performance(ops_benches)
     if memory_benches:
-        show_memory_performance(memory_benches)
+        show_memory_time_performance(memory_benches)
 
-    # Always show summary if we have any parse benchmarks
-    if parse_benches or nom_benches:
-        show_summary(parse_benches, nom_benches)
+    return parse_benches, ops_benches, nom_benches, memory_benches
+
+
+def main() -> None:
+    """Generate benchmark report from existing criterion results."""
+    display_header()
+
+    # Load results
+    results = load_results()
+    if results:
+        console.print(
+            f"[green]Found {len(results)} benchmark results[/green]\n"
+        )
+
+    # Debug mode: show all loaded benchmarks
+    if "--debug" in sys.argv and results:
+        console.print("[dim]Loaded benchmarks:[/dim]")
+        for name, time in sorted(results.items()):
+            console.print(f"  {name}: {format_time(time)}")
+        console.print()
+
+    # Process criterion results
+    parse_benches, _, nom_benches, _ = process_criterion_results(results)
+
+    # Run memory profiling if requested
+    memory_data = {}
+    if "--memory" in sys.argv:
+        memory_data = run_memory_profiling()
+        if memory_data:
+            show_memory_performance(memory_data)
+
+    # Show summary if we have any data
+    if parse_benches or nom_benches or memory_data:
+        show_summary(parse_benches, nom_benches, memory_data)
 
     # Save report
-    save_report(results)
+    save_report(results, memory_data)
 
 
 if __name__ == "__main__":
