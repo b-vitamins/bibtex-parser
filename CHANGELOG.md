@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Diagnostic tools for deep memory analysis
   - `src/bin/memanalysis.rs` - Structure size and allocation analysis
   - `src/bin/tracealloc.rs` - Allocation tracing with backtraces
-  - `src/bin/diagnose.rs` - Comprehensive memory diagnostic
+  - `src/bin/diagnose.rs` - Comprehensive memory diagnostic with field distribution analysis
 - Automated benchmark reporting with Python script
   - Rich terminal output with tables and color coding
   - Markdown report generation with historical tracking
@@ -34,7 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `benches/memory.rs` - Memory profiling benchmarks
 - Updated implementation strategy based on profiling results
   - Abandoned string interning approach (increased memory by 20-126%!)
-  - New focus: SmallVec and enum size optimization
+  - Abandoned SmallVec approach (caused 2.83x - 5.31x file-specific variability)
+  - New focus: Fix oversized Entry struct (456 bytes → 64 bytes)
 
 ### Fixed
 - Zero-copy regression in `database.rs` where string expansion was creating unnecessary owned values
@@ -45,28 +46,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **3.55x faster** than nom-bibtex (range: 2.96x - 4.01x)
 - Parse 1K entries in 0.9ms (well under 5ms goal)
 - Parse 5K entries in 5.4ms (well under 50ms goal)
-- **Memory overhead**: 2.76x (needs optimization to meet <1.5x goal)
+- **Memory overhead**: 2.76x - 5.31x (needs optimization to meet <1.5x goal)
 
 ### Discovered
 - **String interning is counterproductive** for BibTeX parsing
   - Pool overhead (~100KB) exceeds savings for typical files
   - Field names only account for ~200KB even with 4000+ entries
   - Our zero-copy design already prevents string allocations
-- **Real memory overhead sources** (NeurIPS 2024.bib analysis):
-  - Vec over-allocation: 43.8% capacity wasted (1.3MB)
-  - Value enum size: 40 bytes vs 24 optimal (567KB overhead)
-  - Field name duplication: Minor impact (214KB, only 3%)
+- **SmallVec causes file-specific performance variability**
+  - ICML 2005 (13 fields): 4.79x overhead - 0% inline storage
+  - ICML 2010 (10 fields): 3.74x overhead - 100% inline storage
+  - ICML 2012 (8 fields): 2.83x overhead - 100% inline storage
+  - ICML 2015 (11-12 fields): 4.98x overhead - 0% inline storage
+  - ICML 2020 (10-11 fields): 5.31x overhead - 4.3% inline storage
+  - SmallVec<[Field; 10]> is 416 bytes, wastes 400 bytes when heap allocated
+- **Entry struct is massively oversized**
+  - Current: 456 bytes per entry (should be ~64 bytes)
+  - For 1000 entries: 392 KB wasted just on struct padding
+  - This is the primary cause of memory overhead
 - **Optimal optimization strategy**:
-  1. SmallVec for Entry fields (21% reduction)
-  2. Box large enum variants (9% reduction)
-  3. Skip complex optimizations with <5% impact
+  1. Fix Entry struct size (456 → 64 bytes) for immediate ~50% reduction
+  2. Further compact Entry to 40 bytes if needed
+  3. Skip complex optimizations (interning, SmallVec) that add variability
 
 ## [0.1.0] - TBD
 
 ### Planned
 - **Phase 1**: Performance optimizations
   - [x] Measurement infrastructure
-  - [ ] Memory-efficient data structures (SmallVec, boxing)
+  - [ ] Fix structural overhead (Entry size)
   - [ ] SIMD acceleration
   - [ ] Parallel parsing
   - [ ] Memory-mapped files
@@ -95,27 +103,44 @@ Established comprehensive baseline metrics through:
 2. Built memory profiling infrastructure
 3. Developed diagnostic tools for deep analysis
 4. Discovered string interning is harmful for this use case
+5. Discovered SmallVec causes unacceptable file-specific variability
 
-### Phase 1.2 - Memory Optimizations (Next)
-Based on profiling real-world BibTeX files:
+### Phase 1.2 - Fix Structural Overhead (Next)
+Based on diagnostic analysis of real-world BibTeX files:
 
-#### 1.2a - SmallVec Implementation
-- Replace `Vec<Field>` with `SmallVec<[Field; 10]>`
-- Expected impact: 1.3MB savings on 2.5MB file (21% reduction)
-- Rationale: 90% of entries have ≤9 fields, but Vec allocates capacity 16
+#### 1.2a - Fix Entry Size
+- Current Entry struct is 456 bytes (!!!)
+- Should be 64 bytes with proper Vec<Field>
+- Expected impact: ~50% memory reduction immediately
+- Rationale: Struct padding/alignment issues are wasting 392 bytes per entry
 
-#### 1.2b - Box Large Enum Variants  
-- Change `Concat(Vec<Value>)` to `Concat(Box<Vec<Value>>)`
-- Expected impact: 567KB savings on 2.5MB file (9% reduction)
-- Rationale: Concat variant forces entire enum to 40 bytes
+#### 1.2b - Compact Entry Representation  
+- Further reduce Entry from 64 → 40 bytes
+- Use u8 for entry type, Box<[Field]> for fields
+- Expected impact: Additional 10-15% reduction
+- Rationale: Every byte counts when multiplied by thousands of entries
 
-#### 1.2c - Field Name Interning (Optional)
-- Static array for common field names
-- Expected impact: ~200KB savings (3% reduction)
+#### 1.2c - Field Name Deduplication (Optional)
+- Only 10-15 unique field names per file
+- Replace &str with u16 indices
+- Expected impact: ~3-5% reduction
 - May skip due to complexity vs benefit ratio
 
 ### Key Learnings
 1. **Always profile before optimizing** - String interning seemed obvious but made things worse
-2. **Structural overhead matters** - Vec over-allocation and enum sizes have huge impact
-3. **Zero-copy works** - 100% of strings remain borrowed in typical usage
-4. **Simple solutions win** - SmallVec is simpler and more effective than string pools
+2. **Beware of "clever" optimizations** - SmallVec added complexity and file-specific variability
+3. **Check struct sizes** - Entry being 456 bytes was the real problem, not algorithms
+4. **Simple solutions win** - Fixing Entry size is simpler and more effective than complex schemes
+5. **Zero-copy works** - 100% of strings remain borrowed in typical usage
+
+### Failed Optimization Attempts (Valuable Lessons)
+1. **String Interning with lasso** (2024-12-09)
+   - Hypothesis: Deduplicate repeated field names and values
+   - Result: 20-126% INCREASE in memory usage
+   - Why: Pool overhead (~100KB) exceeded savings (~200KB)
+   
+2. **SmallVec<[Field; 10]>** (2024-12-09)
+   - Hypothesis: Avoid heap allocations for typical entries
+   - Result: 2.83x - 5.31x overhead depending on field count
+   - Why: 416-byte struct, wastes 400 bytes when > 10 fields
+   - Lesson: File-specific performance is unacceptable for a parser
