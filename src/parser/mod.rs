@@ -1,5 +1,6 @@
 //! BibTeX parser implementation using winnow
 
+pub mod delimiter;
 pub mod entry;
 pub mod lexer;
 pub mod utils;
@@ -60,8 +61,29 @@ pub enum ParsedItem<'a> {
     Comment(&'a str),
 }
 
-/// Parse a single item (entry, string, preamble, or comment)
+/// Parse a single item (entry, string, preamble, or comment) with optimized delimiter search
 fn parse_item<'a>(input: &mut &'a str) -> PResult<'a, ParsedItem<'a>> {
+    // Skip whitespace
+    lexer::skip_whitespace(input);
+
+    // Use optimized delimiter search to find @ or handle as comment
+    let bytes = input.as_bytes();
+
+    // Fast path: if we don't start with @, check if this is a comment
+    if !bytes.is_empty() && bytes[0] != b'@' {
+        // Look for the next @ to treat everything before it as a comment
+        if let Some(at_pos) = delimiter::find_byte(bytes, b'@', 0) {
+            let comment = &input[..at_pos];
+            *input = &input[at_pos..];
+            return Ok(ParsedItem::Comment(comment));
+        }
+        // No @ found, entire remaining input is a comment
+        let comment = *input;
+        *input = "";
+        return Ok(ParsedItem::Comment(comment));
+    }
+
+    // We have an @ at the start, parse accordingly
     winnow::combinator::alt((
         entry::parse_entry.map(ParsedItem::Entry),
         parse_string.map(|(k, v)| ParsedItem::String(k, v)),

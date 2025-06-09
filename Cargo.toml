@@ -23,6 +23,10 @@ memchr = "2.7"
 ahash = "0.8"
 unicode-normalization = "0.1"
 backtrace = "0.3"
+serde_json = "1.0.140"
+chrono = "0.4.41"
+lazy_static = "1.5.0"
+serde = "1.0.219"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -45,20 +49,16 @@ name = "diagnose"
 path = "src/bin/diagnose.rs"
 
 [[bin]]
-name = "analyze"
+name = "analyze_patterns"
 path = "src/bin/analyze_patterns.rs"
 
 [[bin]]
-name = "simd"
+name = "simd_potential"
 path = "src/bin/simd_potential.rs"
 
 [[bin]]
-name = "profile"
+name = "profile_parser"
 path = "src/bin/profile_parser.rs"
-
-[[bin]]
-name = "fixtures"
-path = "src/bin/test_fixtures.rs"
 
 [[bench]]
 name = "performance"
@@ -66,6 +66,10 @@ harness = false
 
 [[bench]]
 name = "memory"
+harness = false
+
+[[bench]]
+name = "delimiter"
 harness = false
 
 [profile.release]

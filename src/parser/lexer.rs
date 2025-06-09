@@ -1,6 +1,6 @@
 //! Lexical analysis for BibTeX
 
-use super::PResult;
+use super::{delimiter, PResult};
 use winnow::prelude::*;
 use winnow::{
     ascii::digit1,
@@ -21,7 +21,7 @@ pub fn field_name<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
     identifier.parse_next(input)
 }
 
-/// Parse balanced braces { ... }
+/// Parse balanced braces { ... } with optimized delimiter search
 pub fn balanced_braces<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
     let original_input = *input;
     let mut depth = 0;
@@ -29,31 +29,10 @@ pub fn balanced_braces<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
     let bytes = input.as_bytes();
 
     while pos < bytes.len() {
-        match bytes[pos] {
-            b'{' => depth += 1,
-            b'}' => {
-                if depth == 0 {
-                    let result = &original_input[..pos];
-                    *input = &input[pos..];
-                    return Ok(result);
-                }
-                depth -= 1;
-            }
-            b'\\' if pos + 1 < bytes.len() => {
-                // Skip escaped character
-                pos += 2;
-                continue;
-            }
-            _ => {}
-        }
-        pos += 1;
-    }
-
-    // Use memchr for fast scanning of non-brace characters
-    while pos < bytes.len() {
-        if let Some(next_special) = memchr::memchr3(b'{', b'}', b'\\', &bytes[pos..]) {
-            pos += next_special;
-            match bytes[pos] {
+        // Use optimized search for brace delimiters
+        if let Some((next_pos, delim)) = delimiter::find_brace_delimiter(bytes, pos) {
+            pos = next_pos;
+            match delim {
                 b'{' => depth += 1,
                 b'}' => {
                     if depth == 0 {
@@ -64,6 +43,7 @@ pub fn balanced_braces<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
                     depth -= 1;
                 }
                 b'\\' if pos + 1 < bytes.len() => {
+                    // Skip escaped character
                     pos += 2;
                     continue;
                 }
@@ -80,7 +60,7 @@ pub fn balanced_braces<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
     ))
 }
 
-/// Parse a quoted string "..."
+/// Parse a quoted string "..." with optimized delimiter search
 pub fn quoted_string<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
     let start = *input;
     let bytes = input.as_bytes();
@@ -95,26 +75,35 @@ pub fn quoted_string<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
     let mut brace_depth = 0;
 
     while pos < bytes.len() {
-        match bytes[pos] {
-            b'\\' if pos + 1 < bytes.len() => {
-                // Skip escaped character
-                pos += 2;
+        // Use optimized search for quote delimiters
+        if let Some((next_pos, delim)) = delimiter::find_quote_delimiter(bytes, pos) {
+            pos = next_pos;
+
+            match delim {
+                b'\\' if pos + 1 < bytes.len() => {
+                    // Skip escaped character
+                    pos += 2;
+                    // Continue without incrementing pos again
+                    continue;
+                }
+                b'"' if brace_depth == 0 => {
+                    // Found closing quote
+                    let result = &start[1..pos];
+                    *input = &start[pos + 1..];
+                    return Ok(result);
+                }
+                b'{' => {
+                    brace_depth += 1;
+                }
+                b'}' if brace_depth > 0 => {
+                    brace_depth -= 1;
+                }
+                _ => {}
             }
-            b'"' if brace_depth == 0 => {
-                // Found closing quote
-                let result = &start[1..pos];
-                *input = &start[pos + 1..];
-                return Ok(result);
-            }
-            b'{' => {
-                brace_depth += 1;
-                pos += 1;
-            }
-            b'}' if brace_depth > 0 => {
-                brace_depth -= 1;
-                pos += 1;
-            }
-            _ => pos += 1,
+            // Only increment pos by 1 for non-escape characters
+            pos += 1;
+        } else {
+            break;
         }
     }
 
@@ -139,7 +128,7 @@ pub fn number<'a>(input: &mut &'a str) -> PResult<'a, i64> {
     Ok(num)
 }
 
-/// Fast whitespace skipping using memchr
+/// Fast whitespace skipping (optimal for short runs per profiling)
 pub fn skip_whitespace(input: &mut &str) {
     let bytes = input.as_bytes();
     let mut pos = 0;
@@ -152,6 +141,12 @@ pub fn skip_whitespace(input: &mut &str) {
     }
 
     *input = &input[pos..];
+}
+
+/// Fast scan to next BibTeX delimiter - re-export from delimiter module
+#[must_use]
+pub fn scan_to_bibtex_delimiter(haystack: &[u8], start: usize) -> Option<(usize, u8)> {
+    delimiter::find_delimiter(haystack, start)
 }
 
 #[cfg(test)]
@@ -197,5 +192,17 @@ mod tests {
 
         let mut input = "+42 xxx";
         assert_eq!(number(&mut input).unwrap(), 42);
+    }
+
+    #[test]
+    fn test_scan_to_bibtex_delimiter() {
+        let input = b"hello @ world { test } = value, end";
+
+        assert_eq!(scan_to_bibtex_delimiter(input, 0), Some((6, b'@')));
+        assert_eq!(scan_to_bibtex_delimiter(input, 7), Some((14, b'{')));
+        assert_eq!(scan_to_bibtex_delimiter(input, 15), Some((21, b'}')));
+        assert_eq!(scan_to_bibtex_delimiter(input, 22), Some((23, b'=')));
+        assert_eq!(scan_to_bibtex_delimiter(input, 24), Some((30, b',')));
+        assert_eq!(scan_to_bibtex_delimiter(input, 31), None);
     }
 }

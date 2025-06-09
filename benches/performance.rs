@@ -11,7 +11,7 @@ include!("../src/fixtures.rs");
 fn bench_bibtex_parser(c: &mut Criterion) {
     let mut group = c.benchmark_group("bibtex_parser");
     group.measurement_time(Duration::from_secs(10));
-    
+
     // CRITICAL: Warm up the process before ANY measurements
     warmup_process();
 
@@ -25,7 +25,7 @@ fn bench_bibtex_parser(c: &mut Criterion) {
             for _ in 0..10 {
                 let _ = Database::parse(black_box(input));
             }
-            
+
             // Now measure
             b.iter(|| {
                 let db = Database::parse(black_box(input)).unwrap();
@@ -41,7 +41,7 @@ fn bench_bibtex_parser(c: &mut Criterion) {
 fn warmup_process() {
     // Generate a medium-sized input
     let warmup_input = generate_realistic_bibtex(100);
-    
+
     // Parse multiple times to ensure:
     // 1. All code paths are loaded
     // 2. Dynamic linker has resolved everything
@@ -50,7 +50,7 @@ fn warmup_process() {
     for _ in 0..1000 {
         let _ = Database::parse(&warmup_input);
     }
-    
+
     // Also warm up with different sizes to hit various code paths
     for size in &[10, 50, 500] {
         let input = generate_realistic_bibtex(*size);
@@ -58,7 +58,7 @@ fn warmup_process() {
             let _ = Database::parse(&input);
         }
     }
-    
+
     // Force a small delay to let CPU frequency stabilize
     std::thread::sleep(Duration::from_millis(100));
 }
@@ -67,7 +67,7 @@ fn warmup_process() {
 fn bench_memory_patterns(c: &mut Criterion) {
     let mut group = c.benchmark_group("memory_usage");
     group.measurement_time(Duration::from_secs(5));
-    
+
     // Warm up first!
     warmup_process();
 
@@ -80,7 +80,7 @@ fn bench_memory_patterns(c: &mut Criterion) {
             let db = Database::parse(&input).unwrap();
             let _ = db.find_by_type("article");
         }
-        
+
         b.iter(|| {
             let db = Database::parse(black_box(&input)).unwrap();
             // Simulate typical usage patterns
@@ -117,7 +117,7 @@ fn bench_memory_patterns(c: &mut Criterion) {
 /// Benchmark individual operations
 fn bench_operations(c: &mut Criterion) {
     let mut group = c.benchmark_group("operations");
-    
+
     // Warm up
     warmup_process();
 
@@ -169,7 +169,7 @@ fn bench_comparison(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("parser_comparison");
     group.measurement_time(Duration::from_secs(10));
-    
+
     // Warm up BOTH parsers
     warmup_process();
     warmup_nom_bibtex();
@@ -205,7 +205,7 @@ fn bench_comparison(c: &mut Criterion) {
 /// Warm up nom-bibtex parser too
 fn warmup_nom_bibtex() {
     use nom_bibtex::Bibtex;
-    
+
     let input = generate_realistic_bibtex(100);
     for _ in 0..100 {
         let _ = Bibtex::parse(&input);
