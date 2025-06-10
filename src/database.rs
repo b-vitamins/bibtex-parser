@@ -42,9 +42,8 @@ impl<'a> Database<'a> {
                 crate::parser::ParsedItem::Entry(mut entry) => {
                     // Only expand variables, keep literals borrowed when possible
                     for field in &mut entry.fields {
-                        // Use std::mem::replace to take ownership without cloning
-                        // This allows us to move the value out of the mutable reference
-                        let old_value = std::mem::replace(&mut field.value, Value::Number(0));
+                        // Use std::mem::take to move the value without cloning
+                        let old_value = std::mem::take(&mut field.value);
                         field.value = db.smart_expand_value(old_value)?;
                     }
 
@@ -80,10 +79,22 @@ impl<'a> Database<'a> {
         &self.entries
     }
 
+    /// Get mutable access to all entries
+    #[must_use]
+    pub fn entries_mut(&mut self) -> &mut Vec<Entry<'a>> {
+        &mut self.entries
+    }
+
     /// Get all string definitions
     #[must_use]
     pub const fn strings(&self) -> &AHashMap<&'a str, Value<'a>> {
         &self.strings
+    }
+
+    /// Get mutable access to string definitions
+    #[must_use]
+    pub fn strings_mut(&mut self) -> &mut AHashMap<&'a str, Value<'a>> {
+        &mut self.strings
     }
 
     /// Get all preambles
@@ -92,10 +103,22 @@ impl<'a> Database<'a> {
         &self.preambles
     }
 
+    /// Get mutable access to preambles
+    #[must_use]
+    pub fn preambles_mut(&mut self) -> &mut Vec<Value<'a>> {
+        &mut self.preambles
+    }
+
     /// Get all comments
     #[must_use]
     pub fn comments(&self) -> &[&'a str] {
         &self.comments
+    }
+
+    /// Get mutable access to comments
+    #[must_use]
+    pub fn comments_mut(&mut self) -> &mut Vec<&'a str> {
+        &mut self.comments
     }
 
     /// Find entries by key
@@ -172,17 +195,10 @@ impl<'a> Database<'a> {
     /// Expand a concatenation, only converting to owned when necessary
     fn expand_concatenation(&self, parts: Vec<Value<'a>>) -> Result<Value<'a>> {
         let mut expanded_parts = Vec::with_capacity(parts.len());
-        let mut needs_flattening = false;
 
         // First, expand all parts
         for part in parts {
             let expanded = self.smart_expand_value(part)?;
-
-            // Check if we need to flatten (if all parts are simple values)
-            if matches!(expanded, Value::Concat(_) | Value::Variable(_)) {
-                needs_flattening = false;
-            }
-
             expanded_parts.push(expanded);
         }
 
@@ -193,11 +209,7 @@ impl<'a> Database<'a> {
         {
             let combined = concatenate_simple_values(&expanded_parts);
             Ok(Value::Literal(Cow::Owned(combined)))
-        } else if needs_flattening {
-            // Complex concatenation, keep as concat
-            Ok(Value::Concat(Box::new(expanded_parts)))
         } else {
-            // Keep the structure
             Ok(Value::Concat(Box::new(expanded_parts)))
         }
     }

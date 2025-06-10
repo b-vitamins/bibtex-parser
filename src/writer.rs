@@ -51,6 +51,18 @@ impl<W: Write> Writer<W> {
         Self { writer, config }
     }
 
+    /// Access the writer configuration mutably
+    #[must_use]
+    pub fn config_mut(&mut self) -> &mut WriterConfig {
+        &mut self.config
+    }
+
+    /// Consume the writer and return the underlying writer
+    #[must_use]
+    pub fn into_inner(self) -> W {
+        self.writer
+    }
+
     /// Write a complete database
     pub fn write_database(&mut self, db: &Database) -> io::Result<()> {
         // Write preambles

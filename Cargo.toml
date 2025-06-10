@@ -36,29 +36,6 @@ proptest = "1.4"
 rand = "0.8"
 nom-bibtex = "0.3"
 
-[[bin]]
-name = "memanalysis"
-path = "src/bin/memanalysis.rs"
-
-[[bin]]
-name = "tracealloc"
-path = "src/bin/tracealloc.rs"
-
-[[bin]]
-name = "diagnose"
-path = "src/bin/diagnose.rs"
-
-[[bin]]
-name = "analyze_patterns"
-path = "src/bin/analyze_patterns.rs"
-
-[[bin]]
-name = "simd_potential"
-path = "src/bin/simd_potential.rs"
-
-[[bin]]
-name = "profile_parser"
-path = "src/bin/profile_parser.rs"
 
 [[bench]]
 name = "performance"
