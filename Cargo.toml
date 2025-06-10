@@ -54,6 +54,7 @@ harness = false
 [[bench]]
 name = "parallel"
 harness = false
+required-features = ["parallel"]
 
 [profile.release]
 opt-level = 3
