@@ -85,7 +85,7 @@ impl<W: Write> Writer<W> {
         // Write entries
         let mut entries = db.entries().iter().collect::<Vec<_>>();
         if self.config.sort_entries {
-            entries.sort_by_key(|e| e.key);
+            entries.sort_by(|a, b| a.key.cmp(&b.key));
         }
 
         for (i, entry) in entries.iter().enumerate() {
@@ -104,7 +104,7 @@ impl<W: Write> Writer<W> {
 
         let mut fields = entry.fields().to_vec();
         if self.config.sort_fields {
-            fields.sort_by_key(|f| f.name);
+            fields.sort_by(|a, b| a.name.cmp(&b.name));
         }
 
         // Calculate alignment if needed
@@ -216,7 +216,7 @@ mod tests {
     fn test_write_entry() {
         let entry = Entry {
             ty: EntryType::Article,
-            key: "test2023",
+            key: Cow::Borrowed("test2023"),
             fields: vec![
                 Field::new("author", Value::Literal(Cow::Borrowed("John Doe"))),
                 Field::new("title", Value::Literal(Cow::Borrowed("Test Article"))),

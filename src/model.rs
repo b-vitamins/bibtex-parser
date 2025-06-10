@@ -10,7 +10,7 @@ pub struct Entry<'a> {
     /// Entry type (article, book, inproceedings, etc.)
     pub ty: EntryType<'a>,
     /// Citation key
-    pub key: &'a str,
+    pub key: Cow<'a, str>,
     /// Fields (author, title, year, etc.)
     pub fields: Vec<Field<'a>>,
 }
@@ -18,10 +18,10 @@ pub struct Entry<'a> {
 impl<'a> Entry<'a> {
     /// Create a new entry
     #[must_use]
-    pub const fn new(ty: EntryType<'a>, key: &'a str) -> Self {
+    pub fn new(ty: EntryType<'a>, key: &'a str) -> Self {
         Self {
             ty,
-            key,
+            key: Cow::Borrowed(key),
             fields: Vec::new(),
         }
     }
@@ -34,8 +34,8 @@ impl<'a> Entry<'a> {
 
     /// Get the citation key
     #[must_use]
-    pub const fn key(&self) -> &str {
-        self.key
+    pub fn key(&self) -> &str {
+        &self.key
     }
 
     /// Get a field value by name (case-insensitive)
@@ -97,7 +97,7 @@ impl<'a> Entry<'a> {
     pub fn into_owned(self) -> Entry<'static> {
         Entry {
             ty: self.ty.into_owned(),
-            key: Box::leak(self.key.to_string().into_boxed_str()),
+            key: Cow::Owned(self.key.into_owned()),
             fields: self.fields.into_iter().map(Field::into_owned).collect(),
         }
     }
@@ -206,7 +206,7 @@ impl fmt::Display for EntryType<'_> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Field<'a> {
     /// Field name
-    pub name: &'a str,
+    pub name: Cow<'a, str>,
     /// Field value
     pub value: Value<'a>,
 }
@@ -214,15 +214,18 @@ pub struct Field<'a> {
 impl<'a> Field<'a> {
     /// Create a new field
     #[must_use]
-    pub const fn new(name: &'a str, value: Value<'a>) -> Self {
-        Self { name, value }
+    pub fn new(name: &'a str, value: Value<'a>) -> Self {
+        Self {
+            name: Cow::Borrowed(name),
+            value,
+        }
     }
 
     /// Convert to owned version
     #[must_use]
     pub fn into_owned(self) -> Field<'static> {
         Field {
-            name: Box::leak(self.name.to_string().into_boxed_str()),
+            name: Cow::Owned(self.name.into_owned()),
             value: self.value.into_owned(),
         }
     }
@@ -254,7 +257,7 @@ pub enum Value<'a> {
     /// Concatenated values (boxed to reduce enum size from 32 to 24 bytes)
     Concat(Box<Vec<Value<'a>>>),
     /// Variable reference
-    Variable(&'a str),
+    Variable(Cow<'a, str>),
 }
 
 impl<'a> Default for Value<'a> {
@@ -280,7 +283,7 @@ impl<'a> Value<'a> {
             Self::Literal(s) => s.to_string(),
             Self::Number(n) => n.to_string(),
             Self::Variable(name) => strings
-                .get(name)
+                .get(name.as_ref())
                 .map_or_else(|| format!("{{undefined:{name}}}"), |v| v.expand(strings)),
             Self::Concat(parts) => parts.iter().map(|p| p.expand(strings)).collect::<String>(),
         }
@@ -292,7 +295,7 @@ impl<'a> Value<'a> {
         match self {
             Self::Literal(s) => Value::Literal(Cow::Owned(s.into_owned())),
             Self::Number(n) => Value::Number(n),
-            Self::Variable(s) => Value::Variable(Box::leak(s.to_string().into_boxed_str())),
+            Self::Variable(s) => Value::Variable(Cow::Owned(s.into_owned())),
             Self::Concat(parts) => {
                 Value::Concat(Box::new(parts.into_iter().map(Value::into_owned).collect()))
             }

@@ -88,7 +88,7 @@ fn parse_variable_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
     }
 
     let ident = lexer::identifier(input)?;
-    Ok(Value::Variable(ident))
+    Ok(Value::Variable(Cow::Borrowed(ident)))
 }
 
 /// Normalize a string value (remove excessive whitespace, handle LaTeX)
@@ -130,7 +130,7 @@ mod tests {
     fn test_parse_variable_value() {
         let mut input = "myvar xxx";
         let value = parse_value(&mut input).unwrap();
-        assert_eq!(value, Value::Variable("myvar"));
+        assert_eq!(value, Value::Variable(Cow::Borrowed("myvar")));
         assert_eq!(input, " xxx");
     }
 
@@ -142,7 +142,7 @@ mod tests {
             Value::Concat(parts) => {
                 assert_eq!(parts.len(), 3);
                 assert_eq!(parts[0], Value::Literal(Cow::Borrowed("hello")));
-                assert_eq!(parts[1], Value::Variable("myvar"));
+                assert_eq!(parts[1], Value::Variable(Cow::Borrowed("myvar")));
                 assert_eq!(parts[2], Value::Literal(Cow::Borrowed("world")));
             }
             _ => panic!("Expected concatenated value"),
