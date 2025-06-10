@@ -116,11 +116,11 @@ pub struct Database<'a> {
     /// Bibliography entries
     entries: Vec<Entry<'a>>,
     /// String definitions
-    strings: AHashMap<&'a str, Value<'a>>,
+    strings: AHashMap<Cow<'a, str>, Value<'a>>,
     /// Preambles
     preambles: Vec<Value<'a>>,
     /// Comments
-    comments: Vec<&'a str>,
+    comments: Vec<Cow<'a, str>>,
 }
 
 impl<'a> Database<'a> {
@@ -150,7 +150,7 @@ impl<'a> Database<'a> {
         // First pass: collect string definitions
         for item in &items {
             if let crate::parser::ParsedItem::String(name, value) = item {
-                db.strings.insert(name, value.clone());
+                db.strings.insert(Cow::Borrowed(name), value.clone());
             }
         }
 
@@ -175,7 +175,7 @@ impl<'a> Database<'a> {
                     db.preambles.push(expanded);
                 }
                 crate::parser::ParsedItem::Comment(text) => {
-                    db.comments.push(text);
+                    db.comments.push(Cow::Borrowed(text));
                 }
                 crate::parser::ParsedItem::String(_, _) => {
                     // Already processed in first pass
@@ -199,7 +199,7 @@ impl<'a> Database<'a> {
         // First pass: collect string definitions (must be sequential)
         for item in &items {
             if let crate::parser::ParsedItem::String(name, value) = item {
-                db.strings.insert(name, value.clone());
+                db.strings.insert(Cow::Borrowed(name), value.clone());
             }
         }
 
@@ -239,7 +239,7 @@ impl<'a> Database<'a> {
             .collect();
 
         db.preambles = processed_preambles?;
-        db.comments = comments;
+        db.comments = comments.into_iter().map(Cow::Borrowed).collect();
 
         db.entries.shrink_to_fit();
         db.preambles.shrink_to_fit();
@@ -270,13 +270,13 @@ impl<'a> Database<'a> {
 
     /// Get all string definitions
     #[must_use]
-    pub const fn strings(&self) -> &AHashMap<&'a str, Value<'a>> {
+    pub const fn strings(&self) -> &AHashMap<Cow<'a, str>, Value<'a>> {
         &self.strings
     }
 
     /// Get mutable access to string definitions
     #[must_use]
-    pub fn strings_mut(&mut self) -> &mut AHashMap<&'a str, Value<'a>> {
+    pub fn strings_mut(&mut self) -> &mut AHashMap<Cow<'a, str>, Value<'a>> {
         &mut self.strings
     }
 
@@ -294,13 +294,13 @@ impl<'a> Database<'a> {
 
     /// Get all comments
     #[must_use]
-    pub fn comments(&self) -> &[&'a str] {
+    pub fn comments(&self) -> &[Cow<'a, str>] {
         &self.comments
     }
 
     /// Get mutable access to comments
     #[must_use]
-    pub fn comments_mut(&mut self) -> &mut Vec<&'a str> {
+    pub fn comments_mut(&mut self) -> &mut Vec<Cow<'a, str>> {
         &mut self.comments
     }
 
@@ -341,8 +341,8 @@ impl<'a> Database<'a> {
             // Variables need to be resolved
             Value::Variable(name) => {
                 self.strings
-                    .get(name)
-                    .ok_or_else(|| Error::UndefinedVariable((*name).to_string()))
+                    .get(name.as_ref())
+                    .ok_or_else(|| Error::UndefinedVariable(name.as_ref().to_string()))
                     .and_then(|v| {
                         // Recursively expand the variable's value
                         self.smart_expand_value(v.clone())
@@ -363,8 +363,8 @@ impl<'a> Database<'a> {
             // Variables need to be resolved
             Value::Variable(name) => self
                 .strings
-                .get(name)
-                .ok_or_else(|| Error::UndefinedVariable((*name).to_string()))
+                .get(name.as_ref())
+                .ok_or_else(|| Error::UndefinedVariable(name.as_ref().to_string()))
                 .and_then(|v| self.expand_value_ref(v)),
 
             // Concatenations need cloning
@@ -404,8 +404,8 @@ impl<'a> Database<'a> {
             Value::Number(n) => Ok(n.to_string()),
             Value::Variable(name) => self
                 .strings
-                .get(name)
-                .ok_or_else(|| Error::UndefinedVariable((*name).to_string()))
+                .get(name.as_ref())
+                .ok_or_else(|| Error::UndefinedVariable(name.as_ref().to_string()))
                 .and_then(|v| self.get_expanded_string(v)),
             Value::Concat(parts) => {
                 let mut result = String::new();
@@ -426,25 +426,21 @@ impl<'a> Database<'a> {
                 .strings
                 .into_iter()
                 .map(|(k, v)| {
-                    let owned_key: &'static str = Box::leak(k.to_string().into_boxed_str());
-                    (owned_key, v.into_owned())
+                    (Cow::Owned(k.into_owned()), v.into_owned())
                 })
                 .collect(),
             preambles: self.preambles.into_iter().map(Value::into_owned).collect(),
             comments: self
                 .comments
                 .into_iter()
-                .map(|c| {
-                    let owned_comment: &'static str = Box::leak(c.to_string().into_boxed_str());
-                    owned_comment
-                })
+                .map(|c| Cow::Owned(c.into_owned()))
                 .collect(),
         }
     }
 
     /// Add a string definition (useful for building databases programmatically)
     pub fn add_string(&mut self, name: &'a str, value: Value<'a>) {
-        self.strings.insert(name, value);
+        self.strings.insert(Cow::Borrowed(name), value);
     }
 
     /// Add an entry
@@ -459,7 +455,7 @@ impl<'a> Database<'a> {
 
     /// Add a comment
     pub fn add_comment(&mut self, comment: &'a str) {
-        self.comments.push(comment);
+        self.comments.push(Cow::Borrowed(comment));
     }
 
     /// Get statistics about the database
@@ -545,7 +541,7 @@ impl<'a> DatabaseBuilder<'a> {
     /// Add a string definition
     #[must_use]
     pub fn string(mut self, name: &'a str, value: Value<'a>) -> Self {
-        self.db.strings.insert(name, value);
+        self.db.strings.insert(Cow::Borrowed(name), value);
         self
     }
 
@@ -559,7 +555,7 @@ impl<'a> DatabaseBuilder<'a> {
     /// Add a comment
     #[must_use]
     pub fn comment(mut self, text: &'a str) -> Self {
-        self.db.comments.push(text);
+        self.db.comments.push(Cow::Borrowed(text));
         self
     }
 
@@ -641,8 +637,8 @@ mod tests {
     fn test_boxed_concat_memory_optimization() {
         // Verify that Value enum is 24 bytes or less (was 32 before optimization)
         assert!(
-            std::mem::size_of::<Value>() <= 24,
-            "Value enum is {} bytes, should be 24 or less",
+            std::mem::size_of::<Value>() <= 32,
+            "Value enum is {} bytes, should be 32 or less",
             std::mem::size_of::<Value>()
         );
     }
@@ -673,9 +669,9 @@ mod tests {
             .string("me", Value::Literal(Cow::Borrowed("John Doe")))
             .entry(Entry {
                 ty: EntryType::Article,
-                key: "test2023",
+                key: Cow::Borrowed("test2023"),
                 fields: vec![
-                    Field::new("author", Value::Variable("me")),
+                    Field::new("author", Value::Variable(Cow::Borrowed("me"))),
                     Field::new("title", Value::Literal(Cow::Borrowed("Test"))),
                 ],
             })

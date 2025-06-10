@@ -2,6 +2,7 @@
 
 use super::{lexer, utils, value, PResult};
 use crate::model::{Entry, EntryType, Field};
+use std::borrow::Cow;
 use winnow::prelude::*;
 use winnow::{ascii::multispace0, combinator::preceded};
 
@@ -50,7 +51,7 @@ fn parse_entry_body<'a>(input: &mut &'a str, entry_type: EntryType<'a>) -> PResu
 
     Ok(Entry {
         ty: entry_type,
-        key,
+        key: Cow::Borrowed(key),
         fields,
     })
 }
@@ -100,7 +101,10 @@ fn parse_field<'a>(input: &mut &'a str) -> PResult<'a, Field<'a>> {
     utils::ws('=').parse_next(input)?;
     let value = utils::ws(value::parse_value).parse_next(input)?;
 
-    Ok(Field { name, value })
+    Ok(Field {
+        name: Cow::Borrowed(name),
+        value,
+    })
 }
 
 #[cfg(test)]
@@ -119,7 +123,7 @@ mod tests {
 
         let entry = parse_entry(&mut input).unwrap();
         assert_eq!(entry.ty, EntryType::Article);
-        assert_eq!(entry.key, "einstein1905");
+        assert_eq!(entry.key, Cow::Borrowed("einstein1905"));
         assert_eq!(entry.fields.len(), 3);
 
         assert_eq!(entry.fields[0].name, "author");
@@ -147,13 +151,13 @@ mod tests {
 
         let entry = parse_entry(&mut input).unwrap();
         assert_eq!(entry.ty, EntryType::Misc);
-        assert_eq!(entry.key, "test");
+        assert_eq!(entry.key, Cow::Borrowed("test"));
         assert_eq!(entry.fields.len(), 2);
 
         match &entry.fields[0].value {
             Value::Concat(parts) => {
                 assert_eq!(parts.len(), 2);
-                assert_eq!(parts[0], Value::Variable("name"));
+                assert_eq!(parts[0], Value::Variable(Cow::Borrowed("name")));
                 assert_eq!(parts[1], Value::Literal(Cow::Borrowed(" et al.")));
             }
             _ => panic!("Expected concatenated value"),

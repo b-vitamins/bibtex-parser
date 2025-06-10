@@ -7,16 +7,16 @@ mod tests {
     #[test]
     fn verify_optimized_struct_sizes() {
         // These are the optimized sizes we achieved
-        assert_eq!(mem::size_of::<Entry>(), 64, "Entry should be 64 bytes");
+        assert_eq!(mem::size_of::<Entry>(), 72, "Entry should be 72 bytes");
         assert_eq!(
             mem::size_of::<Field>(),
-            40,
-            "Field should be 40 bytes (was 48)"
+            56,
+            "Field should be 56 bytes (was 48)"
         );
         assert_eq!(
             mem::size_of::<Value>(),
-            24,
-            "Value should be 24 bytes (was 32)"
+            32,
+            "Value should be 32 bytes (was 24)"
         );
         assert_eq!(
             mem::size_of::<EntryType>(),
