@@ -257,6 +257,12 @@ pub enum Value<'a> {
     Variable(&'a str),
 }
 
+impl<'a> Default for Value<'a> {
+    fn default() -> Self {
+        Self::Number(0)
+    }
+}
+
 impl<'a> Value<'a> {
     /// Get the value as a string (if it's a simple literal)
     #[must_use]
