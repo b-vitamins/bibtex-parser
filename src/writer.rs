@@ -181,16 +181,19 @@ impl<W: Write> Writer<W> {
 }
 
 /// Check if a string needs quoting
+#[must_use]
 fn needs_quoting(s: &str) -> bool {
     s.contains(['{', '}', ',', '='])
 }
 
 /// Escape quotes in a string
+#[must_use]
 fn escape_quotes(s: &str) -> String {
     s.replace('"', "\\\"")
 }
 
 /// Convenience function to write a database to a string
+#[must_use = "Check the result to detect serialization errors"]
 pub fn to_string(db: &Database) -> Result<String> {
     let mut buf = Vec::new();
     let mut writer = Writer::new(&mut buf);
@@ -199,6 +202,7 @@ pub fn to_string(db: &Database) -> Result<String> {
 }
 
 /// Convenience function to write a database to a file
+#[must_use = "Check the result to detect IO or serialization errors"]
 pub fn to_file(db: &Database, path: impl AsRef<std::path::Path>) -> Result<()> {
     let file = std::fs::File::create(path)?;
     let mut writer = Writer::new(file);

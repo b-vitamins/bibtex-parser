@@ -9,24 +9,20 @@ use std::path::Path;
 use rayon::prelude::*;
 
 /// Parser configuration with builder pattern
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ParseOptions {
     threads: Option<usize>,
 }
 
-impl Default for ParseOptions {
-    fn default() -> Self {
-        Self { threads: None }
-    }
-}
-
 impl ParseOptions {
     /// Create new parse options
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Set number of threads (None = use all available)
+    #[must_use]
     pub fn threads(mut self, threads: impl Into<Option<usize>>) -> Self {
         self.threads = threads.into();
         self
@@ -49,7 +45,7 @@ impl ParseOptions {
         {
             if let Some(threads) = self.threads {
                 if threads <= 1 {
-                    return self.parse_files_sequential(paths);
+                    return Self::parse_files_sequential(paths);
                 }
             }
 
@@ -74,12 +70,12 @@ impl ParseOptions {
 
         #[cfg(not(feature = "parallel"))]
         {
-            self.parse_files_sequential(paths)
+            Self::parse_files_sequential(paths)
         }
     }
 
     /// Sequential file parsing fallback
-    fn parse_files_sequential<P: AsRef<Path>>(&self, paths: &[P]) -> Result<Database<'static>> {
+    fn parse_files_sequential<P: AsRef<Path>>(paths: &[P]) -> Result<Database<'static>> {
         let mut result = Database::new();
         for path in paths {
             let content = std::fs::read_to_string(path)?;
@@ -153,6 +149,7 @@ impl<'a> Database<'a> {
     ///     .threads(4)
     ///     .parse(content).unwrap();
     /// ```
+    #[must_use]
     pub fn parser() -> ParseOptions {
         ParseOptions::new()
     }
@@ -207,7 +204,7 @@ impl<'a> Database<'a> {
     }
 
     /// Merge another database into this one
-    pub fn merge(&mut self, other: Database<'a>) {
+    pub fn merge(&mut self, other: Self) {
         self.entries.extend(other.entries);
         self.strings.extend(other.strings);
         self.preambles.extend(other.preambles);
@@ -327,7 +324,7 @@ impl<'a> Database<'a> {
             .filter(|e| {
                 e.get_as_string(field)
                     .as_ref()
-                    .map_or(false, |v| v.contains(value))
+                    .is_some_and(|v| v.contains(value))
             })
             .collect()
     }
