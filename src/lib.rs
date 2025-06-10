@@ -63,7 +63,9 @@ pub use writer::{to_file, to_string, Writer};
 
 /// Re-export of common parser functions
 pub mod prelude {
-    pub use crate::{Database, DatabaseBuilder, Entry, EntryType, Error, ParseOptions, Result, Value};
+    pub use crate::{
+        Database, DatabaseBuilder, Entry, EntryType, Error, ParseOptions, Result, Value,
+    };
 }
 
 /// Parse a BibTeX database from a string

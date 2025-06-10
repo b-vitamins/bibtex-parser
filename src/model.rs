@@ -18,7 +18,7 @@ pub struct Entry<'a> {
 impl<'a> Entry<'a> {
     /// Create a new entry
     #[must_use]
-    pub fn new(ty: EntryType<'a>, key: &'a str) -> Self {
+    pub const fn new(ty: EntryType<'a>, key: &'a str) -> Self {
         Self {
             ty,
             key: Cow::Borrowed(key),
@@ -214,7 +214,7 @@ pub struct Field<'a> {
 impl<'a> Field<'a> {
     /// Create a new field
     #[must_use]
-    pub fn new(name: &'a str, value: Value<'a>) -> Self {
+    pub const fn new(name: &'a str, value: Value<'a>) -> Self {
         Self {
             name: Cow::Borrowed(name),
             value,
@@ -260,13 +260,13 @@ pub enum Value<'a> {
     Variable(Cow<'a, str>),
 }
 
-impl<'a> Default for Value<'a> {
+impl Default for Value<'_> {
     fn default() -> Self {
         Self::Number(0)
     }
 }
 
-impl<'a> Value<'a> {
+impl Value<'_> {
     /// Get the value as a string (if it's a simple literal)
     #[must_use]
     pub fn as_str(&self) -> Option<&str> {

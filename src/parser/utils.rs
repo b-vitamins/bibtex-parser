@@ -58,9 +58,14 @@ pub fn balanced_delimited<'a>(
         let mut depth = 0;
         let mut pos = 0;
         let bytes = input.as_bytes();
-
-        for (i, &byte) in bytes.iter().enumerate() {
-            if byte == open as u8 {
+        let mut i = 0;
+        while i < bytes.len() {
+            let byte = bytes[i];
+            if byte == b'\\' && i + 1 < bytes.len() {
+                // Skip escaped character and the following byte
+                i += 2;
+                continue;
+            } else if byte == open as u8 {
                 depth += 1;
             } else if byte == close as u8 {
                 depth -= 1;
@@ -68,10 +73,8 @@ pub fn balanced_delimited<'a>(
                     pos = i + 1;
                     break;
                 }
-            } else if byte == b'\\' && i + 1 < bytes.len() {
-                // Skip escaped character
-                continue;
             }
+            i += 1;
         }
 
         if depth == 0 {
