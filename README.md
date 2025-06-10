@@ -48,26 +48,29 @@ fn main() -> Result<()> {
 
 ### Parallel Parsing
 
-For batch processing, enable the `parallel` feature:
+For batch processing of multiple files, enable the `parallel` feature:
 
 ```toml
 [dependencies]
 bibtex-parser = { version = "0.1", features = ["parallel"] }
 ```
 
-Then use the builder API:
+Then use the builder API for multiple files:
 
 ```rust
-// Parse with explicit thread count
+// Parse multiple files in parallel - FAST!
+let db = Database::parser()
+    .threads(8)  // Use 8 threads
+    .parse_files(&["file1.bib", "file2.bib", "file3.bib"])?;
+
+// Single file parsing is always sequential
+// (threads option is ignored for single files)
 let db = Database::parser()
     .threads(8)
-    .parse(input)?;
-
-// Parse multiple files in parallel
-let db = Database::parser()
-    .threads(None)  // Use all available cores
-    .parse_files(&["file1.bib", "file2.bib", "file3.bib"])?;
+    .parse(input)?;  // Still sequential
 ```
+
+**Note**: Single-file parsing cannot be parallelized effectively due to BibTeX's structure requiring sequential processing of string definitions. Use `parse_files()` when processing multiple bibliography files for maximum performance.
 
 ## Examples
 

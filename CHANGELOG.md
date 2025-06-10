@@ -85,6 +85,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Identified identifier validation as tertiary target
 
 ### Fixed
+- Removed broken single-file parallel parsing that was actually slower than sequential
+- Parallel processing now only applies to multiple files via `parse_files()`
+- Improved documentation to clarify parallel processing limitations
 - Zero-copy regression in `database.rs` where string expansion was creating unnecessary owned values
 - Parser handling of `%` comments which were being consumed by whitespace skipping
 - Memory overhead now within target range (was 2.76x - 5.31x, now 0.75x - 1.14x)
@@ -104,6 +107,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Medium files (50-100 entries): 0.97x  
   - Large files (500-5000 entries): 0.94x - 1.01x
   - Parser now uses LESS memory than input file size for most files!
+ - Multi-file parsing: ~1.5x speedup with 2 threads, ~2.5x with 4 threads
+ - Single-file parsing: Remains at 700 MB/s (sequential only)
 
 ### Discovered
 - **SIMD delimiter finding delivers 2x speedup**

@@ -32,36 +32,31 @@ impl ParseOptions {
         self
     }
 
-    /// Parse a single input string
+    /// Parse a single input string (always sequential)
+    ///
+    /// Note: Single-file parsing does not benefit from parallelization
+    /// due to BibTeX's sequential nature and string dependencies.
+    /// Use `parse_files` for parallel processing of multiple files.
     pub fn parse<'a>(&self, input: &'a str) -> Result<Database<'a>> {
-        #[cfg(feature = "parallel")]
-        {
-            if let Some(threads) = self.threads {
-                if threads > 1 {
-                    return self.parse_parallel(input);
-                }
-            } else if rayon::current_num_threads() > 1 {
-                // Auto-detect: use parallel if worth it
-                let estimated_entries = input.len() / 600;
-                if estimated_entries > 100 {
-                    return self.parse_parallel(input);
-                }
-            }
-        }
-
+        // Single file parsing is always sequential
+        // Parallel processing only benefits multiple files
         Database::parse_sequential(input)
     }
 
     /// Parse multiple files in parallel
-    pub fn parse_files<'a, P: AsRef<Path> + Sync>(
-        &self,
-        paths: &[P],
-    ) -> Result<Database<'static>> {
+    pub fn parse_files<P: AsRef<Path> + Sync>(&self, paths: &[P]) -> Result<Database<'static>> {
         #[cfg(feature = "parallel")]
         {
+            if let Some(threads) = self.threads {
+                if threads <= 1 {
+                    return self.parse_files_sequential(paths);
+                }
+            }
+
             let pool = self.build_thread_pool()?;
 
-            let owned_dbs: Result<Vec<_>> = pool.install(|| {
+            // Parse files in parallel
+            let databases: Result<Vec<_>> = pool.install(|| {
                 paths
                     .par_iter()
                     .map(|path| {
@@ -72,30 +67,26 @@ impl ParseOptions {
                     .collect()
             });
 
-            let mut acc = Database::new();
-            for db in owned_dbs? {
-                acc.merge(db);
-            }
-            Ok(acc)
+            // Merge databases
+            let dbs = databases?;
+            Ok(Database::merge_databases_parallel(dbs))
         }
 
         #[cfg(not(feature = "parallel"))]
         {
-            let mut acc = Database::new();
-            for path in paths {
-                let content = std::fs::read_to_string(path)?;
-                let db = Database::parse_sequential(&content)?;
-                acc.merge(db.into_owned());
-            }
-            Ok(acc)
+            self.parse_files_sequential(paths)
         }
     }
 
-    #[cfg(feature = "parallel")]
-    fn parse_parallel<'a>(&self, input: &'a str) -> Result<Database<'a>> {
-        let pool = self.build_thread_pool()?;
-
-        pool.install(|| Database::parse_parallel_impl(input))
+    /// Sequential file parsing fallback
+    fn parse_files_sequential<P: AsRef<Path>>(&self, paths: &[P]) -> Result<Database<'static>> {
+        let mut result = Database::new();
+        for path in paths {
+            let content = std::fs::read_to_string(path)?;
+            let db = Database::parse_sequential(&content)?;
+            result.merge(db.into_owned());
+        }
+        Ok(result)
     }
 
     #[cfg(feature = "parallel")]
@@ -106,7 +97,9 @@ impl ParseOptions {
             builder = builder.num_threads(threads);
         }
 
-        builder.build().map_err(|e| Error::WinnowError(e.to_string()))
+        builder
+            .build()
+            .map_err(|e| Error::WinnowError(e.to_string()))
     }
 }
 
@@ -138,12 +131,34 @@ impl<'a> Database<'a> {
     }
 
     /// Create a parser with options
+    ///
+    /// # Parallel Processing
+    ///
+    /// The `threads` option only affects `parse_files()`. Single file
+    /// parsing with `parse()` is always sequential due to BibTeX's
+    /// structure requiring sequential processing of string definitions.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use bibtex_parser::Database;
+    /// // This will use parallel processing
+    /// let db = Database::parser()
+    ///     .threads(4)
+    ///     .parse_files(&["file1.bib", "file2.bib"]).unwrap();
+    ///
+    /// // This is always sequential (threads ignored)
+    /// let content = "@article{demo, title=\"Demo\"}";
+    /// let db = Database::parser()
+    ///     .threads(4)
+    ///     .parse(content).unwrap();
+    /// ```
     pub fn parser() -> ParseOptions {
         ParseOptions::new()
     }
 
     /// Parse a BibTeX database from a string (single-threaded implementation)
-    fn parse_sequential(input: &'a str) -> Result<Self> {
+    pub(crate) fn parse_sequential(input: &'a str) -> Result<Self> {
         let items = crate::parser::parse_bibtex(input)?;
         let mut db = Self::new();
 
@@ -191,69 +206,54 @@ impl<'a> Database<'a> {
         Ok(db)
     }
 
-    #[cfg(feature = "parallel")]
-    fn parse_parallel_impl(input: &'a str) -> Result<Self> {
-        let items = crate::parser::parse_bibtex(input)?;
-        let mut db = Self::new();
-
-        // First pass: collect string definitions (must be sequential)
-        for item in &items {
-            if let crate::parser::ParsedItem::String(name, value) = item {
-                db.strings.insert(Cow::Borrowed(name), value.clone());
-            }
-        }
-
-        // Separate items by type for parallel processing
-        let mut entries = Vec::new();
-        let mut preambles = Vec::new();
-        let mut comments = Vec::new();
-
-        for item in items {
-            match item {
-                crate::parser::ParsedItem::Entry(entry) => entries.push(entry),
-                crate::parser::ParsedItem::Preamble(value) => preambles.push(value),
-                crate::parser::ParsedItem::Comment(text) => comments.push(text),
-                crate::parser::ParsedItem::String(_, _) => {}
-            }
-        }
-
-        // Process entries in parallel
-        let processed_entries: Result<Vec<_>> = entries
-            .into_par_iter()
-            .map(|mut entry| {
-                for field in &mut entry.fields {
-                    let old_value = std::mem::replace(&mut field.value, Value::Number(0));
-                    field.value = db.smart_expand_value(old_value)?;
-                }
-                entry.fields.shrink_to_fit();
-                Ok(entry)
-            })
-            .collect();
-
-        db.entries = processed_entries?;
-
-        // Process preambles in parallel
-        let processed_preambles: Result<Vec<_>> = preambles
-            .into_par_iter()
-            .map(|value| db.smart_expand_value(value))
-            .collect();
-
-        db.preambles = processed_preambles?;
-        db.comments = comments.into_iter().map(Cow::Borrowed).collect();
-
-        db.entries.shrink_to_fit();
-        db.preambles.shrink_to_fit();
-        db.comments.shrink_to_fit();
-
-        Ok(db)
-    }
-
     /// Merge another database into this one
     pub fn merge(&mut self, other: Database<'a>) {
         self.entries.extend(other.entries);
         self.strings.extend(other.strings);
         self.preambles.extend(other.preambles);
         self.comments.extend(other.comments);
+    }
+
+    #[cfg(feature = "parallel")]
+    fn merge_databases_parallel(databases: Vec<Database<'static>>) -> Database<'static> {
+        use rayon::prelude::*;
+
+        // Move entries out for parallel merging while collecting other data
+        let mut others: Vec<(
+            AHashMap<Cow<'static, str>, Value<'static>>,
+            Vec<Value<'static>>,
+            Vec<Cow<'static, str>>,
+        )> = Vec::with_capacity(databases.len());
+        let entry_vecs: Vec<Vec<Entry<'static>>> = databases
+            .into_iter()
+            .map(|db| {
+                let Database {
+                    entries,
+                    strings,
+                    preambles,
+                    comments,
+                } = db;
+                others.push((strings, preambles, comments));
+                entries
+            })
+            .collect();
+
+        let all_entries: Vec<_> = entry_vecs.into_par_iter().flatten().collect();
+
+        let mut result = Database {
+            entries: all_entries,
+            strings: AHashMap::new(),
+            preambles: Vec::new(),
+            comments: Vec::new(),
+        };
+
+        for (strings, preambles, comments) in others {
+            result.strings.extend(strings);
+            result.preambles.extend(preambles);
+            result.comments.extend(comments);
+        }
+
+        result
     }
 
     /// Get all entries
@@ -425,9 +425,7 @@ impl<'a> Database<'a> {
             strings: self
                 .strings
                 .into_iter()
-                .map(|(k, v)| {
-                    (Cow::Owned(k.into_owned()), v.into_owned())
-                })
+                .map(|(k, v)| (Cow::Owned(k.into_owned()), v.into_owned()))
                 .collect(),
             preambles: self.preambles.into_iter().map(Value::into_owned).collect(),
             comments: self
@@ -708,30 +706,6 @@ mod tests {
         assert_eq!(stats.entries_by_type.get("book"), Some(&1));
     }
 
-    #[cfg(feature = "parallel")]
-    #[test]
-    fn test_parallel_parse() {
-        let input = r#"
-            @string{me = "John Doe"}
-            
-            @article{test2023,
-                author = me,
-                title = "Test Article",
-                year = 2023
-            }
-        "#;
-
-        // Test explicit thread count
-        let db = Database::parser()
-            .threads(4)
-            .parse(input)
-            .unwrap();
-
-        assert_eq!(db.entries().len(), 1);
-        assert_eq!(db.entries()[0].get_as_string("author").unwrap(), "John Doe");
-    }
-
-    #[cfg(feature = "parallel")]
     #[test]
     fn test_parse_files_parallel() {
         use std::fs::write;
@@ -746,10 +720,7 @@ mod tests {
 
         let paths: Vec<PathBuf> = vec![path1.clone(), path2.clone()];
 
-        let db = Database::parser()
-            .threads(2)
-            .parse_files(&paths)
-            .unwrap();
+        let db = Database::parser().threads(2).parse_files(&paths).unwrap();
 
         assert_eq!(db.entries().len(), 2);
 
@@ -766,20 +737,30 @@ mod tests {
         assert_eq!(db1.entries().len(), 1);
 
         // Using parser builder
-        let db2 = Database::parser()
-            .threads(1)
-            .parse(input)
-            .unwrap();
+        let db2 = Database::parser().threads(1).parse(input).unwrap();
         assert_eq!(db2.entries().len(), 1);
 
         #[cfg(feature = "parallel")]
         {
-            // Parallel with auto-detection
-            let db3 = Database::parser()
-                .threads(None)
-                .parse(input)
-                .unwrap();
+            // Parallel only works for multiple files
+            let db3 = Database::parser().threads(4).parse(input).unwrap();
             assert_eq!(db3.entries().len(), 1);
+
+            // Multi-file parallel processing
+            use std::fs::write;
+            let path1 = "/tmp/test1.bib";
+            let path2 = "/tmp/test2.bib";
+            write(path1, "@article{a1, title=\"A\"}").unwrap();
+            write(path2, "@article{a2, title=\"B\"}").unwrap();
+
+            let db4 = Database::parser()
+                .threads(2)
+                .parse_files(&[path1, path2])
+                .unwrap();
+            assert_eq!(db4.entries().len(), 2);
+
+            let _ = std::fs::remove_file(path1);
+            let _ = std::fs::remove_file(path2);
         }
     }
 }
