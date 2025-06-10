@@ -1,6 +1,7 @@
 use bibtex_parser::Database;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::time::Duration;
+use tempfile::TempDir;
 
 // Include test fixtures
 include!("../src/fixtures.rs");
@@ -15,38 +16,36 @@ fn bench_parallel_files(c: &mut Criterion) {
             .map(|_| generate_realistic_bibtex(100))
             .collect();
 
+        // Create a temporary directory and write files once
+        let tmp_dir = TempDir::new().unwrap();
+        let files: Vec<_> = inputs
+            .iter()
+            .enumerate()
+            .map(|(i, content)| {
+                let path = tmp_dir.path().join(format!("bench_{i}.bib"));
+                std::fs::write(&path, content).unwrap();
+                path
+            })
+            .collect();
+
         // Benchmark different thread counts
         for &threads in &[1, 2, 4, 8] {
             group.bench_with_input(
                 BenchmarkId::new(format!("{}_files", file_count), threads),
-                &inputs,
-                |b, inputs| {
+                &files,
+                |b, files| {
                     b.iter(|| {
-                        let files: Vec<_> = inputs
-                            .iter()
-                            .enumerate()
-                            .map(|(i, content)| {
-                                let path = format!("/tmp/bench_{}.bib", i);
-                                std::fs::write(&path, content).unwrap();
-                                path
-                            })
-                            .collect();
-
                         let db = Database::parser()
                             .threads(threads)
-                            .parse_files(&files)
+                            .parse_files(&files[..])
                             .unwrap();
-
-                        // Clean up
-                        for path in &files {
-                            let _ = std::fs::remove_file(path);
-                        }
 
                         black_box(db);
                     });
                 },
             );
         }
+        // TempDir cleaned automatically
     }
 
     group.finish();
@@ -60,7 +59,7 @@ fn explain_parallel_limitations(c: &mut Criterion) {
 
     group.bench_function("parse_only", |b| {
         b.iter(|| {
-            let items = crate::parser::parse_bibtex(black_box(&input)).unwrap();
+            let items = bibtex_parser::parser::parse_bibtex(black_box(&input)).unwrap();
             black_box(items);
         });
     });
