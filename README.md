@@ -72,6 +72,12 @@ let db = Database::parser()
 
 **Note**: Single-file parsing cannot be parallelized effectively due to BibTeX's structure requiring sequential processing of string definitions. Use `parse_files()` when processing multiple bibliography files for maximum performance.
 
+To run the included parallel benchmarks, ensure the `parallel` feature is enabled:
+
+```bash
+cargo bench --features parallel --bench parallel
+```
+
 ## Examples
 
 ### Query Entries
