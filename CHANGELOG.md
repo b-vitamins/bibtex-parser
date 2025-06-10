@@ -48,6 +48,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Updated to show Phase 1.4a completion status
 - Optional `nom-bibtex` dependency for comparison benchmarks
 - Development environment support with `manifest.scm` for Guix
+- **Phase 1.5 Complete** - Parallel parsing support
+  - Builder pattern API with `Database::parser().threads(n)`
+  - Multi-file parallel parsing with `parse_files()`
+  - Auto-detection for optimal parallelism
+  - Feature-gated with `parallel` feature flag
+  - Near-linear scaling to N cores
 
 ### Changed
 - **BREAKING: Value::Concat now contains Box<Vec<Value>>** instead of Vec<Value>

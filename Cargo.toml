@@ -13,14 +13,16 @@ categories = ["parser-implementations", "text-processing"]
 license = "MIT OR Apache-2.0"
 
 [features]
-default = ["std"]
-std = []
+default = []
+parallel = ["rayon"]
+
 
 [dependencies]
 winnow = "0.5"
 thiserror = "1.0"
 memchr = "2.7"
 ahash = "0.8"
+rayon = { version = "1.8", optional = true }
 unicode-normalization = "0.1"
 backtrace = "0.3"
 serde_json = "1.0.140"
@@ -47,6 +49,10 @@ harness = false
 
 [[bench]]
 name = "delimiter"
+harness = false
+
+[[bench]]
+name = "parallel"
 harness = false
 
 [profile.release]

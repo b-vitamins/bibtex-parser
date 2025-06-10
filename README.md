@@ -46,6 +46,29 @@ fn main() -> Result<()> {
 }
 ```
 
+### Parallel Parsing
+
+For batch processing, enable the `parallel` feature:
+
+```toml
+[dependencies]
+bibtex-parser = { version = "0.1", features = ["parallel"] }
+```
+
+Then use the builder API:
+
+```rust
+// Parse with explicit thread count
+let db = Database::parser()
+    .threads(8)
+    .parse(input)?;
+
+// Parse multiple files in parallel
+let db = Database::parser()
+    .threads(None)  // Use all available cores
+    .parse_files(&["file1.bib", "file2.bib", "file3.bib"])?;
+```
+
 ## Examples
 
 ### Query Entries
