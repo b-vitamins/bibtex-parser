@@ -56,36 +56,38 @@ impl ParseOptions {
     pub fn parse_files<'a, P: AsRef<Path> + Sync>(
         &self,
         paths: &[P],
-    ) -> Result<Database<'a>> {
+    ) -> Result<Database<'static>> {
         #[cfg(feature = "parallel")]
         {
             let pool = self.build_thread_pool()?;
 
-            pool.install(|| {
+            let owned_dbs: Result<Vec<_>> = pool.install(|| {
                 paths
                     .par_iter()
                     .map(|path| {
                         let content = std::fs::read_to_string(path)?;
-                        // Leak to get 'static lifetime - safe for file parsing
-                        let leaked = Box::leak(content.into_boxed_str());
-                        Database::parse_sequential(leaked)
+                        let db = Database::parse_sequential(&content)?;
+                        Ok(db.into_owned())
                     })
-                    .try_reduce(Database::new, |mut acc, db| {
-                        acc.merge(db);
-                        Ok(acc)
-                    })
-            })
+                    .collect()
+            });
+
+            let mut acc = Database::new();
+            for db in owned_dbs? {
+                acc.merge(db);
+            }
+            Ok(acc)
         }
 
         #[cfg(not(feature = "parallel"))]
         {
-            paths.iter().try_fold(Database::new(), |mut acc, path| {
+            let mut acc = Database::new();
+            for path in paths {
                 let content = std::fs::read_to_string(path)?;
-                let leaked = Box::leak(content.into_boxed_str());
-                let db = Database::parse_sequential(leaked)?;
-                acc.merge(db);
-                Ok(acc)
-            })
+                let db = Database::parse_sequential(&content)?;
+                acc.merge(db.into_owned());
+            }
+            Ok(acc)
         }
     }
 
