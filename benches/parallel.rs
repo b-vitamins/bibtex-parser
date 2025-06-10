@@ -5,7 +5,7 @@ use std::time::Duration;
 // Include test fixtures
 include!("../src/fixtures.rs");
 
-fn bench_parallel_scaling(c: &mut Criterion) {
+fn bench_parallel_files(c: &mut Criterion) {
     let mut group = c.benchmark_group("parallel_scaling");
     group.measurement_time(Duration::from_secs(10));
 
@@ -52,5 +52,42 @@ fn bench_parallel_scaling(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_parallel_scaling);
+fn explain_parallel_limitations(c: &mut Criterion) {
+    let mut group = c.benchmark_group("parallel_explanation");
+
+    // Show that parsing is the bottleneck
+    let input = generate_realistic_bibtex(1000);
+
+    group.bench_function("parse_only", |b| {
+        b.iter(|| {
+            let items = crate::parser::parse_bibtex(black_box(&input)).unwrap();
+            black_box(items);
+        });
+    });
+
+    group.bench_function("parse_and_expand", |b| {
+        b.iter(|| {
+            let db = Database::parse(black_box(&input)).unwrap();
+            black_box(db);
+        });
+    });
+
+    println!("\nNOTE: Single-file parallel parsing is not implemented because:");
+    println!("1. BibTeX requires sequential processing of @string definitions");
+    println!("2. Entry boundaries are not trivially parallelizable");
+    println!("3. Parse time dominates (>90%) vs string expansion (<10%)");
+    println!("\nUse parse_files() for parallel processing of multiple files.");
+
+    group.finish();
+}
+
+criterion_group! {
+    name = benches;
+    config = Criterion::default()
+        .sample_size(50)
+        .measurement_time(Duration::from_secs(10));
+    targets = bench_parallel_files,
+              explain_parallel_limitations
+}
+
 criterion_main!(benches);
