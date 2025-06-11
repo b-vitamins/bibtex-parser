@@ -164,6 +164,12 @@ match Database::parse(input) {
 - thiserror - Error handling
 - memchr - String searching
 
+## Development Setup
+
+Run `./setup-dev.sh` once with internet access to install the Rust toolchain,
+Python dependencies, and to fetch all Cargo crates. After it completes you can
+build and test the crate completely offline.
+
 ## License
 
 MIT license ([LICENSE](LICENSE))
