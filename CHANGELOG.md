@@ -22,6 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Conditional string expansion - skip when no @string definitions exist
   - Memory-efficient result merging with capacity hints throughout pipeline
   - Improved parallel efficiency from ~17% to ~34% of theoretical maximum
+- **Phase 1.5.2** - Streamlined Two-Pass Architecture (2025-06-20)
+  - Simplified parallel parsing to clean two-pass design: parse chunks, then process with global strings
+  - Eliminated complex multi-pass coordination overhead and intermediate allocations
+  - Direct database merging instead of item-by-item assembly
+  - Improved parallel efficiency from ~34% to ~37% of theoretical maximum
+  - Achieved 1.65 GB/s throughput on 12 cores (up from 1.53 GB/s)
+  - Consistent 13-19% performance improvements across all thread counts
 
 ### Changed
 - **API Enhancement** - Added DatabaseBuilder pattern for thread configuration

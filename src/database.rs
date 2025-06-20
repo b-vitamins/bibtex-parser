@@ -85,7 +85,6 @@ impl ParseOptions {
         Ok(result)
     }
 
-    #[cfg(feature = "parallel")]
     fn build_thread_pool(&self) -> Result<rayon::ThreadPool> {
         let mut builder = rayon::ThreadPoolBuilder::new();
 
@@ -196,7 +195,7 @@ impl<'a> Database<'a> {
         Ok(db)
     }
 
-    /// Parallel entry parsing using rayon threads (Phase 1.5)
+    /// Parallel entry parsing using rayon threads (Phase 1.5) - Two-pass optimization
     #[cfg(feature = "parallel")]
     pub(crate) fn parse_parallel(input: &'a str, threads: usize) -> Result<Self> {
         use crate::parser::ParsedItem;
@@ -211,10 +210,7 @@ impl<'a> Database<'a> {
             .build()
             .map_err(|e| Error::WinnowError(format!("Thread pool build error: {e}")))?;
 
-        // Estimate capacity to reduce allocations
-        let estimated_entries = input.len() / 800; // ~800 bytes per entry on average
-        
-        // Parse chunks in parallel with capacity estimation
+        // First pass: Parse chunks and collect all string definitions globally
         let chunk_results: Result<Vec<Vec<ParsedItem>>> = pool.install(|| {
             chunks
                 .into_par_iter()
@@ -224,88 +220,68 @@ impl<'a> Database<'a> {
 
         let parsed_chunks = chunk_results?;
 
-        // Merge all items from chunks with pre-allocated capacity
-        let mut all_items = Vec::with_capacity(estimated_entries);
-        for chunk_items in parsed_chunks {
-            all_items.extend(chunk_items);
-        }
-
-        // Collect string definitions with capacity estimation
-        let estimated_strings = all_items.len() / 20; // Rough estimate: 1 string per 20 items
-        let mut strings = AHashMap::with_capacity(estimated_strings);
-        for item in &all_items {
-            if let ParsedItem::String(name, value) = item {
-                strings.insert(Cow::Borrowed(*name), value.clone());
+        // Collect all string definitions from all chunks
+        let mut global_strings = AHashMap::new();
+        for chunk_items in &parsed_chunks {
+            for item in chunk_items {
+                if let ParsedItem::String(name, value) = item {
+                    global_strings.insert(Cow::Borrowed(*name), value.clone());
+                }
             }
         }
 
-        // Only create expansion DB if we have strings to expand
-        let expand_db = if strings.is_empty() {
-            None
-        } else {
-            Some(Database {
-                entries: Vec::new(),
-                strings: strings
-                    .iter()
-                    .map(|(k, v)| (Cow::Owned(k.to_string()), v.clone()))
-                    .collect(),
-                preambles: Vec::new(),
-                comments: Vec::new(),
-            })
-        };
-
-        // Expand values in parallel (only if needed)
-        let results: Vec<_> = pool.install(|| {
-            all_items
+        // Second pass: Process each chunk's items with global string definitions
+        let processed_chunks: Vec<Database<'a>> = pool.install(|| {
+            parsed_chunks
                 .into_par_iter()
-                .filter_map(|item| match item {
-                    ParsedItem::Entry(mut entry) => {
-                        // Only expand if we have strings to expand
-                        if let Some(ref db) = expand_db {
-                            for field in &mut entry.fields {
-                                let old = std::mem::take(&mut field.value);
-                                field.value = db.smart_expand_value(old).unwrap();
+                .map(|chunk_items| {
+                    let mut db = Database {
+                        entries: Vec::new(),
+                        strings: global_strings.clone(),
+                        preambles: Vec::new(),
+                        comments: Vec::new(),
+                    };
+
+                    // Process each item in this chunk
+                    for item in chunk_items {
+                        match item {
+                            ParsedItem::Entry(mut entry) => {
+                                for field in &mut entry.fields {
+                                    let old_value = std::mem::take(&mut field.value);
+                                    field.value = db.smart_expand_value(old_value).unwrap();
+                                }
+                                entry.fields.shrink_to_fit();
+                                db.entries.push(entry);
                             }
+                            ParsedItem::Preamble(value) => {
+                                let expanded = db.smart_expand_value(value).unwrap();
+                                db.preambles.push(expanded);
+                            }
+                            ParsedItem::Comment(text) => {
+                                db.comments.push(Cow::Borrowed(text));
+                            }
+                            _ => {} // String definitions already collected
                         }
-                        entry.fields.shrink_to_fit();
-                        Some((Some(entry), None, None))
                     }
-                    ParsedItem::Preamble(val) => {
-                        let v = if let Some(ref db) = expand_db {
-                            db.smart_expand_value(val).unwrap()
-                        } else {
-                            val
-                        };
-                        Some((None, Some(v), None))
-                    }
-                    ParsedItem::Comment(txt) => Some((None, None, Some(Cow::Borrowed(txt)))),
-                    _ => None,
+
+                    db
                 })
                 .collect()
         });
 
-        // Assemble final database from parallel results with pre-allocation
-        let mut db = Database {
-            entries: Vec::with_capacity(estimated_entries),
-            strings,
-            preambles: Vec::new(),
-            comments: Vec::new(),
-        };
-        for (entry_opt, pre_opt, com_opt) in results {
-            if let Some(e) = entry_opt {
-                db.entries.push(e);
-            }
-            if let Some(p) = pre_opt {
-                db.preambles.push(p);
-            }
-            if let Some(c) = com_opt {
-                db.comments.push(c);
-            }
+        // Merge all databases
+        if processed_chunks.is_empty() {
+            return Ok(Database::new());
         }
-        db.entries.shrink_to_fit();
-        db.preambles.shrink_to_fit();
-        db.comments.shrink_to_fit();
-        Ok(db)
+
+        let result = processed_chunks
+            .into_iter()
+            .fold(Database::new(), |mut acc, db| {
+                acc.merge(db);
+                acc
+            });
+
+        Ok(result)
     }
 
     /// Merge another database into this one
@@ -369,18 +345,18 @@ impl<'a> Database<'a> {
 
         let bytes = input.as_bytes();
         let total_len = bytes.len();
-        
+
         // Use larger chunk size to reduce overhead from too many small chunks
-        let target_chunks = std::cmp::min(num_chunks, total_len / 50_000); // At least 50KB per chunk
-        let chunk_size = total_len / target_chunks.max(1);
+        let target_chunks = std::cmp::min(num_chunks, total_len / 50_000).max(1); // At least 50KB per chunk
+        let chunk_size = total_len / target_chunks;
 
         let mut chunks = Vec::with_capacity(target_chunks);
         let mut start = 0;
 
-        for i in 0..target_chunks - 1 {
+        for i in 0..target_chunks.saturating_sub(1) {
             // Target position for this chunk boundary
             let target_pos = (i + 1) * chunk_size;
-            
+
             // Look for @ within a reasonable window (avoid scanning too far)
             let search_end = std::cmp::min(target_pos + chunk_size / 4, total_len);
             let mut split_pos = target_pos;
@@ -389,7 +365,7 @@ impl<'a> Database<'a> {
             while split_pos < search_end {
                 if let Some(at_pos) = delimiter::find_byte(&bytes[split_pos..search_end], b'@', 0) {
                     split_pos += at_pos;
-                    
+
                     // Verify this @ starts a new entry
                     if split_pos == 0 || bytes[split_pos - 1].is_ascii_whitespace() {
                         chunks.push(&input[start..split_pos]);
