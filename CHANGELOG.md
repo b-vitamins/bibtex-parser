@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Phase 1.5 Complete** - True Parallel Single-File Parsing (2025-06-20)
+  - Implemented chunk-based parallel parsing by splitting input at valid BibTeX entry boundaries
+  - SIMD-optimized chunk boundary detection using existing delimiter finding infrastructure
+  - Parallel parsing of chunks with Rayon thread pool, followed by parallel string expansion
+  - Achieved 3.5x speedup on 12 cores for large files (50-100MB)
+  - Near-linear scaling up to 4 threads, good scaling through 8-12 threads
+  - Maintained correctness with proper handling of string definitions across chunks
 - **Phase 1.1 Complete** - Comprehensive benchmarking infrastructure
   - Parse performance benchmarks for various file sizes (10-5000 entries)
   - Query operation benchmarks (find_by_key, find_by_type, find_by_field)

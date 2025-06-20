@@ -202,29 +202,53 @@ impl<'a> Database<'a> {
         use crate::parser::ParsedItem;
         use rayon::prelude::*;
 
-        // Parse items and collect string definitions
-        let items = crate::parser::parse_bibtex(input)?;
-        let mut strings = AHashMap::new();
-        for item in &items {
-            if let ParsedItem::String(name, value) = item {
-                strings.insert(Cow::Borrowed(name), value.clone());
-            }
-        }
-        // Stub database for expansion logic
-        let expand_db = Database {
-            entries: Vec::new(),
-            strings: strings.clone(),
-            preambles: Vec::new(),
-            comments: Vec::new(),
-        };
+        // Split input into chunks for parallel parsing
+        let chunks = Self::split_into_chunks(input, threads);
 
-        // Build a dedicated thread pool and expand entries in parallel
+        // Build thread pool
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
             .build()
             .map_err(|e| Error::WinnowError(format!("Thread pool build error: {e}")))?;
+
+        // Parse chunks in parallel
+        let chunk_results: Result<Vec<Vec<ParsedItem>>> = pool.install(|| {
+            chunks
+                .into_par_iter()
+                .map(|chunk| crate::parser::parse_bibtex(chunk))
+                .collect()
+        });
+
+        let parsed_chunks = chunk_results?;
+
+        // Merge all items from chunks
+        let mut all_items = Vec::new();
+        for chunk_items in parsed_chunks {
+            all_items.extend(chunk_items);
+        }
+
+        // Collect string definitions first (single pass)
+        let mut strings = AHashMap::new();
+        for item in &all_items {
+            if let ParsedItem::String(name, value) = item {
+                strings.insert(Cow::Borrowed(*name), value.clone());
+            }
+        }
+
+        // Stub database for expansion logic
+        let expand_db = Database {
+            entries: Vec::new(),
+            strings: strings
+                .iter()
+                .map(|(k, v)| (Cow::Owned(k.to_string()), v.clone()))
+                .collect(),
+            preambles: Vec::new(),
+            comments: Vec::new(),
+        };
+
+        // Expand values in parallel
         let results: Vec<_> = pool.install(|| {
-            items
+            all_items
                 .into_par_iter()
                 .filter_map(|item| match item {
                     ParsedItem::Entry(mut entry) => {
@@ -317,6 +341,57 @@ impl<'a> Database<'a> {
         }
 
         result
+    }
+
+    /// Split input into chunks at valid BibTeX entry boundaries
+    #[cfg(feature = "parallel")]
+    fn split_into_chunks(input: &str, num_chunks: usize) -> Vec<&str> {
+        use crate::parser::delimiter;
+
+        if num_chunks <= 1 {
+            return vec![input];
+        }
+
+        let bytes = input.as_bytes();
+        let total_len = bytes.len();
+        let chunk_size = total_len / num_chunks;
+
+        let mut chunks = Vec::with_capacity(num_chunks);
+        let mut start = 0;
+
+        for i in 0..num_chunks - 1 {
+            // Target position for this chunk boundary
+            let target_pos = (i + 1) * chunk_size;
+
+            // Find the next @ after the target position
+            let mut split_pos = target_pos;
+
+            // Use SIMD-optimized delimiter finding
+            while split_pos < total_len {
+                if let Some(at_pos) = delimiter::find_byte(&bytes[split_pos..], b'@', 0) {
+                    split_pos += at_pos;
+
+                    // Verify this @ starts a new entry (not inside a string/comment)
+                    // Simple heuristic: if preceded by whitespace or start of input, it's likely valid
+                    if split_pos == 0 || bytes[split_pos - 1].is_ascii_whitespace() {
+                        chunks.push(&input[start..split_pos]);
+                        start = split_pos;
+                        break;
+                    }
+                    split_pos += 1; // Skip this @ and continue searching
+                } else {
+                    // No more @ found, can't split further
+                    break;
+                }
+            }
+        }
+
+        // Add the final chunk
+        if start < total_len {
+            chunks.push(&input[start..]);
+        }
+
+        chunks
     }
 
     /// Get all entries
@@ -644,7 +719,7 @@ mod tests {
             }
         "#;
 
-        let db = Database::parse(input).unwrap();
+        let db = Database::parser().parse(input).unwrap();
         assert_eq!(db.entries().len(), 1);
         assert_eq!(db.strings().len(), 1);
 
@@ -662,7 +737,7 @@ mod tests {
             }
         "#;
 
-        let db = Database::parse(input).unwrap();
+        let db = Database::parser().parse(input).unwrap();
         let entry = &db.entries()[0];
 
         // The title should still be borrowed from the input
@@ -687,7 +762,7 @@ mod tests {
             }
         "#;
 
-        let db = Database::parse(input).unwrap();
+        let db = Database::parser().parse(input).unwrap();
         let entry = &db.entries()[0];
 
         // Concatenation should create an owned string
@@ -713,7 +788,7 @@ mod tests {
             }
         "#;
 
-        let db = Database::parse(input).unwrap();
+        let db = Database::parser().parse(input).unwrap();
         let entry = &db.entries()[0];
 
         // After optimization, capacity should equal length (no waste)
@@ -758,7 +833,7 @@ mod tests {
             @book{b1, title = "Book 1"}
         "#;
 
-        let db = Database::parse(input).unwrap();
+        let db = Database::parser().parse(input).unwrap();
         let stats = db.stats();
 
         assert_eq!(stats.total_entries, 3);
@@ -796,7 +871,7 @@ mod tests {
         let input = "@article{test, title = \"Test\"}";
 
         // Single-threaded (default)
-        let db1 = Database::parse(input).unwrap();
+        let db1 = Database::parser().parse(input).unwrap();
         assert_eq!(db1.entries().len(), 1);
 
         // Using parser builder
