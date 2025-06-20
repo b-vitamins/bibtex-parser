@@ -28,14 +28,14 @@ impl ParseOptions {
         self
     }
 
-    /// Parse a single input string (always sequential)
-    ///
-    /// Note: Single-file parsing does not benefit from parallelization
-    /// due to BibTeX's sequential nature and string dependencies.
-    /// Use `parse_files` for parallel processing of multiple files.
+    /// Parse a single input string, optionally in parallel (Phase 1.5)
     pub fn parse<'a>(&self, input: &'a str) -> Result<Database<'a>> {
-        // Single file parsing is always sequential
-        // Parallel processing only benefits multiple files
+        #[cfg(feature = "parallel")]
+        if let Some(threads) = self.threads {
+            if threads > 1 {
+                return Database::parse_parallel(input, threads);
+            }
+        }
         Database::parse_sequential(input)
     }
 
@@ -119,13 +119,6 @@ impl<'a> Database<'a> {
         Self::default()
     }
 
-    /// Parse a BibTeX database from a string (single-threaded)
-    ///
-    /// For parallel parsing, use `ParseOptions::new().threads(n).parse(input)`
-    pub fn parse(input: &'a str) -> Result<Self> {
-        Self::parse_sequential(input)
-    }
-
     /// Create a parser with options
     ///
     /// # Parallel Processing
@@ -200,6 +193,79 @@ impl<'a> Database<'a> {
         db.preambles.shrink_to_fit();
         db.comments.shrink_to_fit();
 
+        Ok(db)
+    }
+
+    /// Parallel entry parsing using rayon threads (Phase 1.5)
+    #[cfg(feature = "parallel")]
+    pub(crate) fn parse_parallel(input: &'a str, threads: usize) -> Result<Self> {
+        use crate::parser::ParsedItem;
+        use rayon::prelude::*;
+
+        // Parse items and collect string definitions
+        let items = crate::parser::parse_bibtex(input)?;
+        let mut strings = AHashMap::new();
+        for item in &items {
+            if let ParsedItem::String(name, value) = item {
+                strings.insert(Cow::Borrowed(name), value.clone());
+            }
+        }
+        // Stub database for expansion logic
+        let expand_db = Database {
+            entries: Vec::new(),
+            strings: strings.clone(),
+            preambles: Vec::new(),
+            comments: Vec::new(),
+        };
+
+        // Build a dedicated thread pool and expand entries in parallel
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .map_err(|e| Error::WinnowError(format!("Thread pool build error: {e}")))?;
+        let results: Vec<_> = pool.install(|| {
+            items
+                .into_par_iter()
+                .filter_map(|item| match item {
+                    ParsedItem::Entry(mut entry) => {
+                        for field in &mut entry.fields {
+                            let old = std::mem::take(&mut field.value);
+                            field.value = expand_db.smart_expand_value(old).unwrap();
+                        }
+                        entry.fields.shrink_to_fit();
+                        Some((Some(entry), None, None))
+                    }
+                    ParsedItem::Preamble(val) => {
+                        let v = expand_db.smart_expand_value(val).unwrap();
+                        Some((None, Some(v), None))
+                    }
+                    ParsedItem::Comment(txt) => Some((None, None, Some(Cow::Borrowed(txt)))),
+                    _ => None,
+                })
+                .collect()
+        });
+
+        // Assemble final database from parallel results
+        let mut db = Database {
+            entries: Vec::new(),
+            strings,
+            preambles: Vec::new(),
+            comments: Vec::new(),
+        };
+        for (entry_opt, pre_opt, com_opt) in results {
+            if let Some(e) = entry_opt {
+                db.entries.push(e);
+            }
+            if let Some(p) = pre_opt {
+                db.preambles.push(p);
+            }
+            if let Some(c) = com_opt {
+                db.comments.push(c);
+            }
+        }
+        db.entries.shrink_to_fit();
+        db.preambles.shrink_to_fit();
+        db.comments.shrink_to_fit();
         Ok(db)
     }
 
