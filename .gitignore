@@ -1,2 +1,5 @@
 # Ignore local binary scripts directory
 src/bin/
+
+# Claude Code analysis directory
+.claude/

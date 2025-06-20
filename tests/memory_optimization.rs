@@ -44,7 +44,7 @@ mod tests {
             @article{test3, title = "Test 3", author = "Author 3", year = 2023}
         "#;
 
-        let db = Database::parse(input).unwrap();
+        let db = Database::parser().parse(input).unwrap();
 
         // All entries should have shrunk field vectors
         for entry in db.entries() {
@@ -130,7 +130,7 @@ mod tests {
             @article{test, title = first # ", " # second}
         "#;
 
-        let db = Database::parse(input).unwrap();
+        let db = Database::parser().parse(input).unwrap();
         let entry = &db.entries()[0];
 
         // Concat should still work correctly with boxed Vec

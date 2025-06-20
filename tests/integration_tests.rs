@@ -4,7 +4,7 @@ use pretty_assertions::assert_eq;
 #[test]
 fn test_parse_simple_file() {
     let input = include_str!("fixtures/simple.bib");
-    let db = Database::parse(input).unwrap();
+    let db = Database::parser().parse(input).unwrap();
 
     assert_eq!(db.entries().len(), 2);
     assert_eq!(db.strings().len(), 2);
@@ -29,7 +29,7 @@ fn test_parse_simple_file() {
 #[test]
 fn test_parse_complex_file() {
     let input = include_str!("fixtures/complex.bib");
-    let db = Database::parse(input).unwrap();
+    let db = Database::parser().parse(input).unwrap();
 
     // Should handle various entry types
     let articles = db.find_by_type("article");
@@ -50,7 +50,7 @@ fn test_parse_complex_file() {
 #[test]
 fn test_malformed_file_errors() {
     let input = include_str!("fixtures/malformed.bib");
-    let result = Database::parse(input);
+    let result = Database::parser().parse(input);
 
     assert!(result.is_err());
 
@@ -74,11 +74,11 @@ fn test_round_trip() {
   year = 2023
 }"#;
 
-    let db = Database::parse(original).unwrap();
+    let db = Database::parser().parse(original).unwrap();
     let output = bibtex_parser::to_string(&db).unwrap();
 
     // Parse the output again
-    let db2 = Database::parse(&output).unwrap();
+    let db2 = Database::parser().parse(&output).unwrap();
 
     // Should have same content
     assert_eq!(db.entries().len(), db2.entries().len());
@@ -101,7 +101,7 @@ fn test_variable_expansion() {
         }
     "#;
 
-    let db = Database::parse(input).unwrap();
+    let db = Database::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     assert_eq!(entry.get("author"), Some("John Doe, MIT"));
@@ -115,7 +115,7 @@ fn test_case_insensitive_entry_types() {
         @ArTiClE{test3, title = "Test 3"}
     "#;
 
-    let db = Database::parse(input).unwrap();
+    let db = Database::parser().parse(input).unwrap();
     assert_eq!(db.entries().len(), 3);
 
     for entry in db.entries() {
@@ -131,7 +131,7 @@ fn test_find_by_field() {
         @article{bohr1913, author = "Bohr", year = 1913}
     "#;
 
-    let db = Database::parse(input).unwrap();
+    let db = Database::parser().parse(input).unwrap();
 
     let einstein_papers = db.find_by_field("author", "Einstein");
     assert_eq!(einstein_papers.len(), 2);

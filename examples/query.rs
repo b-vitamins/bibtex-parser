@@ -33,7 +33,7 @@ fn main() -> Result<()> {
         }
     "#;
 
-    let db = Database::parse(bibtex)?;
+    let db = Database::parser().parse(bibtex)?;
 
     // Find all articles
     println!("Articles:");

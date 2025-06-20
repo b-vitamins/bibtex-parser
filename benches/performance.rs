@@ -23,12 +23,12 @@ fn bench_bibtex_parser(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("parse", size), &input, |b, input| {
             // Additional per-benchmark warmup
             for _ in 0..10 {
-                let _ = Database::parse(black_box(input));
+                let _ = Database::parser().parse(black_box(input));
             }
 
             // Now measure
             b.iter(|| {
-                let db = Database::parse(black_box(input)).unwrap();
+                let db = Database::parser().parse(black_box(input)).unwrap();
                 black_box(db);
             });
         });
@@ -48,14 +48,14 @@ fn warmup_process() {
     // 3. CPU branch predictor is trained
     // 4. Memory pages are faulted in
     for _ in 0..1000 {
-        let _ = Database::parse(&warmup_input);
+        let _ = Database::parser().parse(&warmup_input);
     }
 
     // Also warm up with different sizes to hit various code paths
     for size in &[10, 50, 500] {
         let input = generate_realistic_bibtex(*size);
         for _ in 0..50 {
-            let _ = Database::parse(&input);
+            let _ = Database::parser().parse(&input);
         }
     }
 
@@ -77,12 +77,12 @@ fn bench_memory_patterns(c: &mut Criterion) {
     group.bench_function("parse_and_query", |b| {
         // Per-benchmark warmup
         for _ in 0..10 {
-            let db = Database::parse(&input).unwrap();
+            let db = Database::parser().parse(&input).unwrap();
             let _ = db.find_by_type("article");
         }
 
         b.iter(|| {
-            let db = Database::parse(black_box(&input)).unwrap();
+            let db = Database::parser().parse(black_box(&input)).unwrap();
             // Simulate typical usage patterns
             let _ = db.find_by_type("article");
             let _ = db.find_by_field("year", "2020");
@@ -106,7 +106,7 @@ fn bench_memory_patterns(c: &mut Criterion) {
 
     group.bench_function("string_expansion", |b| {
         b.iter(|| {
-            let db = Database::parse(black_box(&complex_input)).unwrap();
+            let db = Database::parser().parse(black_box(&complex_input)).unwrap();
             black_box(db);
         });
     });
@@ -123,7 +123,7 @@ fn bench_operations(c: &mut Criterion) {
 
     // Create a database for operation benchmarks
     let input = generate_realistic_bibtex(1000);
-    let db = Database::parse(&input).unwrap();
+    let db = Database::parser().parse(&input).unwrap();
 
     group.bench_function("find_by_key_hit", |b| {
         b.iter(|| {
@@ -185,7 +185,7 @@ fn bench_comparison(c: &mut Criterion) {
             &input,
             |b, input| {
                 b.iter(|| {
-                    let db = Database::parse(black_box(input)).unwrap();
+                    let db = Database::parser().parse(black_box(input)).unwrap();
                     black_box(db);
                 });
             },

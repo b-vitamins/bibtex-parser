@@ -94,7 +94,7 @@ fn measure_parse_memory(entries: usize) -> (usize, usize, f64, f64, usize) {
     // Parse and keep the database alive
     eprint!("    Parsing... ");
     let parse_start = Instant::now();
-    let db = match Database::parse(&input) {
+    let db = match Database::parser().parse(&input) {
         Ok(db) => db,
         Err(e) => {
             eprintln!("ERROR: {}", e);

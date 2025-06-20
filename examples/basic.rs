@@ -17,7 +17,7 @@ fn main() -> Result<()> {
 
     println!("Parsing {}...", filename);
 
-    let db = Database::parse(&content)?;
+    let db = Database::parser().parse(&content)?;
 
     println!("\nStatistics:");
     println!("  Entries: {}", db.entries().len());

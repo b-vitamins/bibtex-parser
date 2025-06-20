@@ -211,7 +211,10 @@ impl<'a> Database<'a> {
             .build()
             .map_err(|e| Error::WinnowError(format!("Thread pool build error: {e}")))?;
 
-        // Parse chunks in parallel
+        // Estimate capacity to reduce allocations
+        let estimated_entries = input.len() / 800; // ~800 bytes per entry on average
+        
+        // Parse chunks in parallel with capacity estimation
         let chunk_results: Result<Vec<Vec<ParsedItem>>> = pool.install(|| {
             chunks
                 .into_par_iter()
@@ -221,46 +224,58 @@ impl<'a> Database<'a> {
 
         let parsed_chunks = chunk_results?;
 
-        // Merge all items from chunks
-        let mut all_items = Vec::new();
+        // Merge all items from chunks with pre-allocated capacity
+        let mut all_items = Vec::with_capacity(estimated_entries);
         for chunk_items in parsed_chunks {
             all_items.extend(chunk_items);
         }
 
-        // Collect string definitions first (single pass)
-        let mut strings = AHashMap::new();
+        // Collect string definitions with capacity estimation
+        let estimated_strings = all_items.len() / 20; // Rough estimate: 1 string per 20 items
+        let mut strings = AHashMap::with_capacity(estimated_strings);
         for item in &all_items {
             if let ParsedItem::String(name, value) = item {
                 strings.insert(Cow::Borrowed(*name), value.clone());
             }
         }
 
-        // Stub database for expansion logic
-        let expand_db = Database {
-            entries: Vec::new(),
-            strings: strings
-                .iter()
-                .map(|(k, v)| (Cow::Owned(k.to_string()), v.clone()))
-                .collect(),
-            preambles: Vec::new(),
-            comments: Vec::new(),
+        // Only create expansion DB if we have strings to expand
+        let expand_db = if strings.is_empty() {
+            None
+        } else {
+            Some(Database {
+                entries: Vec::new(),
+                strings: strings
+                    .iter()
+                    .map(|(k, v)| (Cow::Owned(k.to_string()), v.clone()))
+                    .collect(),
+                preambles: Vec::new(),
+                comments: Vec::new(),
+            })
         };
 
-        // Expand values in parallel
+        // Expand values in parallel (only if needed)
         let results: Vec<_> = pool.install(|| {
             all_items
                 .into_par_iter()
                 .filter_map(|item| match item {
                     ParsedItem::Entry(mut entry) => {
-                        for field in &mut entry.fields {
-                            let old = std::mem::take(&mut field.value);
-                            field.value = expand_db.smart_expand_value(old).unwrap();
+                        // Only expand if we have strings to expand
+                        if let Some(ref db) = expand_db {
+                            for field in &mut entry.fields {
+                                let old = std::mem::take(&mut field.value);
+                                field.value = db.smart_expand_value(old).unwrap();
+                            }
                         }
                         entry.fields.shrink_to_fit();
                         Some((Some(entry), None, None))
                     }
                     ParsedItem::Preamble(val) => {
-                        let v = expand_db.smart_expand_value(val).unwrap();
+                        let v = if let Some(ref db) = expand_db {
+                            db.smart_expand_value(val).unwrap()
+                        } else {
+                            val
+                        };
                         Some((None, Some(v), None))
                     }
                     ParsedItem::Comment(txt) => Some((None, None, Some(Cow::Borrowed(txt)))),
@@ -269,9 +284,9 @@ impl<'a> Database<'a> {
                 .collect()
         });
 
-        // Assemble final database from parallel results
+        // Assemble final database from parallel results with pre-allocation
         let mut db = Database {
-            entries: Vec::new(),
+            entries: Vec::with_capacity(estimated_entries),
             strings,
             preambles: Vec::new(),
             comments: Vec::new(),
@@ -343,7 +358,7 @@ impl<'a> Database<'a> {
         result
     }
 
-    /// Split input into chunks at valid BibTeX entry boundaries
+    /// Split input into chunks at valid BibTeX entry boundaries (optimized for load balancing)
     #[cfg(feature = "parallel")]
     fn split_into_chunks(input: &str, num_chunks: usize) -> Vec<&str> {
         use crate::parser::delimiter;
@@ -354,33 +369,38 @@ impl<'a> Database<'a> {
 
         let bytes = input.as_bytes();
         let total_len = bytes.len();
-        let chunk_size = total_len / num_chunks;
+        
+        // Use larger chunk size to reduce overhead from too many small chunks
+        let target_chunks = std::cmp::min(num_chunks, total_len / 50_000); // At least 50KB per chunk
+        let chunk_size = total_len / target_chunks.max(1);
 
-        let mut chunks = Vec::with_capacity(num_chunks);
+        let mut chunks = Vec::with_capacity(target_chunks);
         let mut start = 0;
 
-        for i in 0..num_chunks - 1 {
+        for i in 0..target_chunks - 1 {
             // Target position for this chunk boundary
             let target_pos = (i + 1) * chunk_size;
-
-            // Find the next @ after the target position
+            
+            // Look for @ within a reasonable window (avoid scanning too far)
+            let search_end = std::cmp::min(target_pos + chunk_size / 4, total_len);
             let mut split_pos = target_pos;
 
-            // Use SIMD-optimized delimiter finding
-            while split_pos < total_len {
-                if let Some(at_pos) = delimiter::find_byte(&bytes[split_pos..], b'@', 0) {
+            // Use SIMD-optimized delimiter finding with limited search
+            while split_pos < search_end {
+                if let Some(at_pos) = delimiter::find_byte(&bytes[split_pos..search_end], b'@', 0) {
                     split_pos += at_pos;
-
-                    // Verify this @ starts a new entry (not inside a string/comment)
-                    // Simple heuristic: if preceded by whitespace or start of input, it's likely valid
+                    
+                    // Verify this @ starts a new entry
                     if split_pos == 0 || bytes[split_pos - 1].is_ascii_whitespace() {
                         chunks.push(&input[start..split_pos]);
                         start = split_pos;
                         break;
                     }
-                    split_pos += 1; // Skip this @ and continue searching
+                    split_pos += 1;
                 } else {
-                    // No more @ found, can't split further
+                    // If no @ found in window, split at current position
+                    chunks.push(&input[start..target_pos]);
+                    start = target_pos;
                     break;
                 }
             }

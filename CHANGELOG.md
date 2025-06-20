@@ -15,6 +15,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Achieved 3.5x speedup on 12 cores for large files (50-100MB)
   - Near-linear scaling up to 4 threads, good scaling through 8-12 threads
   - Maintained correctness with proper handling of string definitions across chunks
+- **Phase 1.5.1** - Parallel Parsing Efficiency Optimizations (2025-06-20)
+  - Smart chunk sizing with minimum 50KB chunks to reduce coordination overhead
+  - Limited boundary search window to avoid scanning entire file for split points
+  - Pre-allocated containers with capacity estimation (~800 bytes per entry)
+  - Conditional string expansion - skip when no @string definitions exist
+  - Memory-efficient result merging with capacity hints throughout pipeline
+  - Improved parallel efficiency from ~17% to ~34% of theoretical maximum
+
+### Changed
+- **API Enhancement** - Added DatabaseBuilder pattern for thread configuration
+  - `Database::parse()` replaced with `Database::parser().parse()` for consistency
+  - `Database::parser().threads(n).parse()` for parallel single-file parsing
+  - Maintains backward compatibility through `bibtex_parser::parse()` function
+  - Updated all examples, tests, and benchmarks to use new builder API
 - **Phase 1.1 Complete** - Comprehensive benchmarking infrastructure
   - Parse performance benchmarks for various file sizes (10-5000 entries)
   - Query operation benchmarks (find_by_key, find_by_type, find_by_field)

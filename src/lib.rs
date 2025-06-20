@@ -25,7 +25,7 @@
 //!     }
 //! "#;
 //!
-//! let db = Database::parse(input)?;
+//! let db = Database::parser().parse(input)?;
 //! assert_eq!(db.entries().len(), 1);
 //!
 //! let entry = &db.entries()[0];
@@ -70,7 +70,7 @@ pub mod prelude {
 
 /// Parse a BibTeX database from a string
 pub fn parse(input: &str) -> Result<Database> {
-    Database::parse(input)
+    Database::parser().parse(input)
 }
 
 /// Parse a BibTeX database from a file
