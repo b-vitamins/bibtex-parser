@@ -85,6 +85,7 @@ impl ParseOptions {
         Ok(result)
     }
 
+    #[cfg(feature = "parallel")]
     fn build_thread_pool(&self) -> Result<rayon::ThreadPool> {
         let mut builder = rayon::ThreadPoolBuilder::new();
 
@@ -334,51 +335,103 @@ impl<'a> Database<'a> {
         result
     }
 
-    /// Split input into chunks at valid BibTeX entry boundaries (optimized for load balancing)
+    /// Split input into chunks at valid BibTeX entry boundaries (optimized for work-stealing)
     #[cfg(feature = "parallel")]
-    fn split_into_chunks(input: &str, num_chunks: usize) -> Vec<&str> {
+    fn split_into_chunks(input: &str, num_threads: usize) -> Vec<&str> {
         use crate::parser::delimiter;
 
-        if num_chunks <= 1 {
+        if num_threads <= 1 {
             return vec![input];
         }
 
         let bytes = input.as_bytes();
         let total_len = bytes.len();
 
-        // Use larger chunk size to reduce overhead from too many small chunks
-        let target_chunks = std::cmp::min(num_chunks, total_len / 50_000).max(1); // At least 50KB per chunk
-        let chunk_size = total_len / target_chunks;
+        // Create many small chunks for better work-stealing
+        // Target ~5KB chunks with many work units per thread
+        const MIN_CHUNK_SIZE: usize = 5_000; // 5KB minimum
+        const MAX_CHUNK_SIZE: usize = 20_000; // 20KB maximum
 
+        // Calculate ideal chunk size for good work-stealing
+        let chunks_per_thread = 10; // Aim for 10-20 chunks per thread
+        let ideal_chunk_size =
+            (total_len / (num_threads * chunks_per_thread)).clamp(MIN_CHUNK_SIZE, MAX_CHUNK_SIZE);
+
+        let target_chunks = (total_len / ideal_chunk_size).max(1);
+
+        // Pre-scan to find all @ positions for better splitting
+        let mut at_positions = Vec::new();
+        let mut pos = 0;
+
+        while pos < total_len {
+            if let Some(at_pos) = delimiter::find_byte(&bytes[pos..], b'@', 0) {
+                let absolute_pos = pos + at_pos;
+                // Verify this @ starts a new entry
+                if absolute_pos == 0 || bytes[absolute_pos - 1].is_ascii_whitespace() {
+                    at_positions.push(absolute_pos);
+                }
+                pos = absolute_pos + 1;
+            } else {
+                break;
+            }
+        }
+
+        // If we have enough @ positions, use them to create chunks
+        if at_positions.len() > target_chunks {
+            // Create chunks based on @ positions
+            let mut chunks = Vec::with_capacity(target_chunks);
+            let positions_per_chunk = at_positions.len() / target_chunks;
+
+            let mut start = 0;
+            for i in (0..at_positions.len()).step_by(positions_per_chunk) {
+                if i > 0 && start < at_positions[i] {
+                    chunks.push(&input[start..at_positions[i]]);
+                    start = at_positions[i];
+                }
+            }
+
+            // Add final chunk
+            if start < total_len {
+                chunks.push(&input[start..]);
+            }
+
+            return chunks;
+        }
+
+        // Fallback: split by size if not enough @ positions
         let mut chunks = Vec::with_capacity(target_chunks);
         let mut start = 0;
 
         for i in 0..target_chunks.saturating_sub(1) {
             // Target position for this chunk boundary
-            let target_pos = (i + 1) * chunk_size;
+            let target_pos = ((i + 1) * ideal_chunk_size).min(total_len);
 
-            // Look for @ within a reasonable window (avoid scanning too far)
-            let search_end = std::cmp::min(target_pos + chunk_size / 4, total_len);
+            // Look for @ within a small window
+            let search_start = target_pos.saturating_sub(ideal_chunk_size / 10);
+            let search_end = (target_pos + ideal_chunk_size / 10).min(total_len);
             let mut split_pos = target_pos;
+            let mut found = false;
 
-            // Use SIMD-optimized delimiter finding with limited search
-            while split_pos < search_end {
-                if let Some(at_pos) = delimiter::find_byte(&bytes[split_pos..search_end], b'@', 0) {
-                    split_pos += at_pos;
-
+            // Search for @ near target position
+            if search_start < search_end {
+                if let Some(at_pos) =
+                    delimiter::find_byte(&bytes[search_start..search_end], b'@', 0)
+                {
+                    split_pos = search_start + at_pos;
                     // Verify this @ starts a new entry
                     if split_pos == 0 || bytes[split_pos - 1].is_ascii_whitespace() {
-                        chunks.push(&input[start..split_pos]);
-                        start = split_pos;
-                        break;
+                        found = true;
                     }
-                    split_pos += 1;
-                } else {
-                    // If no @ found in window, split at current position
-                    chunks.push(&input[start..target_pos]);
-                    start = target_pos;
-                    break;
                 }
+            }
+
+            if found && split_pos > start {
+                chunks.push(&input[start..split_pos]);
+                start = split_pos;
+            } else if target_pos > start {
+                // No @ found, split at target position
+                chunks.push(&input[start..target_pos]);
+                start = target_pos;
             }
         }
 

@@ -113,6 +113,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Identified identifier validation as tertiary target
 
 ### Fixed
+- Fixed compilation error when `parallel` feature is not enabled
+  - Added `#[cfg(feature = "parallel")]` attribute to `build_thread_pool` method
 - Removed broken single-file parallel parsing that was actually slower than sequential
 - Parallel processing now only applies to multiple files via `parse_files()`
 - Improved documentation to clarify parallel processing limitations
