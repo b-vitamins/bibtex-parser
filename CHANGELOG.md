@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Enhanced CLAUDE.md documentation with comprehensive development guidance
+  - Added example usage commands for `cargo run --example` 
+  - Enhanced Writer API section with complete configuration example
+  - Added Feature Flags documentation for parallel processing
+  - Removed reference to non-existent `memanalysis` binary
+  - Improved development tool documentation for better Claude Code integration
+
 ### Added
 - **Phase 1.5 Complete** - True Parallel Single-File Parsing (2025-06-20)
   - Implemented chunk-based parallel parsing by splitting input at valid BibTeX entry boundaries

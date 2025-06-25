@@ -75,11 +75,17 @@ cargo run --bin simd_potential -- path/to/file.bib
 # Test fixtures
 cargo run --bin test_fixtures
 
-# Memory usage analysis
-cargo run --bin memanalysis -- path/to/file.bib
-
 # Allocation tracing
 cargo run --bin tracealloc -- path/to/file.bib
+```
+
+### Example Usage
+```bash
+# Run basic usage example
+cargo run --example basic
+
+# Run query operations example
+cargo run --example query
 ```
 
 ## Architecture Overview
@@ -152,3 +158,25 @@ let db = Database::parse(bibtex_str)?;
 
 ### Writer API
 The writer supports configurable formatting options for generating BibTeX output.
+
+```rust
+use bibtex_parser::writer::{Writer, WriterConfig};
+
+let config = WriterConfig {
+    indent: "  ".to_string(),
+    align_values: true,
+    sort_entries: true,
+    ..Default::default()
+};
+
+let mut output = Vec::new();
+let mut writer = Writer::with_config(&mut output, config);
+writer.write_database(&db)?;
+```
+
+## Feature Flags
+
+- `parallel`: Enables multi-file parallel parsing with rayon dependency
+  - Use for processing multiple BibTeX files efficiently
+  - Single-file parsing remains sequential regardless of this flag
+  - Required for parallel benchmarks: `cargo bench --features parallel --bench parallel`
