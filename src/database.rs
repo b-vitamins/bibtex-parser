@@ -28,14 +28,12 @@ impl ParseOptions {
         self
     }
 
-    /// Parse a single input string, optionally in parallel (Phase 1.5)
+    /// Parse a single input string (always sequential for optimal performance)
+    /// 
+    /// Note: Single-file parallel parsing is disabled because it performs worse
+    /// than sequential parsing due to overhead. Use parse_files() for parallel processing.
     pub fn parse<'a>(&self, input: &'a str) -> Result<Database<'a>> {
-        #[cfg(feature = "parallel")]
-        if let Some(threads) = self.threads {
-            if threads > 1 {
-                return Database::parse_parallel(input, threads);
-            }
-        }
+        // Always use sequential parsing for single files - parallel is counterproductive
         Database::parse_sequential(input)
     }
 
