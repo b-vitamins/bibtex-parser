@@ -29,9 +29,9 @@ impl ParseOptions {
     }
 
     /// Parse a single input string (always sequential for optimal performance)
-    /// 
+    ///
     /// Note: Single-file parallel parsing is disabled because it performs worse
-    /// than sequential parsing due to overhead. Use parse_files() for parallel processing.
+    /// than sequential parsing due to overhead. Use `parse_files()` for parallel processing.
     pub fn parse<'a>(&self, input: &'a str) -> Result<Database<'a>> {
         // Always use sequential parsing for single files - parallel is counterproductive
         Database::parse_sequential(input)
@@ -150,22 +150,48 @@ impl<'a> Database<'a> {
         let items = crate::parser::parse_bibtex(input)?;
         let mut db = Self::new();
 
-        // First pass: collect string definitions
-        for item in &items {
-            if let crate::parser::ParsedItem::String(name, value) = item {
-                db.strings.insert(Cow::Borrowed(name), value.clone());
+        // OPTIMIZATION: Pre-size collections based on item types
+        let (entry_count, string_count, comment_count) =
+            items.iter().fold((0, 0, 0), |(e, s, c), item| match item {
+                crate::parser::ParsedItem::Entry(_) => (e + 1, s, c),
+                crate::parser::ParsedItem::String(_, _) => (e, s + 1, c),
+                crate::parser::ParsedItem::Comment(_) => (e, s, c + 1),
+                crate::parser::ParsedItem::Preamble(_) => (e, s, c),
+            });
+
+        db.entries.reserve_exact(entry_count);
+        db.strings.reserve(string_count);
+        db.comments.reserve(comment_count);
+
+        // Single pass with move semantics to avoid clone
+        let mut string_items = Vec::with_capacity(string_count);
+        let mut other_items = Vec::with_capacity(items.len() - string_count);
+
+        for item in items {
+            match item {
+                crate::parser::ParsedItem::String(_, _) => string_items.push(item),
+                _ => other_items.push(item),
             }
         }
 
-        // Second pass: process all items
-        for item in items {
+        // Process strings first
+        for item in string_items {
+            if let crate::parser::ParsedItem::String(name, value) = item {
+                db.strings.insert(Cow::Borrowed(name), value);
+            }
+        }
+
+        // Process other items
+        for item in other_items {
             match item {
                 crate::parser::ParsedItem::Entry(mut entry) => {
-                    // Only expand variables, keep literals borrowed when possible
-                    for field in &mut entry.fields {
-                        // Use std::mem::take to move the value without cloning
-                        let old_value = std::mem::take(&mut field.value);
-                        field.value = db.smart_expand_value(old_value)?;
+                    // Only expand variables if we have string definitions
+                    if !db.strings.is_empty() {
+                        for field in &mut entry.fields {
+                            // Use std::mem::take to move the value without cloning
+                            let old_value = std::mem::take(&mut field.value);
+                            field.value = db.smart_expand_value(old_value)?;
+                        }
                     }
 
                     // OPTIMIZATION: Shrink Vec to exact size to save memory
@@ -174,26 +200,22 @@ impl<'a> Database<'a> {
                     db.entries.push(entry);
                 }
                 crate::parser::ParsedItem::Preamble(value) => {
-                    let expanded = db.smart_expand_value(value)?;
+                    let expanded = if db.strings.is_empty() {
+                        value
+                    } else {
+                        db.smart_expand_value(value)?
+                    };
                     db.preambles.push(expanded);
                 }
                 crate::parser::ParsedItem::Comment(text) => {
                     db.comments.push(Cow::Borrowed(text));
                 }
-                crate::parser::ParsedItem::String(_, _) => {
-                    // Already processed in first pass
-                }
+                crate::parser::ParsedItem::String(_, _) => unreachable!(),
             }
         }
 
-        // OPTIMIZATION: Shrink all database vectors to exact size
-        db.entries.shrink_to_fit();
-        db.preambles.shrink_to_fit();
-        db.comments.shrink_to_fit();
-
         Ok(db)
     }
-
 
     /// Merge another database into this one
     pub fn merge(&mut self, other: Self) {
@@ -244,7 +266,6 @@ impl<'a> Database<'a> {
 
         result
     }
-
 
     /// Get all entries
     #[must_use]
