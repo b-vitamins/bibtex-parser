@@ -1,4 +1,5 @@
-use bibtex_parser::{Database, EntryType};
+use bibtex_parser::{Database, EntryType, Value};
+use std::borrow::Cow;
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -700,4 +701,306 @@ fn test_percent_comment_in_complex_bibtex() {
     
     // And the text comment at the beginning
     assert!(comments.iter().any(|c| c.contains("This is a comment outside of any entry")));
+}
+
+#[test]
+fn test_digit_string_fallback() {
+    // Test that values starting with digits but containing non-numeric characters
+    // are parsed as string literals instead of failing
+    let input = r#"
+        @article{test1,
+            year = 2024,
+            volume = 12b,
+            issue = 2024a,
+            pages = 123-456,
+            version = 1.2.3,
+            edition = 2nd,
+            chapter = 3rd
+        }
+    "#;
+    
+    let db = Database::parser().parse(input).unwrap();
+    assert_eq!(db.entries().len(), 1);
+    
+    let entry = &db.entries()[0];
+    assert_eq!(entry.key(), "test1");
+    
+    // Pure number should remain as Number type
+    assert_eq!(entry.get_as_string("year"), Some("2024".to_string()));
+    match entry.fields().iter().find(|f| f.name == "year").unwrap().value {
+        Value::Number(n) => assert_eq!(n, 2024),
+        _ => panic!("Expected Number value for pure number"),
+    }
+    
+    // Mixed alphanumeric should be Literal strings
+    assert_eq!(entry.get("volume"), Some("12b"));
+    match entry.fields().iter().find(|f| f.name == "volume").unwrap().value {
+        Value::Literal(ref s) => assert_eq!(s, "12b"),
+        _ => panic!("Expected Literal value for mixed alphanumeric"),
+    }
+    
+    assert_eq!(entry.get("issue"), Some("2024a"));
+    match entry.fields().iter().find(|f| f.name == "issue").unwrap().value {
+        Value::Literal(ref s) => assert_eq!(s, "2024a"),
+        _ => panic!("Expected Literal value for year with letter"),
+    }
+    
+    assert_eq!(entry.get("pages"), Some("123-456"));
+    match entry.fields().iter().find(|f| f.name == "pages").unwrap().value {
+        Value::Literal(ref s) => assert_eq!(s, "123-456"),
+        _ => panic!("Expected Literal value for page range"),
+    }
+    
+    assert_eq!(entry.get("version"), Some("1.2.3"));
+    match entry.fields().iter().find(|f| f.name == "version").unwrap().value {
+        Value::Literal(ref s) => assert_eq!(s, "1.2.3"),
+        _ => panic!("Expected Literal value for dotted version"),
+    }
+    
+    assert_eq!(entry.get("edition"), Some("2nd"));
+    match entry.fields().iter().find(|f| f.name == "edition").unwrap().value {
+        Value::Literal(ref s) => assert_eq!(s, "2nd"),
+        _ => panic!("Expected Literal value for ordinal"),
+    }
+    
+    assert_eq!(entry.get("chapter"), Some("3rd"));
+    match entry.fields().iter().find(|f| f.name == "chapter").unwrap().value {
+        Value::Literal(ref s) => assert_eq!(s, "3rd"),
+        _ => panic!("Expected Literal value for ordinal"),
+    }
+}
+
+#[test]
+fn test_mixed_value_types() {
+    // Test various value types in a single entry to ensure they coexist properly
+    let input = r#"
+        @article{mixed,
+            year = 2024,
+            volume = "12",
+            issue = 3rd,
+            pages = 100-150,
+            version = 1.2.3,
+            id = "abc123",
+            doi = "10.1000/123",
+            isbn = 978-0123456789
+        }
+    "#;
+    
+    let db = Database::parser().parse(input).unwrap();
+    let entry = &db.entries()[0];
+    
+    // All should parse successfully and return appropriate string representations
+    assert_eq!(entry.get_as_string("year"), Some("2024".to_string()));
+    assert_eq!(entry.get_as_string("volume"), Some("12".to_string()));
+    assert_eq!(entry.get_as_string("issue"), Some("3rd".to_string()));
+    assert_eq!(entry.get_as_string("pages"), Some("100-150".to_string()));
+    assert_eq!(entry.get_as_string("version"), Some("1.2.3".to_string()));
+    assert_eq!(entry.get_as_string("id"), Some("abc123".to_string()));
+    assert_eq!(entry.get_as_string("doi"), Some("10.1000/123".to_string()));
+    assert_eq!(entry.get_as_string("isbn"), Some("978-0123456789".to_string()));
+    
+    // Check specific value types
+    // Year should be Number
+    match entry.fields().iter().find(|f| f.name == "year").unwrap().value {
+        Value::Number(_) => {},
+        _ => panic!("Year should be Number type"),
+    }
+    
+    // Volume (quoted) should be Literal
+    match entry.fields().iter().find(|f| f.name == "volume").unwrap().value {
+        Value::Literal(_) => {},
+        _ => panic!("Quoted number should be Literal type"),
+    }
+    
+    // Issue (ordinal) should be Literal
+    match entry.fields().iter().find(|f| f.name == "issue").unwrap().value {
+        Value::Literal(_) => {},
+        _ => panic!("Ordinal should be Literal type"),
+    }
+    
+    // ID (quoted) should be Literal
+    match entry.fields().iter().find(|f| f.name == "id").unwrap().value {
+        Value::Literal(_) => {},
+        _ => panic!("Quoted identifier should be Literal type"),
+    }
+}
+
+#[test]
+fn test_string_variable_vs_literal_digit() {
+    // Test that string variables and digit literals work correctly together
+    let input = r#"
+        @string{year2024 = "2024"}
+        @article{test,
+            year = year2024,
+            volume = 2024a,
+            issue = 12b
+        }
+    "#;
+    
+    let db = Database::parser().parse(input).unwrap();
+    let entry = &db.entries()[0];
+    
+    assert_eq!(entry.get_as_string("year"), Some("2024".to_string()));
+    assert_eq!(entry.get("volume"), Some("2024a"));
+    assert_eq!(entry.get("issue"), Some("12b"));
+    
+    // Verify the value types
+    // year should be expanded to Literal since string variables get expanded during parsing
+    match entry.fields().iter().find(|f| f.name == "year").unwrap().value {
+        Value::Literal(ref s) => assert_eq!(s, "2024"),
+        _ => panic!("Expanded string variable should be Literal type"),
+    }
+    
+    // volume and issue should be Literals
+    match entry.fields().iter().find(|f| f.name == "volume").unwrap().value {
+        Value::Literal(ref s) => assert_eq!(s, "2024a"),
+        _ => panic!("Digit-string should be Literal type"),
+    }
+    
+    match entry.fields().iter().find(|f| f.name == "issue").unwrap().value {
+        Value::Literal(ref s) => assert_eq!(s, "12b"),
+        _ => panic!("Digit-string should be Literal type"),
+    }
+}
+
+#[test]
+fn test_edge_case_digit_strings() {
+    // Test edge cases for digit string parsing
+    let input = r#"
+        @misc{edge_cases,
+            number1 = 1st,
+            number2 = 21st,
+            number3 = 2nd,
+            number4 = 42nd,
+            number5 = 3rd,
+            number6 = 123rd,
+            version1 = 1.0,
+            version2 = 2.1.3,
+            version3 = 10.15.2.1,
+            range1 = 1-10,
+            range2 = 100-200,
+            range3 = "1-10,15-20",
+            mixed1 = 2024Spring,
+            mixed2 = 42alpha,
+            mixed3 = 1beta2,
+            code1 = 123ABC,
+            code2 = 456def
+        }
+    "#;
+    
+    let db = Database::parser().parse(input).unwrap();
+    let entry = &db.entries()[0];
+    
+    // All should parse as string literals
+    let expected_values = [
+        ("number1", "1st"),
+        ("number2", "21st"),
+        ("number3", "2nd"),
+        ("number4", "42nd"),
+        ("number5", "3rd"),
+        ("number6", "123rd"),
+        ("version1", "1.0"),
+        ("version2", "2.1.3"),
+        ("version3", "10.15.2.1"),
+        ("range1", "1-10"),
+        ("range2", "100-200"),
+        ("range3", "1-10,15-20"),
+        ("mixed1", "2024Spring"),
+        ("mixed2", "42alpha"),
+        ("mixed3", "1beta2"),
+        ("code1", "123ABC"),
+        ("code2", "456def"),
+    ];
+    
+    for (field_name, expected_value) in expected_values {
+        assert_eq!(
+            entry.get(field_name), 
+            Some(expected_value),
+            "Field {} should have value '{}'", 
+            field_name, 
+            expected_value
+        );
+        
+        // Verify all are Literal types
+        match entry.fields().iter().find(|f| f.name == field_name).unwrap().value {
+            Value::Literal(ref s) => assert_eq!(s, expected_value),
+            _ => panic!("Field {} should be Literal type", field_name),
+        }
+    }
+}
+
+#[test]  
+fn test_digit_string_in_concatenation() {
+    // Test that digit strings work in concatenations
+    let input = r#"
+        @article{concat_test,
+            note = "Version " # 1.2.3 # " released",
+            pages = 100-200 # ", " # 300-400,
+            year = 2024 # "a"
+        }
+    "#;
+    
+    let db = Database::parser().parse(input).unwrap();
+    let entry = &db.entries()[0];
+    
+    assert_eq!(entry.get_as_string("note"), Some("Version 1.2.3 released".to_string()));
+    assert_eq!(entry.get_as_string("pages"), Some("100-200, 300-400".to_string()));
+    assert_eq!(entry.get_as_string("year"), Some("2024a".to_string()));
+    
+    // Verify concatenation structure
+    match entry.fields().iter().find(|f| f.name == "note").unwrap().value {
+        Value::Concat(ref parts) => {
+            assert_eq!(parts.len(), 3);
+            assert_eq!(parts[0], Value::Literal(Cow::Borrowed("Version ")));
+            assert_eq!(parts[1], Value::Literal(Cow::Borrowed("1.2.3")));
+            assert_eq!(parts[2], Value::Literal(Cow::Borrowed(" released")));
+        },
+        _ => panic!("Expected concatenated value"),
+    }
+}
+
+#[test]
+fn test_backward_compatibility_pure_numbers() {
+    // Ensure pure numbers still work exactly as before
+    let input = r#"
+        @article{numbers,
+            year = 2024,
+            volume = 42,
+            number = 1,
+            pages_start = 100,
+            pages_end = 200,
+            negative = -5,
+            zero = 0
+        }
+    "#;
+    
+    let db = Database::parser().parse(input).unwrap();
+    let entry = &db.entries()[0];
+    
+    // All should be parsed as Number type
+    let number_fields = [
+        ("year", 2024),
+        ("volume", 42),
+        ("number", 1),
+        ("pages_start", 100),
+        ("pages_end", 200),
+        ("negative", -5),
+        ("zero", 0),
+    ];
+    
+    for (field_name, expected_num) in number_fields {
+        assert_eq!(
+            entry.get_as_string(field_name),
+            Some(expected_num.to_string()),
+            "Field {} should convert to string '{}'",
+            field_name,
+            expected_num
+        );
+        
+        // Verify all are Number types
+        match entry.fields().iter().find(|f| f.name == field_name).unwrap().value {
+            Value::Number(n) => assert_eq!(n, expected_num),
+            _ => panic!("Field {} should be Number type", field_name),
+        }
+    }
 }
