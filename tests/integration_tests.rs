@@ -1,5 +1,4 @@
-use bibtex_parser::{Database, EntryType, Value};
-use bibtex_parser::parser::{parse_bibtex, ParsedItem};
+use bibtex_parser::{Database, EntryType, Value, ValidationLevel, ValidationError, ValidationSeverity, parse_bibtex, ParsedItem};
 use std::borrow::Cow;
 use pretty_assertions::assert_eq;
 
@@ -1458,4 +1457,478 @@ fn test_parsed_item_partial_eq() {
     
     // Verify ParsedItem implements PartialEq
     assert_eq!(items1[0], items2[0]);
+}
+
+// VALIDATION TESTS
+
+#[test]
+fn test_validation_levels() {
+    let input = r#"
+        @article{valid2024,
+            author = "John Doe",
+            title = "Test Article",
+            journal = "Test Journal",
+            year = 2024
+        }
+    "#;
+    
+    let db = Database::parser().parse(input).unwrap();
+    let entry = &db.entries()[0];
+    
+    // Should pass all validation levels
+    assert!(entry.validate(ValidationLevel::Minimal).is_ok());
+    assert!(entry.validate(ValidationLevel::Standard).is_ok());
+    assert!(entry.validate(ValidationLevel::Strict).is_ok());
+}
+
+#[test]
+fn test_missing_required_fields() {
+    let input = r#"
+        @article{incomplete,
+            author = "John Doe",
+            title = "Test Article"
+        }
+    "#;
+    
+    let db = Database::parser().parse(input).unwrap();
+    let entry = &db.entries()[0];
+    
+    let result = entry.validate(ValidationLevel::Minimal);
+    assert!(result.is_err());
+    
+    let errors = result.unwrap_err();
+    assert_eq!(errors.len(), 2); // Missing journal and year
+    assert!(errors.iter().any(|e| e.field == Some("journal".to_string())));
+    assert!(errors.iter().any(|e| e.field == Some("year".to_string())));
+    
+    // All should be error-level
+    for error in &errors {
+        assert_eq!(error.severity, ValidationSeverity::Error);
+    }
+}
+
+#[test]
+fn test_validation_warnings() {
+    let input = r#"
+        @article{warnings_test,
+            author = "John Doe",
+            title = "Test",
+            journal = "Journal",
+            year = 999,
+            pages = "12 to 34",
+            doi = "not-a-doi"
+        }
+    "#;
+    
+    let db = Database::parser().parse(input).unwrap();
+    let entry = &db.entries()[0];
+    
+    let result = entry.validate(ValidationLevel::Strict);
+    assert!(result.is_err());
+    
+    let errors = result.unwrap_err();
+    let warnings = errors.iter()
+        .filter(|e| e.severity == ValidationSeverity::Warning)
+        .count();
+    assert!(warnings >= 3); // Year, pages, DOI warnings
+}
+
+#[test]
+fn test_backward_compatible_is_valid() {
+    let input = r#"
+        @article{valid,
+            author = "A", title = "T", journal = "J", year = 2024
+        }
+        @article{invalid,
+            author = "A", title = "T"
+        }
+    "#;
+    
+    let db = Database::parser().parse(input).unwrap();
+    assert!(db.entries()[0].is_valid());
+    assert!(!db.entries()[1].is_valid());
+}
+
+#[test]
+fn test_database_validation() {
+    let input = r#"
+        @article{valid, author="A", title="T", journal="J", year=2024}
+        @article{invalid, author="A", title="T"}
+        @article{valid2, author="B", title="T2", journal="J2", year=2024}
+    "#;
+    
+    let db = Database::parser().parse(input).unwrap();
+    let invalid = db.validate(ValidationLevel::Minimal);
+    
+    assert_eq!(invalid.len(), 1);
+    assert_eq!(invalid[0].0, 1); // Index of invalid entry
+    assert_eq!(invalid[0].1.key(), "invalid");
+}
+
+#[test]
+fn test_duplicate_keys() {
+    let input = r#"
+        @article{dup, title="First"}
+        @article{unique, title="Unique"}  
+        @article{dup, title="Second"}
+    "#;
+    
+    let db = Database::parser().parse(input).unwrap();
+    let duplicates = db.find_duplicate_keys();
+    
+    assert_eq!(duplicates.len(), 1);
+    assert_eq!(duplicates[0], "dup");
+}
+
+#[test]
+fn test_comprehensive_validation_report() {
+    let input = r#"
+        @article{dup, author="A", title="T", journal="J", year=2024}
+        @article{invalid, author="A", title="T"}  
+        @article{dup, author="B", title="T2", journal="J2", year=1}
+        @misc{empty_entry, title="Empty Entry"}
+    "#;
+    
+    let db = Database::parser().parse(input).unwrap();
+    let report = db.validate_comprehensive(ValidationLevel::Standard);
+    
+    assert!(!report.is_valid());
+    assert_eq!(report.total_entries, 4);
+    assert_eq!(report.duplicate_keys.len(), 1);
+    assert_eq!(report.empty_entries.len(), 0); // misc entry has title so not empty
+    assert!(report.invalid_entries.len() >= 2); // invalid + year=1 warning
+    
+    let summary = report.issue_summary();
+    assert!(summary.errors > 0); // Duplicates + empty + missing required fields
+    assert!(summary.warnings > 0); // Year=1 warning
+}
+
+#[test]
+fn test_validation_error_display() {
+    let error = ValidationError::error(Some("title"), "Missing required field");
+    let display = format!("{}", error);
+    assert!(display.contains("title"));
+    assert!(display.contains("Missing required field"));
+    assert!(display.contains("Error"));
+    
+    let warning = ValidationError::warning(None, "Entry-level warning");
+    let display = format!("{}", warning);
+    assert!(display.contains("<entry>"));
+    assert!(display.contains("Entry-level warning"));
+    assert!(display.contains("Warning"));
+}
+
+#[test]
+fn test_validation_field_formats() {
+    let input = r#"
+        @article{format_test,
+            author = "John Doe",
+            title = "Test",
+            journal = "Journal",
+            year = 2024,
+            doi = "not-a-doi",
+            url = "ftp://invalid-scheme",
+            isbn = "123",
+            month = "invalid-month",
+            volume = "not-a-number"
+        }
+    "#;
+    
+    let db = Database::parser().parse(input).unwrap();
+    let entry = &db.entries()[0];
+    
+    let result = entry.validate(ValidationLevel::Strict);
+    assert!(result.is_err());
+    
+    let errors = result.unwrap_err();
+    
+    // Check for specific format warnings (in strict mode)
+    assert!(errors.iter().any(|e| e.field == Some("doi".to_string())));
+    assert!(errors.iter().any(|e| e.field == Some("url".to_string())));
+    assert!(errors.iter().any(|e| e.field == Some("isbn".to_string())));
+    assert!(errors.iter().any(|e| e.field == Some("month".to_string())));
+    // Note: volume format check is info-level and may not appear depending on implementation
+}
+
+#[test]
+fn test_validation_book_author_editor() {
+    let input = r#"
+        @book{no_author_editor,
+            title = "Book Title",
+            publisher = "Publisher",
+            year = 2024
+        }
+        @book{with_author,
+            author = "Author Name",
+            title = "Book Title",
+            publisher = "Publisher",
+            year = 2024
+        }
+        @book{with_editor,
+            editor = "Editor Name",
+            title = "Book Title",
+            publisher = "Publisher",
+            year = 2024
+        }
+    "#;
+    
+    let db = Database::parser().parse(input).unwrap();
+    
+    // First book should have error about missing author/editor
+    let result1 = db.entries()[0].validate(ValidationLevel::Standard);
+    assert!(result1.is_err());
+    let errors1 = result1.unwrap_err();
+    // Should error because no author OR editor
+    assert!(errors1.iter().any(|e| e.message.contains("either 'author' or 'editor'")));
+    
+    // Second book should be valid (has author and all required fields)
+    let result2 = db.entries()[1].validate(ValidationLevel::Standard);
+    assert!(result2.is_ok());
+    
+    // Third book should be valid (has editor and all required fields)
+    let result3 = db.entries()[2].validate(ValidationLevel::Standard);
+    assert!(result3.is_ok());
+}
+
+#[test]
+fn test_validation_empty_fields() {
+    let input = r#"
+        @article{empty_fields,
+            author = "",
+            title = "   ",
+            journal = "Journal",
+            year = 2024
+        }
+    "#;
+    
+    let db = Database::parser().parse(input).unwrap();
+    let entry = &db.entries()[0];
+    
+    let result = entry.validate(ValidationLevel::Standard);
+    assert!(result.is_err());
+    
+    let errors = result.unwrap_err();
+    let empty_field_warnings = errors.iter()
+        .filter(|e| e.message.contains("empty value"))
+        .count();
+    assert_eq!(empty_field_warnings, 2); // author and title are empty
+}
+
+#[test]
+fn test_validation_crossref() {
+    let input = r#"
+        @article{valid_crossref,
+            author = "Author",
+            title = "Title",
+            journal = "Journal",
+            year = 2024,
+            crossref = "some_reference"
+        }
+        @article{empty_crossref,
+            author = "Author", 
+            title = "Title",
+            journal = "Journal",
+            year = 2024,
+            crossref = "   "
+        }
+    "#;
+    
+    let db = Database::parser().parse(input).unwrap();
+    
+    // Valid crossref should pass strict validation
+    let result1 = db.entries()[0].validate(ValidationLevel::Strict);
+    assert!(result1.is_ok());
+    
+    // Empty crossref should fail strict validation
+    let result2 = db.entries()[1].validate(ValidationLevel::Strict);
+    assert!(result2.is_err());
+    let errors2 = result2.unwrap_err();
+    assert!(errors2.iter().any(|e| e.field == Some("crossref".to_string()) && e.severity == ValidationSeverity::Error));
+}
+
+#[test]
+fn test_validation_case_insensitive_field_checking() {
+    let input = r#"
+        @article{case_test,
+            Author = "John Doe",
+            TITLE = "Test Article", 
+            journal = "Test Journal",
+            YEAR = 2024
+        }
+    "#;
+    
+    let db = Database::parser().parse(input).unwrap();
+    let entry = &db.entries()[0];
+    
+    // Should pass all validation levels with case-insensitive field checking
+    assert!(entry.validate(ValidationLevel::Minimal).is_ok());
+    assert!(entry.validate(ValidationLevel::Standard).is_ok());  
+    assert!(entry.validate(ValidationLevel::Strict).is_ok());
+}
+
+#[test]
+fn test_validation_standard_vs_strict() {
+    let input = r#"
+        @article{detailed_test,
+            author = "John Doe",
+            title = "Test",
+            journal = "Journal",
+            year = 2024,
+            doi = "not-a-doi",
+            month = "invalid-month"
+        }
+    "#;
+    
+    let db = Database::parser().parse(input).unwrap();
+    let entry = &db.entries()[0];
+    
+    // Standard should pass (only basic checks)
+    let result_standard = entry.validate(ValidationLevel::Standard);
+    assert!(result_standard.is_ok());
+    
+    // Strict should fail (format checks)
+    let result_strict = entry.validate(ValidationLevel::Strict);
+    assert!(result_strict.is_err());
+    
+    let errors = result_strict.unwrap_err();
+    assert!(errors.iter().any(|e| e.field == Some("doi".to_string())));
+    assert!(errors.iter().any(|e| e.field == Some("month".to_string())));
+}
+
+#[test]
+fn test_validation_year_checks() {
+    let input = r#"
+        @article{future_year, author="A", title="T", journal="J", year=3000}
+        @article{ancient_year, author="A", title="T", journal="J", year=500}
+        @article{normal_year, author="A", title="T", journal="J", year=2024}
+        @article{string_year, author="A", title="T", journal="J", year="not-a-year"}
+    "#;
+    
+    let db = Database::parser().parse(input).unwrap();
+    
+    // Future year should have warning
+    let result1 = db.entries()[0].validate(ValidationLevel::Standard);
+    assert!(result1.is_err());
+    let errors1 = result1.unwrap_err();
+    assert!(errors1.iter().any(|e| e.field == Some("year".to_string()) && e.message.contains("unlikely")));
+    
+    // Ancient year should have warning  
+    let result2 = db.entries()[1].validate(ValidationLevel::Standard);
+    assert!(result2.is_err());
+    let errors2 = result2.unwrap_err();
+    assert!(errors2.iter().any(|e| e.field == Some("year".to_string()) && e.message.contains("unlikely")));
+    
+    // Normal year should pass
+    let result3 = db.entries()[2].validate(ValidationLevel::Standard);
+    assert!(result3.is_ok());
+    
+    // String year should have warning
+    let result4 = db.entries()[3].validate(ValidationLevel::Standard);
+    assert!(result4.is_err());
+    let errors4 = result4.unwrap_err();
+    assert!(errors4.iter().any(|e| e.field == Some("year".to_string()) && e.message.contains("number")));
+}
+
+#[test]
+fn test_validation_pages_format() {
+    let input = r#"
+        @article{good_pages1, author="A", title="T", journal="J", year=2024, pages="12-34"}
+        @article{good_pages2, author="A", title="T", journal="J", year=2024, pages="12--34"}
+        @article{good_pages3, author="A", title="T", journal="J", year=2024, pages="12"}
+        @article{good_pages4, author="A", title="T", journal="J", year=2024, pages="12-34,56-78"}
+        @article{bad_pages1, author="A", title="T", journal="J", year=2024, pages="12 to 34"}
+        @article{bad_pages2, author="A", title="T", journal="J", year=2024, pages="twelve"}
+    "#;
+    
+    let db = Database::parser().parse(input).unwrap();
+    
+    // Good page formats should pass
+    for i in 0..4 {
+        let result = db.entries()[i].validate(ValidationLevel::Standard);
+        assert!(result.is_ok(), "Entry {} should have valid pages", i);
+    }
+    
+    // Bad page formats should have warnings
+    for i in 4..6 {
+        let result = db.entries()[i].validate(ValidationLevel::Standard);
+        assert!(result.is_err(), "Entry {} should have invalid pages", i);
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| e.field == Some("pages".to_string())));
+    }
+}
+
+#[test]
+fn test_validation_performance() {
+    // Test that validation doesn't significantly impact performance
+    let input = r#"
+        @article{perf_test,
+            author = "John Doe",
+            title = "Performance Test Article",
+            journal = "Performance Journal",
+            year = 2024,
+            volume = 42,
+            number = 1,
+            pages = "1-10",
+            doi = "10.1000/123456",
+            url = "https://example.com",
+            month = "January"
+        }
+    "#.repeat(100);
+    
+    let db = Database::parser().parse(&input).unwrap();
+    
+    // Measure validation time
+    let start = std::time::Instant::now();
+    for entry in db.entries() {
+        let _ = entry.validate(ValidationLevel::Strict);
+    }
+    let duration = start.elapsed();
+    
+    // Should complete quickly - validation is opt-in so should have minimal impact
+    assert!(duration.as_millis() < 50, "Validation took too long: {:?}", duration);
+}
+
+#[test]
+fn test_validation_level_defaults() {
+    let level = ValidationLevel::default();
+    assert_eq!(level, ValidationLevel::Standard);
+}
+
+#[test]
+fn test_issue_summary() {
+    let input = r#"
+        @article{missing_required,
+            author = "Test Author",
+            title = "Test"
+        }
+        @article{format_issues,
+            author = "",
+            title = "Test",
+            journal = "Journal", 
+            year = 999,
+            doi = "bad-doi",
+            month = "bad-month"
+        }
+    "#;
+    
+    let db = Database::parser().parse(input).unwrap();
+    let report = db.validate_comprehensive(ValidationLevel::Strict);
+    
+    let summary = report.issue_summary();
+    assert!(summary.errors > 0);
+    assert!(summary.warnings > 0);
+}
+
+#[test]
+fn test_validation_zero_cost_when_not_used() {
+    // Test that parsing performance is not affected when validation is not used
+    let input = "@article{test, author=\"A\", title=\"T\", journal=\"J\", year=2024}".repeat(1000);
+    
+    let start = std::time::Instant::now();
+    let db = Database::parser().parse(&input).unwrap();
+    let parse_duration = start.elapsed();
+    
+    // Parsing should still be fast
+    assert!(parse_duration.as_millis() < 100, "Parsing with validation code present took too long: {:?}", parse_duration);
+    assert_eq!(db.entries().len(), 1000);
 }

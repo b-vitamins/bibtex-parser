@@ -4,6 +4,84 @@ use ahash::AHashMap;
 use std::borrow::Cow;
 use std::fmt;
 
+/// Validation strictness level for BibTeX entries
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValidationLevel {
+    /// Only check that required fields exist
+    Minimal,
+    /// Check required fields and common issues (default)
+    Standard,
+    /// Strict validation including field formats and cross-references
+    Strict,
+}
+
+impl Default for ValidationLevel {
+    fn default() -> Self {
+        Self::Standard
+    }
+}
+
+/// Represents a validation error for a BibTeX entry
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidationError {
+    /// The field that failed validation (if applicable)
+    pub field: Option<String>,
+    /// Description of the validation failure
+    pub message: String,
+    /// Severity of the error
+    pub severity: ValidationSeverity,
+}
+
+/// Severity level for validation errors
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValidationSeverity {
+    /// Must be fixed for valid BibTeX
+    Error,
+    /// Should be fixed but might work
+    Warning,
+    /// Informational, best practices
+    Info,
+}
+
+impl ValidationError {
+    /// Create a new error-level validation error
+    #[must_use]
+    pub fn error(field: Option<&str>, message: impl Into<String>) -> Self {
+        Self {
+            field: field.map(String::from),
+            message: message.into(),
+            severity: ValidationSeverity::Error,
+        }
+    }
+    
+    /// Create a new warning-level validation error
+    #[must_use]
+    pub fn warning(field: Option<&str>, message: impl Into<String>) -> Self {
+        Self {
+            field: field.map(String::from),
+            message: message.into(),
+            severity: ValidationSeverity::Warning,
+        }
+    }
+    
+    /// Create a new info-level validation error
+    #[must_use]
+    pub fn info(field: Option<&str>, message: impl Into<String>) -> Self {
+        Self {
+            field: field.map(String::from),
+            message: message.into(),
+            severity: ValidationSeverity::Info,
+        }
+    }
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let field = self.field.as_deref().unwrap_or("<entry>");
+        write!(f, "[{:?}] {}: {}", self.severity, field, self.message)
+    }
+}
+
 /// A BibTeX entry (article, book, etc.)
 #[derive(Debug, Clone, PartialEq)]
 pub struct Entry<'a> {
@@ -114,15 +192,208 @@ impl<'a> Entry<'a> {
         self.fields.push(field);
     }
 
-    /// Check if entry has all required fields for its type
+    /// Validate the entry according to the specified level
+    /// Returns Ok(()) if valid, or Err with a list of validation errors
+    pub fn validate(&self, level: ValidationLevel) -> Result<(), Vec<ValidationError>> {
+        let mut errors = Vec::new();
+        
+        // Always check required fields
+        self.validate_required_fields(&mut errors);
+        
+        match level {
+            ValidationLevel::Minimal => {
+                // Only required fields
+            }
+            ValidationLevel::Standard => {
+                // Additional standard checks
+                self.validate_common_issues(&mut errors);
+            }
+            ValidationLevel::Strict => {
+                // All checks
+                self.validate_common_issues(&mut errors);
+                self.validate_field_formats(&mut errors);
+                self.validate_cross_references(&mut errors);
+            }
+        }
+        
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+    
+    /// Validate required fields for the entry type
+    fn validate_required_fields(&self, errors: &mut Vec<ValidationError>) {
+        // Special handling for book entries which can have either author or editor
+        match self.ty {
+            EntryType::Book => {
+                // Check title, publisher, year
+                for &field in &["title", "publisher", "year"] {
+                    if !self.has_field(field) {
+                        errors.push(ValidationError::error(
+                            Some(field),
+                            format!("Required field '{}' is missing for {} entry", field, self.ty)
+                        ));
+                    }
+                }
+                // Check author OR editor
+                if !self.has_field("author") && !self.has_field("editor") {
+                    errors.push(ValidationError::error(
+                        None,
+                        "Book entry must have either 'author' or 'editor' field"
+                    ));
+                }
+            },
+            _ => {
+                // Standard required field checking
+                for &field in self.ty.required_fields() {
+                    if !self.has_field(field) {
+                        errors.push(ValidationError::error(
+                            Some(field),
+                            format!("Required field '{}' is missing for {} entry", field, self.ty)
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    
+    /// Validate common issues that might cause problems
+    fn validate_common_issues(&self, errors: &mut Vec<ValidationError>) {
+        // Check for common issues
+        
+        // Year should be a valid number and recent
+        if let Some(year_str) = self.get_as_string_ignore_case("year") {
+            if let Ok(year) = year_str.parse::<i32>() {
+                if year < 1000 || year > 2100 {
+                    errors.push(ValidationError::warning(
+                        Some("year"),
+                        format!("Year {} seems unlikely", year)
+                    ));
+                }
+            } else {
+                errors.push(ValidationError::warning(
+                    Some("year"),
+                    "Year should be a number"
+                ));
+            }
+        }
+        
+        // Pages should have valid format (e.g., "12-24" or "12--24")
+        if let Some(pages) = self.get_ignore_case("pages") {
+            if !is_valid_page_range(pages) {
+                errors.push(ValidationError::warning(
+                    Some("pages"),
+                    "Pages should be in format '12-34' or '12--34'"
+                ));
+            }
+        }
+        
+        // Author and editor shouldn't both be missing for some types (but not books, handled above)
+        match self.ty {
+            EntryType::InBook | EntryType::InProceedings => {
+                if !self.has_field("author") && !self.has_field("editor") {
+                    errors.push(ValidationError::warning(
+                        None,
+                        "Entry should have either 'author' or 'editor' field"
+                    ));
+                }
+            }
+            _ => {}
+        }
+        
+        // Check for empty fields
+        for field in &self.fields {
+            if let Some(value_str) = field.value.as_str() {
+                if value_str.trim().is_empty() {
+                    errors.push(ValidationError::warning(
+                        Some(&field.name),
+                        "Field has empty value"
+                    ));
+                }
+            }
+        }
+    }
+    
+    /// Validate specific field formats for strict checking
+    fn validate_field_formats(&self, errors: &mut Vec<ValidationError>) {
+        // DOI format
+        if let Some(doi) = self.get_ignore_case("doi") {
+            if !doi.starts_with("10.") {
+                errors.push(ValidationError::warning(
+                    Some("doi"),
+                    "DOI should start with '10.'"
+                ));
+            }
+        }
+        
+        // URL format
+        if let Some(url) = self.get_ignore_case("url") {
+            if !url.starts_with("http://") && !url.starts_with("https://") {
+                errors.push(ValidationError::warning(
+                    Some("url"),
+                    "URL should start with http:// or https://"
+                ));
+            }
+        }
+        
+        // ISBN format (basic check)
+        if let Some(isbn) = self.get_ignore_case("isbn") {
+            let digits_only: String = isbn.chars().filter(|c| c.is_ascii_digit()).collect();
+            if digits_only.len() != 10 && digits_only.len() != 13 {
+                errors.push(ValidationError::warning(
+                    Some("isbn"),
+                    "ISBN should have 10 or 13 digits"
+                ));
+            }
+        }
+        
+        // Month should be valid
+        if let Some(month) = self.get_ignore_case("month") {
+            if !is_valid_month(month) {
+                errors.push(ValidationError::info(
+                    Some("month"),
+                    "Month should be a standard abbreviation (jan, feb, etc.) or full name"
+                ));
+            }
+        }
+        
+        // Volume and number should be numeric if present
+        for field_name in &["volume", "number"] {
+            if let Some(value) = self.get_ignore_case(field_name) {
+                if value.parse::<i32>().is_err() && !value.contains('-') {
+                    errors.push(ValidationError::info(
+                        Some(field_name),
+                        format!("{} should typically be numeric", field_name)
+                    ));
+                }
+            }
+        }
+    }
+    
+    /// Validate cross-references for strict checking
+    fn validate_cross_references(&self, errors: &mut Vec<ValidationError>) {
+        if let Some(crossref) = self.get_ignore_case("crossref") {
+            if crossref.trim().is_empty() {
+                errors.push(ValidationError::error(
+                    Some("crossref"),
+                    "Cross-reference is empty"
+                ));
+            }
+        }
+    }
+    
+    /// Helper to check if entry has a field (case-insensitive)
+    fn has_field(&self, name: &str) -> bool {
+        self.get_ignore_case(name).is_some() 
+            || self.get_as_string_ignore_case(name).is_some()
+    }
+
+    /// Check if entry has all required fields for its type (backward compatible)
     #[must_use]
     pub fn is_valid(&self) -> bool {
-        self.ty.required_fields().iter().all(|&field| {
-            self.get(field).is_some()
-                || self.get_as_string(field).is_some()
-                || self.get_ignore_case(field).is_some()
-                || self.get_as_string_ignore_case(field).is_some()
-        })
+        self.validate(ValidationLevel::Minimal).is_ok()
     }
 
     /// Convert to owned version
@@ -359,4 +630,61 @@ impl fmt::Display for Value<'_> {
             }
         }
     }
+}
+
+/// Check if a string is a valid page range
+/// Accepts formats like "12", "12-34", "12--34", "12-34,45-67"
+fn is_valid_page_range(pages: &str) -> bool {
+    if pages.trim().is_empty() {
+        return false;
+    }
+    
+    // Accept single page numbers
+    if pages.chars().all(|c| c.is_ascii_digit()) {
+        return true;
+    }
+    
+    // Check for range patterns - must contain dash or comma
+    if !pages.contains('-') && !pages.contains(',') {
+        return false;
+    }
+    
+    // Split by comma for multiple ranges
+    for range in pages.split(',') {
+        let range = range.trim();
+        if range.is_empty() {
+            continue;
+        }
+        
+        // Check individual range
+        if range.contains("--") {
+            // LaTeX-style double dash
+            let parts: Vec<&str> = range.split("--").collect();
+            if parts.len() != 2 || parts.iter().any(|p| p.trim().is_empty()) {
+                return false;
+            }
+        } else if range.contains('-') {
+            // Single dash
+            let parts: Vec<&str> = range.split('-').collect();
+            if parts.len() != 2 || parts.iter().any(|p| p.trim().is_empty()) {
+                return false;
+            }
+        }
+    }
+    
+    true
+}
+
+/// Check if a month value is valid
+/// Accepts standard month abbreviations and full month names
+fn is_valid_month(month: &str) -> bool {
+    let month_lower = month.to_lowercase();
+    
+    // Standard BibTeX month abbreviations and full names
+    matches!(month_lower.as_str(),
+        "jan" | "feb" | "mar" | "apr" | "may" | "jun" |
+        "jul" | "aug" | "sep" | "oct" | "nov" | "dec" |
+        "january" | "february" | "march" | "april" | "june" |
+        "july" | "august" | "september" | "october" | "november" | "december"
+    ) || month.parse::<i32>().is_ok_and(|m| (1..=12).contains(&m))
 }

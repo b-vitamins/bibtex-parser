@@ -59,9 +59,9 @@ pub mod parser;
 mod database;
 mod writer;
 
-pub use database::{Database, DatabaseBuilder, ParseOptions};
+pub use database::{Database, DatabaseBuilder, ParseOptions, ValidationReport, IssueSummary};
 pub use error::{Error, Result};
-pub use model::{Entry, EntryType, Field, Value};
+pub use model::{Entry, EntryType, Field, Value, ValidationLevel, ValidationError, ValidationSeverity};
 pub use parser::{parse_bibtex, ParsedItem};
 pub use writer::{to_file, to_string, Writer};
 
@@ -69,6 +69,7 @@ pub use writer::{to_file, to_string, Writer};
 pub mod prelude {
     pub use crate::{
         Database, DatabaseBuilder, Entry, EntryType, Error, ParseOptions, ParsedItem, Result, Value,
+        ValidationLevel, ValidationError, ValidationSeverity, ValidationReport, IssueSummary,
         parse_bibtex,
     };
 }
