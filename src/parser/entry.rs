@@ -175,4 +175,59 @@ mod tests {
         let entry = parse_entry(&mut input).unwrap();
         assert_eq!(entry.fields.len(), 3);
     }
+
+    #[test]
+    fn test_parse_entry_with_parentheses() {
+        let mut input = r#"@article(einstein1905,
+            author = "Albert Einstein",
+            title = {Zur Elektrodynamik bewegter Körper},
+            year = 1905
+        )"#;
+
+        let entry = parse_entry(&mut input).unwrap();
+        assert_eq!(entry.ty, EntryType::Article);
+        assert_eq!(entry.key, Cow::Borrowed("einstein1905"));
+        assert_eq!(entry.fields.len(), 3);
+
+        assert_eq!(entry.fields[0].name, "author");
+        assert_eq!(
+            entry.fields[0].value,
+            Value::Literal(Cow::Borrowed("Albert Einstein"))
+        );
+
+        assert_eq!(entry.fields[1].name, "title");
+        assert_eq!(
+            entry.fields[1].value,
+            Value::Literal(Cow::Borrowed("Zur Elektrodynamik bewegter Körper"))
+        );
+
+        assert_eq!(entry.fields[2].name, "year");
+        assert_eq!(entry.fields[2].value, Value::Number(1905));
+    }
+
+    #[test]
+    fn test_parse_entry_mixed_delimiters() {
+        // Entry uses parentheses, but field values can use braces
+        let mut input = r#"@book(test2024,
+            title = {A Title with {Nested} Braces},
+            author = "John Doe"
+        )"#;
+
+        let entry = parse_entry(&mut input).unwrap();
+        assert_eq!(entry.ty, EntryType::Book);
+        assert_eq!(entry.key, Cow::Borrowed("test2024"));
+        assert_eq!(entry.fields.len(), 2);
+
+        assert_eq!(entry.fields[0].name, "title");
+        assert_eq!(
+            entry.fields[0].value,
+            Value::Literal(Cow::Borrowed("A Title with {Nested} Braces"))
+        );
+
+        assert_eq!(entry.fields[1].name, "author");
+        assert_eq!(
+            entry.fields[1].value,
+            Value::Literal(Cow::Borrowed("John Doe"))
+        );
+    }
 }

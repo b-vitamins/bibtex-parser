@@ -14,22 +14,26 @@ pub fn find_delimiter(haystack: &[u8], start: usize) -> Option<(usize, u8)> {
     let result1 =
         memchr::memchr3(b'{', b'}', b',', search_bytes).map(|pos| (start + pos, search_bytes[pos]));
 
+    // Third pass: parenthesis delimiters (, )
+    let result3 =
+        memchr::memchr2(b'(', b')', search_bytes).map(|pos| (start + pos, search_bytes[pos]));
+
     // Second pass: less common delimiters @, =
     let result2 =
         memchr::memchr2(b'@', b'=', search_bytes).map(|pos| (start + pos, search_bytes[pos]));
 
     // Return whichever delimiter appears first
-    match (result1, result2) {
-        (Some((pos1, byte1)), Some((pos2, byte2))) => {
-            if pos1 <= pos2 {
-                Some((pos1, byte1))
-            } else {
-                Some((pos2, byte2))
-            }
+    let mut earliest = None;
+
+    for (pos, byte) in [result1, result2, result3].into_iter().flatten() {
+        match earliest {
+            Some((earliest_pos, _)) if pos < earliest_pos => earliest = Some((pos, byte)),
+            None => earliest = Some((pos, byte)),
+            _ => {}
         }
-        (Some(r), None) | (None, Some(r)) => Some(r),
-        (None, None) => None,
     }
+
+    earliest
 }
 
 /// Find brace or backslash for balanced brace parsing
@@ -125,6 +129,16 @@ mod tests {
         assert_eq!(find_delimiter(input, 22), Some((23, b'=')));
         assert_eq!(find_delimiter(input, 24), Some((30, b',')));
         assert_eq!(find_delimiter(input, 31), None);
+    }
+
+    #[test]
+    fn test_find_delimiter_with_parentheses() {
+        let input = b"hello ( world ) test @ end";
+
+        assert_eq!(find_delimiter(input, 0), Some((6, b'(')));
+        assert_eq!(find_delimiter(input, 7), Some((14, b')')));
+        assert_eq!(find_delimiter(input, 15), Some((21, b'@')));
+        assert_eq!(find_delimiter(input, 22), None);
     }
 
     #[test]

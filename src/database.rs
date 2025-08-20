@@ -2,11 +2,69 @@
 
 use crate::{Entry, Error, Result, Value};
 use ahash::AHashMap;
+use phf::phf_map;
 use std::borrow::Cow;
 use std::path::Path;
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
+
+/// Compile-time perfect hash map for BibTeX month abbreviations
+///
+/// These are standard BibTeX month constants that expand to full month names.
+/// User-defined @string variables take precedence over these constants.
+static MONTH_ABBREVIATIONS: phf::Map<&'static str, &'static str> = phf_map! {
+    "jan" => "January",
+    "feb" => "February",
+    "mar" => "March",
+    "apr" => "April",
+    "may" => "May",
+    "jun" => "June",
+    "jul" => "July",
+    "aug" => "August",
+    "sep" => "September",
+    "oct" => "October",
+    "nov" => "November",
+    "dec" => "December",
+};
+
+/// Get month expansion for a given abbreviation (case-insensitive)
+///
+/// Returns None if the name is not a recognized month abbreviation.
+/// This is used as a fallback when user-defined string variables are not found.
+fn get_month_expansion(name: &str) -> Option<&'static str> {
+    MONTH_ABBREVIATIONS.get(&name.to_lowercase()).copied()
+}
+
+/// Check if a value contains variables that need expansion
+/// Only expand if we have user strings OR if variables might be month constants
+fn should_expand_variables(value: &Value, has_user_strings: bool) -> bool {
+    if has_user_strings {
+        // If we have user strings, expand all variables
+        contains_variables(value)
+    } else {
+        // If no user strings, only expand if variables might be month constants
+        contains_potential_month_variables(value)
+    }
+}
+
+/// Check if a value contains any variables
+fn contains_variables(value: &Value) -> bool {
+    match value {
+        Value::Variable(_) => true,
+        Value::Concat(parts) => parts.iter().any(contains_variables),
+        _ => false,
+    }
+}
+
+/// Check if a value contains variables that might be month constants
+fn contains_potential_month_variables(value: &Value) -> bool {
+    match value {
+        Value::Variable(name) => MONTH_ABBREVIATIONS.contains_key(&name.to_lowercase()),
+        Value::Concat(parts) => parts.iter().any(contains_potential_month_variables),
+        _ => false,
+    }
+}
 
 /// Parser configuration with builder pattern
 #[derive(Debug, Default)]
@@ -185,9 +243,11 @@ impl<'a> Database<'a> {
         for item in other_items {
             match item {
                 crate::parser::ParsedItem::Entry(mut entry) => {
-                    // Only expand variables if we have string definitions
-                    if !db.strings.is_empty() {
-                        for field in &mut entry.fields {
+                    // Expand variables if we have user strings or potential month constants
+                    let has_user_strings = !db.strings.is_empty();
+                    for field in &mut entry.fields {
+                        // Only expand if the field needs expansion
+                        if should_expand_variables(&field.value, has_user_strings) {
                             // Use std::mem::take to move the value without cloning
                             let old_value = std::mem::take(&mut field.value);
                             field.value = db.smart_expand_value(old_value)?;
@@ -200,10 +260,11 @@ impl<'a> Database<'a> {
                     db.entries.push(entry);
                 }
                 crate::parser::ParsedItem::Preamble(value) => {
-                    let expanded = if db.strings.is_empty() {
-                        value
-                    } else {
+                    let has_user_strings = !db.strings.is_empty();
+                    let expanded = if should_expand_variables(&value, has_user_strings) {
                         db.smart_expand_value(value)?
+                    } else {
+                        value
                     };
                     db.preambles.push(expanded);
                 }
@@ -351,13 +412,23 @@ impl<'a> Database<'a> {
 
             // Variables need to be resolved
             Value::Variable(name) => {
-                self.strings
-                    .get(name.as_ref())
-                    .ok_or_else(|| Error::UndefinedVariable(name.as_ref().to_string()))
-                    .and_then(|v| {
+                // First check user-defined strings
+                self.strings.get(name.as_ref()).map_or_else(
+                    || {
+                        // Check month abbreviations as fallback
+                        get_month_expansion(name.as_ref()).map_or_else(
+                            || {
+                                // Variable not found in either user strings or month constants
+                                Err(Error::UndefinedVariable(name.as_ref().to_string()))
+                            },
+                            |month_value| Ok(Value::Literal(Cow::Borrowed(month_value))),
+                        )
+                    },
+                    |user_value| {
                         // Recursively expand the variable's value
-                        self.smart_expand_value(v.clone())
-                    })
+                        self.smart_expand_value(user_value.clone())
+                    },
+                )
             }
 
             // Concatenations need special handling
@@ -372,11 +443,22 @@ impl<'a> Database<'a> {
             Value::Literal(_) | Value::Number(_) => Ok(value.clone()),
 
             // Variables need to be resolved
-            Value::Variable(name) => self
-                .strings
-                .get(name.as_ref())
-                .ok_or_else(|| Error::UndefinedVariable(name.as_ref().to_string()))
-                .and_then(|v| self.expand_value_ref(v)),
+            Value::Variable(name) => {
+                // First check user-defined strings
+                self.strings.get(name.as_ref()).map_or_else(
+                    || {
+                        // Check month abbreviations as fallback
+                        get_month_expansion(name.as_ref()).map_or_else(
+                            || {
+                                // Variable not found in either user strings or month constants
+                                Err(Error::UndefinedVariable(name.as_ref().to_string()))
+                            },
+                            |month_value| Ok(Value::Literal(Cow::Borrowed(month_value))),
+                        )
+                    },
+                    |user_value| self.expand_value_ref(user_value),
+                )
+            }
 
             // Concatenations need cloning
             Value::Concat(parts) => {
@@ -413,11 +495,22 @@ impl<'a> Database<'a> {
         match value {
             Value::Literal(s) => Ok(s.to_string()),
             Value::Number(n) => Ok(n.to_string()),
-            Value::Variable(name) => self
-                .strings
-                .get(name.as_ref())
-                .ok_or_else(|| Error::UndefinedVariable(name.as_ref().to_string()))
-                .and_then(|v| self.get_expanded_string(v)),
+            Value::Variable(name) => {
+                // First check user-defined strings
+                self.strings.get(name.as_ref()).map_or_else(
+                    || {
+                        // Check month abbreviations as fallback
+                        get_month_expansion(name.as_ref()).map_or_else(
+                            || {
+                                // Variable not found in either user strings or month constants
+                                Err(Error::UndefinedVariable(name.as_ref().to_string()))
+                            },
+                            |month_value| Ok(month_value.to_string()),
+                        )
+                    },
+                    |user_value| self.get_expanded_string(user_value),
+                )
+            }
             Value::Concat(parts) => {
                 let mut result = String::new();
                 for part in parts.iter() {

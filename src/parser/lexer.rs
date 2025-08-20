@@ -128,6 +128,40 @@ pub fn number<'a>(input: &mut &'a str) -> PResult<'a, i64> {
     Ok(num)
 }
 
+/// Parse balanced parentheses ( ... ) with optimized delimiter search
+pub fn balanced_parentheses<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
+    let original_input = *input;
+    let mut depth = 0;
+    let mut pos = 0;
+    let bytes = input.as_bytes();
+
+    while pos < bytes.len() {
+        // Use optimized search for parenthesis delimiters
+        if let Some((next_pos, delim)) = delimiter::find_bytes2(bytes, b'(', b')', pos) {
+            pos = next_pos;
+            match delim {
+                b'(' => depth += 1,
+                b')' => {
+                    if depth == 0 {
+                        let result = &original_input[..pos];
+                        *input = &input[pos..];
+                        return Ok(result);
+                    }
+                    depth -= 1;
+                }
+                _ => {}
+            }
+            pos += 1;
+        } else {
+            break;
+        }
+    }
+
+    Err(winnow::error::ErrMode::Backtrack(
+        winnow::error::ContextError::default(),
+    ))
+}
+
 /// Fast whitespace skipping (optimal for short runs per profiling)
 pub fn skip_whitespace(input: &mut &str) {
     let bytes = input.as_bytes();
@@ -167,6 +201,22 @@ mod tests {
         let result = balanced_braces(&mut input).unwrap();
         assert_eq!(result, "hello {nested {braces}} world");
         assert_eq!(input, "} xxx");
+    }
+
+    #[test]
+    fn test_balanced_braces_with_spaces() {
+        let mut input = "Second preamble} xxx";
+        let result = balanced_braces(&mut input).unwrap();
+        assert_eq!(result, "Second preamble");
+        assert_eq!(input, "} xxx");
+    }
+
+    #[test]
+    fn test_balanced_parentheses() {
+        let mut input = "hello (nested (parens)) world) xxx";
+        let result = balanced_parentheses(&mut input).unwrap();
+        assert_eq!(result, "hello (nested (parens)) world");
+        assert_eq!(input, ") xxx");
     }
 
     #[test]

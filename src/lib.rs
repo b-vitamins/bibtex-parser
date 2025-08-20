@@ -1,3 +1,6 @@
+#![allow(clippy::multiple_crate_versions)]
+#![deny(clippy::all)]
+#![warn(clippy::pedantic)]
 //! # bibtex-parser
 //!
 //! A fast, modern BibTeX parser with excellent error handling and zero-copy parsing.

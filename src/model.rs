@@ -38,24 +38,55 @@ impl<'a> Entry<'a> {
         &self.key
     }
 
-    /// Get a field value by name (case-insensitive)
+    /// Get a field value by name (case-sensitive)
     /// Note: This only returns string literals, not numbers
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&str> {
-        let name_lower = name.to_lowercase();
         self.fields
             .iter()
-            .find(|f| f.name.to_lowercase() == name_lower)
+            .find(|f| f.name == name)
             .and_then(|f| f.value.as_str())
     }
 
-    /// Get a field value as a string, converting numbers if necessary
+    /// Get a field value by name (case-insensitive)
+    /// Returns the first field whose name matches ignoring case
+    /// Note: This only returns string literals, not numbers
     #[must_use]
-    pub fn get_as_string(&self, name: &str) -> Option<String> {
-        let name_lower = name.to_lowercase();
+    pub fn get_ignore_case(&self, name: &str) -> Option<&str> {
         self.fields
             .iter()
-            .find(|f| f.name.to_lowercase() == name_lower)
+            .find(|f| f.name.eq_ignore_ascii_case(name))
+            .and_then(|f| f.value.as_str())
+    }
+
+    /// Get a field value as a string, converting numbers if necessary (case-sensitive)
+    #[must_use]
+    pub fn get_as_string(&self, name: &str) -> Option<String> {
+        self.fields
+            .iter()
+            .find(|f| f.name == name)
+            .map(|f| match &f.value {
+                Value::Literal(s) => s.to_string(),
+                Value::Number(n) => n.to_string(),
+                Value::Variable(v) => format!("{{{v}}}"),
+                Value::Concat(parts) => parts
+                    .iter()
+                    .map(|p| match p {
+                        Value::Literal(s) => s.to_string(),
+                        Value::Number(n) => n.to_string(),
+                        Value::Variable(v) => format!("{{{v}}}"),
+                        Value::Concat(_) => p.to_string(),
+                    })
+                    .collect::<String>(),
+            })
+    }
+
+    /// Get a field value as a string, converting numbers if necessary (case-insensitive)
+    #[must_use]
+    pub fn get_as_string_ignore_case(&self, name: &str) -> Option<String> {
+        self.fields
+            .iter()
+            .find(|f| f.name.eq_ignore_ascii_case(name))
             .map(|f| match &f.value {
                 Value::Literal(s) => s.to_string(),
                 Value::Number(n) => n.to_string(),
@@ -86,10 +117,12 @@ impl<'a> Entry<'a> {
     /// Check if entry has all required fields for its type
     #[must_use]
     pub fn is_valid(&self) -> bool {
-        self.ty
-            .required_fields()
-            .iter()
-            .all(|&field| self.get(field).is_some() || self.get_as_string(field).is_some())
+        self.ty.required_fields().iter().all(|&field| {
+            self.get(field).is_some()
+                || self.get_as_string(field).is_some()
+                || self.get_ignore_case(field).is_some()
+                || self.get_as_string_ignore_case(field).is_some()
+        })
     }
 
     /// Convert to owned version
@@ -219,6 +252,12 @@ impl<'a> Field<'a> {
             name: Cow::Borrowed(name),
             value,
         }
+    }
+
+    /// Check if field name matches (case-insensitive)
+    #[must_use]
+    pub fn name_eq_ignore_case(&self, name: &str) -> bool {
+        self.name.eq_ignore_ascii_case(name)
     }
 
     /// Convert to owned version

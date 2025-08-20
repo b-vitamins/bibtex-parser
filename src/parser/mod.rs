@@ -84,11 +84,13 @@ fn parse_item<'a>(input: &mut &'a str) -> PResult<'a, ParsedItem<'a>> {
     }
 
     // We have an @ at the start, parse accordingly
+    // Order matters: put specific parsers (string, preamble, comment) first
+    // because they match exact keywords, while entry parser is more general
     winnow::combinator::alt((
-        entry::parse_entry.map(ParsedItem::Entry),
         parse_string.map(|(k, v)| ParsedItem::String(k, v)),
         parse_preamble.map(ParsedItem::Preamble),
         parse_comment.map(ParsedItem::Comment),
+        entry::parse_entry.map(ParsedItem::Entry),
     ))
     .parse_next(input)
 }
@@ -155,7 +157,7 @@ fn parse_comment<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
             (multispace0, '@', utils::tag_no_case("comment"), multispace0),
             alt((
                 delimited('{', lexer::balanced_braces, '}'),
-                delimited('(', take_until(0.., ")"), ')'),
+                delimited('(', lexer::balanced_parentheses, ')'),
             )),
         ),
         // % line comment

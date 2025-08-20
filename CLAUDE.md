@@ -8,84 +8,96 @@ This is a high-performance BibTeX parser written in Rust, focusing on zero-copy 
 
 **Requirements**: Rust 1.75+ (specified in Cargo.toml)
 
+## Infrastructure Imports
+
+@~/.claude/instructions/python-development.md
+@~/.claude/instructions/guix-workflow.md
+@~/.claude/instructions/code-quality.md
+@~/.claude/instructions/agent-chains.md
+
 ## Common Development Commands
+
+All commands should be run within the Guix environment:
+```bash
+guix shell -m manifest.scm --
+```
 
 ### Build & Test
 ```bash
 # Build the library
-cargo build --release
+guix shell -m manifest.scm -- cargo build --release
 
 # Run all tests
-cargo test
+guix shell -m manifest.scm -- cargo test
 
 # Run a specific test
-cargo test test_name
+guix shell -m manifest.scm -- cargo test test_name
 
 # Run tests with output
-cargo test -- --nocapture
+guix shell -m manifest.scm -- cargo test -- --nocapture
 
 # Run performance comparison test
-cargo test test_vldb_performance -- --nocapture
+guix shell -m manifest.scm -- cargo test test_vldb_performance -- --nocapture
 ```
 
 ### Benchmarking
 ```bash
 # Run performance benchmarks
-cargo bench --bench performance
+guix shell -m manifest.scm -- cargo bench --bench performance
 
 # Run memory benchmarks
-cargo bench --bench memory
+guix shell -m manifest.scm -- cargo bench --bench memory
 
 # Run delimiter benchmarks
-cargo bench --bench delimiter
+guix shell -m manifest.scm -- cargo bench --bench delimiter
 
 # Run parallel benchmarks (requires parallel feature)
-cargo bench --features parallel --bench parallel
+guix shell -m manifest.scm -- cargo bench --features parallel --bench parallel
 
 # Generate comprehensive benchmark report
-python scripts/benchmark.py
+guix shell -m manifest.scm -- python scripts/benchmark.py
 ```
 
 ### Linting & Type Checking
 ```bash
 # Format code
-cargo fmt
+guix shell -m manifest.scm -- cargo fmt
 
 # Check for linting issues
-cargo clippy
+guix shell -m manifest.scm -- cargo clippy
 
 # Type check
-cargo check
+guix shell -m manifest.scm -- cargo check
 ```
 
 ### Development Tools
 ```bash
 # Run diagnostic tool
-cargo run --bin diagnose -- path/to/file.bib
+guix shell -m manifest.scm -- cargo run --bin diagnose -- path/to/file.bib
 
 # Profile parser performance
-cargo run --bin profile_parser -- path/to/file.bib
+guix shell -m manifest.scm -- cargo run --bin profile_parser -- path/to/file.bib
 
 # Analyze patterns in BibTeX files
-cargo run --bin analyze_patterns -- path/to/file.bib
+guix shell -m manifest.scm -- cargo run --bin analyze_patterns -- path/to/file.bib
 
 # Check SIMD optimization potential
-cargo run --bin simd_potential -- path/to/file.bib
+guix shell -m manifest.scm -- cargo run --bin simd_potential -- path/to/file.bib
 
 # Test fixtures
-cargo run --bin test_fixtures
+guix shell -m manifest.scm -- cargo run --bin test_fixtures
 
 # Allocation tracing
-cargo run --bin tracealloc -- path/to/file.bib
+guix shell -m manifest.scm -- cargo run --bin tracealloc -- path/to/file.bib
 ```
 
 ### Example Usage
 ```bash
 # Run basic usage example
-cargo run --example basic
+guix shell -m manifest.scm -- cargo run --example basic
 
 # Run query operations example
-cargo run --example query
+guix shell -m manifest.scm -- cargo run --example query
 ```
 
 ## Architecture Overview
@@ -180,3 +192,196 @@ writer.write_database(&db)?;
   - Use for processing multiple BibTeX files efficiently
   - Single-file parsing remains sequential regardless of this flag
   - Required for parallel benchmarks: `cargo bench --features parallel --bench parallel`
+
+## Specialized Agent Integration
+
+### BibTeX-Specific Agents
+
+- **bibtex-citation-checker**: Validates BibTeX syntax, required fields, and citation consistency
+- **bibtex-entry-enricher**: Enhances BibTeX entries with missing fields, DOIs, and metadata
+- **bibtex-duplicate-detector**: Identifies and resolves duplicate entries across files
+- **bibtex-formatter**: Standardizes formatting and field ordering
+- **bibtex-validator**: Comprehensive validation of BibTeX structure and semantics
+
+### Rust Development Agents
+
+- **rust-clippy-fixer**: Applies Clippy suggestions for idiomatic Rust code
+- **cargo-dependency-updater**: Manages dependency updates safely
+- **rust-analyzer-helper**: LSP integration and IDE configuration
+- **rust-performance-analyzer**: Identifies performance bottlenecks and optimization opportunities
+- **rust-security-auditor**: Security vulnerability scanning for dependencies
+
+### Testing Infrastructure Agents
+
+- **rust-unit-test-generator**: Creates comprehensive unit tests for parser components
+- **rust-property-test-generator**: Generates property-based tests using proptest
+- **rust-integration-test-generator**: Creates end-to-end integration test scenarios
+- **test-coverage-analyzer**: Measures and reports test coverage metrics
+- **rust-benchmark-analyzer**: Analyzes benchmark results and performance regressions
+
+## Agent Chains for Common Workflows
+
+### BibTeX Processing Workflow
+1. **bibtex-citation-checker** - Validate input syntax
+2. **bibtex-duplicate-detector** - Remove duplicates
+3. **bibtex-entry-enricher** - Enhance metadata
+4. **bibtex-formatter** - Standardize output
+
+### Quality Control Pipeline
+1. **rust-clippy-fixer** - Fix linting issues
+2. **cargo-dependency-updater** - Update dependencies
+3. **rust-security-auditor** - Security scan
+4. **test-coverage-analyzer** - Verify coverage
+5. **rust-benchmark-analyzer** - Performance validation
+
+### Development Cycle Chain
+1. **rust-unit-test-generator** - Create missing tests
+2. **rust-property-test-generator** - Add property tests
+3. **rust-clippy-fixer** - Apply style fixes
+4. **rust-performance-analyzer** - Optimize bottlenecks
+5. **security-secret-scanner** - Pre-commit security check
+
+### Release Preparation Chain
+1. **bibtex-validator** - Validate test fixtures
+2. **test-coverage-analyzer** - Ensure 100% critical path coverage
+3. **rust-benchmark-analyzer** - Verify performance targets
+4. **cargo-dependency-updater** - Final dependency check
+5. **git-commit-formatter** - Format release commit
+
+## Proactive Agent Usage
+
+### Automatic Triggers
+
+**On BibTeX File Changes**:
+- Run `bibtex-citation-checker` immediately
+- Follow with `bibtex-duplicate-detector` if multiple files
+
+**Before Commit**:
+- Always run `security-secret-scanner`
+- Run `rust-clippy-fixer` for any Rust changes
+- Run `git-commit-formatter` for message formatting
+
+**On Performance Concerns**:
+- Start with `rust-performance-analyzer` for bottleneck identification
+- Use `rust-benchmark-analyzer` to validate improvements
+- Chain with `test-coverage-analyzer` to ensure optimizations are tested
+
+**For BibTeX Data Quality**:
+- Run `bibtex-entry-enricher` on incomplete entries
+- Use `bibtex-formatter` before committing formatted output
+- Apply `bibtex-validator` for comprehensive validation
+
+### Context-Specific Recommendations
+
+**Parser Development**:
+- Use `rust-property-test-generator` extensively for parser robustness
+- Apply `rust-unit-test-generator` for edge cases
+- Run `rust-performance-analyzer` after parser changes
+
+**Memory Optimization**:
+- Chain `rust-performance-analyzer` → `test-coverage-analyzer`
+- Verify struct sizes with custom tests
+- Benchmark memory usage patterns
+
+**Error Handling**:
+- Use `rust-unit-test-generator` for error path coverage
+- Apply `rust-integration-test-generator` for end-to-end error scenarios
+- Validate with `test-coverage-analyzer`
+
+## Quality Control Pipeline
+
+### Pre-Commit Checklist
+```bash
+# 1. Security scan (MANDATORY)
+guix shell -m manifest.scm -- security-secret-scanner
+
+# 2. Format and lint
+guix shell -m manifest.scm -- cargo fmt
+guix shell -m manifest.scm -- rust-clippy-fixer
+
+# 3. Type check and build
+guix shell -m manifest.scm -- cargo check
+guix shell -m manifest.scm -- cargo build --release
+
+# 4. Test suite
+guix shell -m manifest.scm -- cargo test
+guix shell -m manifest.scm -- test-coverage-analyzer
+
+# 5. BibTeX validation on test fixtures
+guix shell -m manifest.scm -- bibtex-citation-checker tests/fixtures/
+guix shell -m manifest.scm -- bibtex-validator tests/fixtures/
+
+# 6. Performance regression check
+guix shell -m manifest.scm -- cargo bench
+guix shell -m manifest.scm -- rust-benchmark-analyzer
+```
+
+### Release Quality Gates
+
+#### Performance Requirements
+- Sequential parsing: ≥650 MB/s
+- Memory overhead: ≤1.1x input size
+- SIMD speedup: ≥1.8x for delimiter finding
+- Entry struct size: ≤64 bytes
+
+#### Test Coverage Requirements
+- Unit test coverage: ≥95%
+- Integration test coverage: ≥90%
+- Property test validation for all parser components
+- Benchmark stability: <5% variance
+
+#### Code Quality Standards
+- Zero Clippy warnings on default lints
+- Zero unsafe code blocks without documentation
+- All public APIs documented with examples
+- Error types implement proper Display/Debug traits
+
+### Continuous Integration Pipeline
+```bash
+# Stage 1: Basic validation
+guix shell -m manifest.scm -- cargo fmt --check
+guix shell -m manifest.scm -- cargo clippy -- -D warnings
+guix shell -m manifest.scm -- cargo check
+
+# Stage 2: Testing
+guix shell -m manifest.scm -- cargo test
+guix shell -m manifest.scm -- cargo test --features parallel
+
+# Stage 3: Performance validation
+guix shell -m manifest.scm -- cargo bench --bench performance
+guix shell -m manifest.scm -- cargo bench --bench memory
+
+# Stage 4: BibTeX-specific validation
+guix shell -m manifest.scm -- bibtex-citation-checker tests/fixtures/
+guix shell -m manifest.scm -- bibtex-validator tests/fixtures/
+
+# Stage 5: Security and dependency audit
+guix shell -m manifest.scm -- cargo audit
+guix shell -m manifest.scm -- security-secret-scanner
+```
+
+## Development Environment Setup
+
+### Initial Project Setup
+```bash
+# Clone and enter environment
+cd /home/b/projects/bibtex-parser
+guix shell -m manifest.scm
+
+# Install development tools (if needed)
+cargo install cargo-audit cargo-watch
+
+# Run initial validation
+cargo fmt && cargo clippy && cargo test
+```
+
+### IDE Integration
+- Configure rust-analyzer to use `guix shell -m manifest.scm`
+- Set benchmark targets in IDE for performance monitoring
+- Configure test discovery for property tests and integration tests
+
+### Agent Integration Workflow
+1. Install agents from user's ~/.claude/agents/ directory
+2. Configure project-specific agent chains in .claude/workflows/
+3. Set up automatic triggers for file changes and commits
+4. Integrate performance monitoring with benchmark agents
