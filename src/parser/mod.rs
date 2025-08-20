@@ -1,4 +1,46 @@
 //! BibTeX parser implementation using winnow
+//!
+//! This module provides both high-level and low-level APIs for parsing BibTeX files.
+//! Most users should use the high-level `Database` API, but the low-level API is available
+//! for advanced use cases that require access to raw parsed items.
+//!
+//! # Low-level API Example
+//!
+//! ```
+//! use bibtex_parser::parser::{parse_bibtex, ParsedItem};
+//!
+//! let input = r#"
+//!     @string{ieee = "IEEE"}
+//!     @preamble{"Test preamble"}
+//!     % Line comment
+//!     @article{test2024,
+//!         author = "John Doe",
+//!         title = ieee # " Article",
+//!         year = 2024
+//!     }
+//! "#;
+//!
+//! let items = parse_bibtex(input)?;
+//!
+//! for item in items {
+//!     match item {
+//!         ParsedItem::Entry(entry) => {
+//!             println!("Found entry: {}", entry.key());
+//!             // Variables are not expanded yet - title contains reference to 'ieee'
+//!         },
+//!         ParsedItem::String(name, value) => {
+//!             println!("String definition: {} = {:?}", name, value);
+//!         },
+//!         ParsedItem::Preamble(value) => {
+//!             println!("Preamble: {:?}", value);
+//!         },
+//!         ParsedItem::Comment(text) => {
+//!             println!("Comment: {}", text.trim());
+//!         },
+//!     }
+//! }
+//! # Ok::<(), bibtex_parser::Error>(())
+//! ```
 
 pub mod delimiter;
 pub mod entry;
@@ -15,7 +57,62 @@ pub use entry::parse_entry;
 /// Internal parser result type
 pub type PResult<'a, O> = winnow::PResult<O, winnow::error::ContextError>;
 
-/// Parse a complete BibTeX database
+/// Parse a BibTeX file into raw items without expansion or processing
+///
+/// This is a low-level API that returns the raw parsed items before
+/// string variable expansion or other processing. Most users should
+/// use `Database::parse()` instead.
+///
+/// The returned items preserve the original structure:
+/// - String variables are not expanded
+/// - Concatenations are preserved as `Value::Concat`
+/// - Comments are included (both `%` line comments and `@comment{}`)
+/// - All items are returned in parse order
+///
+/// # Performance
+///
+/// This function maintains the same high performance as the high-level API
+/// (650-700 MB/s) since it's the same underlying parser with no additional
+/// processing overhead.
+///
+/// # Example
+///
+/// ```
+/// use bibtex_parser::parser::{parse_bibtex, ParsedItem};
+/// use bibtex_parser::Value;
+///
+/// let input = r#"
+///     @string{name = "John Doe"}
+///     @article{test,
+///         author = name,
+///         title = "Part 1" # " and " # "Part 2"
+///     }
+/// "#;
+///
+/// let items = parse_bibtex(input)?;
+///
+/// // Find the entry
+/// let entry = items.iter().find_map(|item| {
+///     if let ParsedItem::Entry(e) = item { Some(e) } else { None }
+/// }).unwrap();
+///
+/// // Author field contains unexpanded variable reference
+/// let author_field = entry.fields.iter()
+///     .find(|f| f.name == "author").unwrap();
+/// match &author_field.value {
+///     Value::Variable(var) => println!("Variable reference: {}", var),
+///     _ => {}
+/// }
+///
+/// // Title field contains concatenation structure
+/// let title_field = entry.fields.iter()
+///     .find(|f| f.name == "title").unwrap();
+/// match &title_field.value {
+///     Value::Concat(parts) => println!("Concatenation with {} parts", parts.len()),
+///     _ => {}
+/// }
+/// # Ok::<(), bibtex_parser::Error>(())
+/// ```
 pub fn parse_bibtex(input: &str) -> Result<Vec<ParsedItem>> {
     let mut items = Vec::new();
     let mut remaining = input;
@@ -48,16 +145,65 @@ pub fn parse_bibtex(input: &str) -> Result<Vec<ParsedItem>> {
     Ok(items)
 }
 
-/// A parsed item from the BibTeX file
+/// A raw parsed item from a BibTeX file before processing
+///
+/// This represents the different types of items that can appear in a BibTeX file,
+/// returned by the low-level `parse_bibtex()` function. These items are in their
+/// raw parsed form:
+///
+/// - String variables are not yet expanded
+/// - Field values preserve concatenation structure
+/// - Comments are preserved exactly as found
+/// - All items maintain their original order
+///
+/// # Examples
+///
+/// ```
+/// use bibtex_parser::parser::{parse_bibtex, ParsedItem};
+///
+/// let input = "@string{name = \"John\"}\n@article{key, author = name}";
+/// let items = parse_bibtex(input)?;
+///
+/// match &items[0] {
+///     ParsedItem::String(var_name, value) => {
+///         println!("String variable: {} = {:?}", var_name, value);
+///     },
+///     _ => {}
+/// }
+///
+/// match &items[1] {
+///     ParsedItem::Entry(entry) => {
+///         // The author field contains a variable reference, not the expanded value
+///         println!("Entry key: {}", entry.key());
+///     },
+///     _ => {}
+/// }
+/// # Ok::<(), bibtex_parser::Error>(())
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParsedItem<'a> {
-    /// A bibliography entry
+    /// A bibliography entry (article, book, inproceedings, etc.)
+    ///
+    /// Contains the entry in its raw parsed form with field values that may
+    /// reference string variables or contain concatenations.
     Entry(crate::Entry<'a>),
-    /// A string definition
+    
+    /// A string definition (`@string{name = value}`)
+    ///
+    /// Contains the variable name and its value. The value itself may contain
+    /// references to other string variables or concatenations.
     String(&'a str, crate::Value<'a>),
-    /// A preamble
+    
+    /// A preamble (`@preamble{value}`)
+    ///
+    /// Contains the preamble value, which may reference string variables
+    /// or contain concatenations.
     Preamble(crate::Value<'a>),
-    /// A comment
+    
+    /// A comment (both `% line comment` and `@comment{...}`)
+    ///
+    /// Contains the raw comment text exactly as it appears in the source,
+    /// including any whitespace and formatting.
     Comment(&'a str),
 }
 

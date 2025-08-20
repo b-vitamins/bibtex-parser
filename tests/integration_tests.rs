@@ -1,4 +1,5 @@
 use bibtex_parser::{Database, EntryType, Value};
+use bibtex_parser::parser::{parse_bibtex, ParsedItem};
 use std::borrow::Cow;
 use pretty_assertions::assert_eq;
 
@@ -1003,4 +1004,458 @@ fn test_backward_compatibility_pure_numbers() {
             _ => panic!("Field {} should be Number type", field_name),
         }
     }
+}
+
+// Raw API Tests - Testing the low-level parse_bibtex function
+
+#[test]
+fn test_raw_parse_api_basic() {
+    let input = r#"
+        @string{ieee = "IEEE"}
+        @preamble{"Test preamble"}
+        % Line comment
+        @comment{Formal comment}
+        @article{test2024,
+            author = "John Doe",
+            title = ieee # " Article",
+            year = 2024
+        }
+    "#;
+    
+    let items = parse_bibtex(input).unwrap();
+    
+    // Count different item types
+    let mut entries = 0;
+    let mut strings = 0;
+    let mut preambles = 0;
+    let mut comments = 0;
+    
+    for item in &items {
+        match item {
+            ParsedItem::Entry(_) => entries += 1,
+            ParsedItem::String(_, _) => strings += 1,
+            ParsedItem::Preamble(_) => preambles += 1,
+            ParsedItem::Comment(_) => comments += 1,
+        }
+    }
+    
+    assert_eq!(entries, 1);
+    assert_eq!(strings, 1);
+    assert_eq!(preambles, 1);
+    assert_eq!(comments, 2); // Line comment + formal comment
+}
+
+#[test]
+fn test_raw_api_no_expansion() {
+    let input = r#"
+        @string{name = "John"}
+        @article{test, author = name}
+    "#;
+    
+    let items = parse_bibtex(input).unwrap();
+    
+    // Find the entry
+    let entry = items.iter().find_map(|item| {
+        if let ParsedItem::Entry(e) = item {
+            Some(e)
+        } else {
+            None
+        }
+    }).unwrap();
+    
+    // The author field should still be a variable reference, not expanded
+    let author_field = entry.fields.iter()
+        .find(|f| f.name == "author")
+        .unwrap();
+    
+    match &author_field.value {
+        Value::Variable(var_name) => {
+            assert_eq!(var_name.as_ref(), "name");
+        },
+        _ => panic!("Expected variable reference, not expanded value"),
+    }
+}
+
+#[test]
+fn test_raw_api_preserves_structure() {
+    let input = r#"
+        @article{test,
+            title = "Part 1" # " and " # "Part 2",
+            year = 2024
+        }
+    "#;
+    
+    let items = parse_bibtex(input).unwrap();
+    let entry = match &items[0] {
+        ParsedItem::Entry(e) => e,
+        _ => panic!("Expected entry"),
+    };
+    
+    // Check that concatenation is preserved in raw form
+    let title_field = entry.fields.iter()
+        .find(|f| f.name == "title")
+        .unwrap();
+    
+    // Should be a Concat value with 3 parts
+    match &title_field.value {
+        Value::Concat(parts) => {
+            assert_eq!(parts.len(), 3);
+            assert_eq!(parts[0], Value::Literal(Cow::Borrowed("Part 1")));
+            assert_eq!(parts[1], Value::Literal(Cow::Borrowed(" and ")));
+            assert_eq!(parts[2], Value::Literal(Cow::Borrowed("Part 2")));
+        },
+        _ => panic!("Expected concatenated value"),
+    }
+}
+
+#[test]
+fn test_raw_api_comment_types() {
+    let input = r#"
+        % Line comment
+        @comment{Formal comment}
+        Random text before entry
+        @article{test, title = "Test"}
+        Another text comment
+    "#;
+    
+    let items = parse_bibtex(input).unwrap();
+    
+    let comments: Vec<&str> = items.iter().filter_map(|item| {
+        if let ParsedItem::Comment(text) = item {
+            Some(*text)
+        } else {
+            None
+        }
+    }).collect();
+    
+    // Should capture all types of comments
+    assert!(comments.iter().any(|c| c.contains("Line comment")));
+    assert!(comments.iter().any(|c| c.contains("Formal comment")));
+    assert!(comments.iter().any(|c| c.contains("Random text before entry")));
+    assert!(comments.iter().any(|c| c.contains("Another text comment")));
+    
+    // Should still parse the entry
+    let entries: Vec<_> = items.iter().filter_map(|item| {
+        if let ParsedItem::Entry(e) = item { Some(e) } else { None }
+    }).collect();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].key(), "test");
+}
+
+#[test]
+fn test_raw_api_string_definitions() {
+    let input = r#"
+        @string{name = "John Doe"}
+        @string{institution = "MIT"}
+        @string{full = name # ", " # institution}
+        @article{test, author = full}
+    "#;
+    
+    let items = parse_bibtex(input).unwrap();
+    
+    // Find string definitions
+    let strings: Vec<_> = items.iter().filter_map(|item| {
+        if let ParsedItem::String(name, value) = item {
+            Some((name, value))
+        } else {
+            None
+        }
+    }).collect();
+    
+    assert_eq!(strings.len(), 3);
+    assert_eq!(*strings[0].0, "name");
+    assert_eq!(*strings[1].0, "institution");
+    assert_eq!(*strings[2].0, "full");
+    
+    // Check that 'full' string contains concatenation
+    match strings[2].1 {
+        Value::Concat(ref parts) => {
+            assert_eq!(parts.len(), 3);
+            // Parts should be variable references and literal
+            assert!(matches!(parts[0], Value::Variable(_)));
+            assert_eq!(parts[1], Value::Literal(Cow::Borrowed(", ")));
+            assert!(matches!(parts[2], Value::Variable(_)));
+        },
+        _ => panic!("Expected concatenated value for 'full' string"),
+    }
+    
+    // Find the entry and verify it has unexpanded variable reference
+    let entry = items.iter().find_map(|item| {
+        if let ParsedItem::Entry(e) = item { Some(e) } else { None }
+    }).unwrap();
+    
+    let author_field = entry.fields.iter()
+        .find(|f| f.name == "author")
+        .unwrap();
+    
+    match &author_field.value {
+        Value::Variable(var_name) => {
+            assert_eq!(var_name.as_ref(), "full");
+        },
+        _ => panic!("Expected variable reference in entry"),
+    }
+}
+
+#[test]
+fn test_raw_api_vs_database_api() {
+    let input = r#"
+        @string{conference = "VLDB"}
+        @article{test,
+            title = "Database " # conference,
+            year = 2024
+        }
+    "#;
+    
+    // Parse with raw API
+    let raw_items = parse_bibtex(input).unwrap();
+    
+    // Parse with Database API
+    let db = Database::parser().parse(input).unwrap();
+    
+    // Raw API should have unexpanded variables
+    let raw_entry = raw_items.iter().find_map(|item| {
+        if let ParsedItem::Entry(e) = item { Some(e) } else { None }
+    }).unwrap();
+    
+    let raw_title = raw_entry.fields.iter()
+        .find(|f| f.name == "title")
+        .unwrap();
+    
+    match &raw_title.value {
+        Value::Concat(parts) => {
+            assert_eq!(parts.len(), 2);
+            assert_eq!(parts[0], Value::Literal(Cow::Borrowed("Database ")));
+            assert!(matches!(parts[1], Value::Variable(_)));
+        },
+        _ => panic!("Expected concatenated value with variable reference"),
+    }
+    
+    // Database API should have expanded variables
+    let db_entry = &db.entries()[0];
+    assert_eq!(db_entry.get("title"), Some("Database VLDB"));
+}
+
+#[test]
+fn test_raw_api_preambles() {
+    let input = r#"
+        @string{style = "LaTeX style"}
+        @preamble{"Basic preamble"}
+        @preamble{style # " preamble"}
+        @article{test, title = "Test"}
+    "#;
+    
+    let items = parse_bibtex(input).unwrap();
+    
+    let preambles: Vec<_> = items.iter().filter_map(|item| {
+        if let ParsedItem::Preamble(value) = item { Some(value) } else { None }
+    }).collect();
+    
+    assert_eq!(preambles.len(), 2);
+    
+    // First preamble should be simple literal
+    match preambles[0] {
+        Value::Literal(ref text) => {
+            assert_eq!(text.as_ref(), "Basic preamble");
+        },
+        _ => panic!("Expected literal preamble"),
+    }
+    
+    // Second preamble should be concatenation with variable reference
+    match preambles[1] {
+        Value::Concat(ref parts) => {
+            assert_eq!(parts.len(), 2);
+            assert!(matches!(parts[0], Value::Variable(_)));
+            assert_eq!(parts[1], Value::Literal(Cow::Borrowed(" preamble")));
+        },
+        _ => panic!("Expected concatenated preamble"),
+    }
+}
+
+#[test]
+fn test_raw_api_maintains_order() {
+    let input = r#"
+        % Comment 1
+        @string{var1 = "Value 1"}
+        @preamble{"Preamble 1"}
+        @article{entry1, title = "Entry 1"}
+        % Comment 2
+        @string{var2 = "Value 2"}
+        @article{entry2, title = "Entry 2"}
+        @preamble{"Preamble 2"}
+        % Comment 3
+    "#;
+    
+    let items = parse_bibtex(input).unwrap();
+    
+    // Verify items are in parse order
+    assert!(matches!(items[0], ParsedItem::Comment(_))); // Comment 1
+    assert!(matches!(items[1], ParsedItem::String(_, _))); // var1
+    assert!(matches!(items[2], ParsedItem::Preamble(_))); // Preamble 1
+    assert!(matches!(items[3], ParsedItem::Entry(_))); // entry1
+    assert!(matches!(items[4], ParsedItem::Comment(_))); // Comment 2
+    assert!(matches!(items[5], ParsedItem::String(_, _))); // var2
+    assert!(matches!(items[6], ParsedItem::Entry(_))); // entry2
+    assert!(matches!(items[7], ParsedItem::Preamble(_))); // Preamble 2
+    assert!(matches!(items[8], ParsedItem::Comment(_))); // Comment 3
+    
+    // Verify specific content
+    if let ParsedItem::String(name, _) = &items[1] {
+        assert_eq!(*name, "var1");
+    }
+    
+    if let ParsedItem::Entry(entry) = &items[3] {
+        assert_eq!(entry.key(), "entry1");
+    }
+    
+    if let ParsedItem::String(name, _) = &items[5] {
+        assert_eq!(*name, "var2");
+    }
+    
+    if let ParsedItem::Entry(entry) = &items[6] {
+        assert_eq!(entry.key(), "entry2");
+    }
+}
+
+#[test]
+fn test_raw_api_complex_file() {
+    let input = include_str!("fixtures/complex.bib");
+    let items = parse_bibtex(input).unwrap();
+    
+    // Should parse the complex file without errors
+    assert!(!items.is_empty());
+    
+    // Count different types
+    let mut entry_count = 0;
+    let mut string_count = 0;
+    let mut preamble_count = 0;
+    let mut comment_count = 0;
+    
+    for item in &items {
+        match item {
+            ParsedItem::Entry(_) => entry_count += 1,
+            ParsedItem::String(_, _) => string_count += 1,
+            ParsedItem::Preamble(_) => preamble_count += 1,
+            ParsedItem::Comment(_) => comment_count += 1,
+        }
+    }
+    
+    // Should have various types of items
+    assert!(entry_count > 0);
+    assert!(string_count > 0);
+    assert!(preamble_count > 0);
+    assert!(comment_count > 0);
+    
+    // Compare with Database API to ensure same parsing capability
+    let db = Database::parser().parse(input).unwrap();
+    assert_eq!(entry_count, db.entries().len());
+    assert_eq!(string_count, db.strings().len());
+    assert_eq!(preamble_count, db.preambles().len());
+    assert_eq!(comment_count, db.comments().len());
+}
+
+#[test]
+fn test_raw_api_error_handling() {
+    let malformed_input = r#"@article{unclosed, title = "No closing brace""#;
+    
+    let result = parse_bibtex(malformed_input);
+    assert!(result.is_err());
+    
+    // Error should contain helpful information
+    let error = result.unwrap_err();
+    let error_msg = error.to_string();
+    assert!(error_msg.contains("Parse error"));
+    assert!(error_msg.contains("line"));
+    assert!(error_msg.contains("column"));
+}
+
+#[test]
+fn test_raw_api_month_constants() {
+    let input = r#"
+        @article{test,
+            month = jan,
+            year = 2024
+        }
+    "#;
+    
+    let items = parse_bibtex(input).unwrap();
+    let entry = items.iter().find_map(|item| {
+        if let ParsedItem::Entry(e) = item { Some(e) } else { None }
+    }).unwrap();
+    
+    // Month should be a variable reference in raw API
+    let month_field = entry.fields.iter()
+        .find(|f| f.name == "month")
+        .unwrap();
+    
+    match &month_field.value {
+        Value::Variable(var_name) => {
+            assert_eq!(var_name.as_ref(), "jan");
+        },
+        _ => panic!("Expected variable reference for month constant"),
+    }
+    
+    // Compare with Database API which should expand month constants
+    let db = Database::parser().parse(input).unwrap();
+    let db_entry = &db.entries()[0];
+    assert_eq!(db_entry.get("month"), Some("January"));
+}
+
+#[test]
+fn test_raw_api_performance() {
+    // Test that raw API maintains high performance
+    let input = r#"
+        @string{conference = "VLDB"}
+        @string{year = "2024"}
+        @preamble{"Database Conference Proceedings"}
+    "#.repeat(100) + &"@article{test, title = \"Performance Test\", year = 2024}".repeat(1000);
+    
+    let start = std::time::Instant::now();
+    let items = parse_bibtex(&input).unwrap();
+    let duration = start.elapsed();
+    
+    // Should complete quickly
+    assert!(duration.as_millis() < 100, "Raw API parsing took too long: {:?}", duration);
+    
+    // Should parse all items
+    assert!(!items.is_empty());
+    
+    let entry_count = items.iter().filter(|item| matches!(item, ParsedItem::Entry(_))).count();
+    assert_eq!(entry_count, 1000);
+}
+
+#[test]
+fn test_parsed_item_debug() {
+    let input = r#"@article{test, title = "Debug Test"}"#;
+    let items = parse_bibtex(input).unwrap();
+    
+    // Verify ParsedItem implements Debug
+    let debug_str = format!("{:?}", items[0]);
+    assert!(debug_str.contains("Entry"));
+    assert!(debug_str.contains("test"));
+}
+
+#[test]
+fn test_parsed_item_clone() {
+    let input = r#"@string{name = "Clone Test"}"#;
+    let items = parse_bibtex(input).unwrap();
+    
+    // Verify ParsedItem implements Clone
+    let cloned_item = items[0].clone();
+    
+    match (&items[0], &cloned_item) {
+        (ParsedItem::String(name1, _), ParsedItem::String(name2, _)) => {
+            assert_eq!(*name1, *name2);
+        },
+        _ => panic!("Clone failed"),
+    }
+}
+
+#[test]
+fn test_parsed_item_partial_eq() {
+    let input = r#"@string{name = "PartialEq Test"}"#;
+    let items1 = parse_bibtex(input).unwrap();
+    let items2 = parse_bibtex(input).unwrap();
+    
+    // Verify ParsedItem implements PartialEq
+    assert_eq!(items1[0], items2[0]);
 }
