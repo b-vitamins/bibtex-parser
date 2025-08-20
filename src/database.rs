@@ -785,14 +785,10 @@ mod tests {
 
     #[test]
     fn test_database_stats() {
-        // NOTE: There's a bug in the parser where % comments are consumed
-        // by skip_whitespace_and_comments instead of being parsed as items.
-        // This test is temporarily adjusted to pass.
-        // TODO: Fix the parser to properly handle % comments
-
         let input = r#"
             @string{ieee = "IEEE"}
             @preamble{"Test preamble"}
+            % This is a percent comment that now works properly
             @comment{This is a formal comment that works}
             @article{a1, title = "Article 1"}
             @article{a2, title = "Article 2"}
@@ -805,7 +801,7 @@ mod tests {
         assert_eq!(stats.total_entries, 3);
         assert_eq!(stats.total_strings, 1);
         assert_eq!(stats.total_preambles, 1);
-        assert_eq!(stats.total_comments, 1);
+        assert_eq!(stats.total_comments, 2); // Both % and @comment should work
         assert_eq!(stats.entries_by_type.get("article"), Some(&2));
         assert_eq!(stats.entries_by_type.get("book"), Some(&1));
     }

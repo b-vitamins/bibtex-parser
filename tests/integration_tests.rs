@@ -605,3 +605,99 @@ fn test_field_name_eq_ignore_case() {
     assert!(field.name_eq_ignore_case("aUtHoR"));
     assert!(!field.name_eq_ignore_case("title"));
 }
+
+#[test]
+fn test_percent_line_comments() {
+    let input = r#"
+        % This is a line comment at the start
+        @article{test2024,
+            author = "Test Author",
+            title = "Test Title",
+            year = 2024
+        }
+        % Final comment at the end
+    "#;
+    
+    let db = Database::parser().parse(input).unwrap();
+    let comments = db.comments();
+    
+    // Should have 2 % comments (% comments inside entries are not valid BibTeX)
+    assert!(comments.iter().any(|c| c.contains("This is a line comment at the start")));
+    assert!(comments.iter().any(|c| c.contains("Final comment at the end")));
+    
+    // Ensure the entry still parses correctly
+    assert_eq!(db.entries().len(), 1);
+    let entry = &db.entries()[0];
+    assert_eq!(entry.get("author"), Some("Test Author"));
+    assert_eq!(entry.get("title"), Some("Test Title"));
+}
+
+#[test]
+fn test_percent_comment_not_consumed_by_whitespace() {
+    let input = "   % Comment with leading whitespace\n@article{test, title=\"Test Title\"}";
+    
+    let db = Database::parser().parse(input).unwrap();
+    assert_eq!(db.comments().len(), 1);
+    assert!(db.comments()[0].contains("Comment with leading whitespace"));
+    assert_eq!(db.entries().len(), 1);
+}
+
+#[test]
+fn test_mixed_comment_types() {
+    let input = r#"
+        % Line comment
+        @comment{Formal comment}
+        Random text comment
+        @article{test, title="Test"}
+    "#;
+    
+    let db = Database::parser().parse(input).unwrap();
+    assert!(db.comments().len() >= 3);
+    
+    // Verify all three types of comments are captured
+    let comments = db.comments();
+    assert!(comments.iter().any(|c| c.contains("Line comment")));
+    assert!(comments.iter().any(|c| c.contains("Formal comment")));
+    assert!(comments.iter().any(|c| c.contains("Random text comment")));
+    
+    assert_eq!(db.entries().len(), 1);
+}
+
+#[test]
+fn test_percent_comment_variations() {
+    let input = r#"
+        % Simple comment
+        %Another comment without space
+        %
+        % Empty comment line above
+        @article{test, title="Test"}
+        % Comment after entry
+    "#;
+    
+    let db = Database::parser().parse(input).unwrap();
+    let comments = db.comments();
+    
+    // Should capture all percent comments including empty ones
+    assert!(comments.iter().any(|c| c.contains("Simple comment")));
+    assert!(comments.iter().any(|c| c.contains("Another comment without space")));
+    assert!(comments.iter().any(|c| c.contains("Comment after entry")));
+    
+    assert_eq!(db.entries().len(), 1);
+}
+
+#[test]
+fn test_percent_comment_in_complex_bibtex() {
+    // Use the complex fixture which already has a % comment
+    let input = include_str!("fixtures/complex.bib");
+    let db = Database::parser().parse(input).unwrap();
+    
+    // The complex.bib file has "% Another inline comment" on line 38
+    let comments = db.comments();
+    assert!(comments.iter().any(|c| c.contains("Another inline comment")));
+    
+    // Should also have the formal @Comment entry
+    assert!(comments.iter().any(|c| c.contains("This is a formal comment entry")));
+    
+    // And the text comment at the beginning
+    assert!(comments.iter().any(|c| c.contains("This is a comment outside of any entry")));
+}
