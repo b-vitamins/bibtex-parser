@@ -9,6 +9,7 @@ use winnow::{
 };
 
 /// Parse an identifier (letters, numbers, underscores, hyphens, colons)
+#[inline]
 pub fn identifier<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
     take_while(1.., |c: char| {
         c.is_alphanumeric() || c == '_' || c == '-' || c == ':' || c == '.'
@@ -22,6 +23,7 @@ pub fn field_name<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
 }
 
 /// Parse balanced braces { ... } with optimized delimiter search
+#[inline]
 pub fn balanced_braces<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
     let original_input = *input;
     let mut depth = 0;
@@ -61,6 +63,7 @@ pub fn balanced_braces<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
 }
 
 /// Parse a quoted string "..." with optimized delimiter search
+#[inline]
 pub fn quoted_string<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
     let start = *input;
     let bytes = input.as_bytes();
@@ -113,6 +116,7 @@ pub fn quoted_string<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
 }
 
 /// Parse a number (integer)
+#[inline]
 pub fn number<'a>(input: &mut &'a str) -> PResult<'a, i64> {
     let sign = opt(alt(('+', '-'))).parse_next(input)?;
     let digits = digit1.parse_next(input)?;
@@ -129,6 +133,7 @@ pub fn number<'a>(input: &mut &'a str) -> PResult<'a, i64> {
 }
 
 /// Parse balanced parentheses ( ... ) with optimized delimiter search
+#[inline]
 pub fn balanced_parentheses<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
     let original_input = *input;
     let mut depth = 0;

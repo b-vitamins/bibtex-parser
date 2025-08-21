@@ -2,6 +2,7 @@
 
 /// Find the next BibTeX delimiter (@, {, }, =, ,) using memchr
 /// Uses two passes but returns the earliest delimiter found
+#[inline]
 #[must_use]
 pub fn find_delimiter(haystack: &[u8], start: usize) -> Option<(usize, u8)> {
     if start >= haystack.len() {
@@ -37,6 +38,7 @@ pub fn find_delimiter(haystack: &[u8], start: usize) -> Option<(usize, u8)> {
 }
 
 /// Find brace or backslash for balanced brace parsing
+#[inline]
 #[must_use]
 pub fn find_brace_delimiter(haystack: &[u8], start: usize) -> Option<(usize, u8)> {
     if start >= haystack.len() {
@@ -48,6 +50,7 @@ pub fn find_brace_delimiter(haystack: &[u8], start: usize) -> Option<(usize, u8)
 }
 
 /// Find delimiters in quoted strings (\, ", {, })
+#[inline]
 #[must_use]
 pub fn find_quote_delimiter(haystack: &[u8], start: usize) -> Option<(usize, u8)> {
     if start >= haystack.len() {

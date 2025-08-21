@@ -7,11 +7,13 @@ use winnow::combinator::{alt, separated};
 use winnow::prelude::*;
 
 /// Parse a BibTeX value (string, number, variable, or concatenation)
+#[inline]
 pub fn parse_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
     parse_concatenated_value.parse_next(input)
 }
 
 /// Parse a concatenated value (value # value # ...)
+#[inline]
 fn parse_concatenated_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
     let parts: Vec<Value<'a>> =
         separated(1.., parse_single_value, utils::ws('#')).parse_next(input)?;
@@ -34,6 +36,7 @@ fn parse_single_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
 }
 
 /// Parse a quoted string value
+#[inline]
 fn parse_quoted_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
     if !input.starts_with('"') {
         return Err(winnow::error::ErrMode::Backtrack(
@@ -47,6 +50,7 @@ fn parse_quoted_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
 }
 
 /// Parse a braced string value
+#[inline]
 fn parse_braced_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
     if !input.starts_with('{') {
         return Err(winnow::error::ErrMode::Backtrack(
@@ -74,6 +78,7 @@ fn parse_braced_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
 
 /// Parse either a number or a string that starts with digits
 /// This handles cases like "2024a", "12b", "1.2.3", etc.
+#[inline]
 fn parse_number_or_digit_string<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
     let start_input = *input;
 
@@ -107,6 +112,7 @@ fn parse_number_or_digit_string<'a>(input: &mut &'a str) -> PResult<'a, Value<'a
 }
 
 /// Parse a variable reference
+#[inline]
 fn parse_variable_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
     // Parse as identifier - digit-starting values are handled by parse_number_or_digit_string
     let ident = lexer::identifier(input)?;

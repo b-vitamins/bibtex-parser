@@ -7,6 +7,7 @@ use winnow::prelude::*;
 use winnow::{ascii::multispace0, combinator::preceded};
 
 /// Parse a bibliography entry
+#[inline]
 pub fn parse_entry<'a>(input: &mut &'a str) -> PResult<'a, Entry<'a>> {
     preceded((multispace0, '@'), parse_entry_content).parse_next(input)
 }
@@ -39,6 +40,7 @@ fn parse_entry_content<'a>(input: &mut &'a str) -> PResult<'a, Entry<'a>> {
 }
 
 /// Parse the body of an entry (key and fields)
+#[inline]
 fn parse_entry_body<'a>(input: &mut &'a str, entry_type: EntryType<'a>) -> PResult<'a, Entry<'a>> {
     // Parse citation key
     let key = utils::ws(lexer::identifier).parse_next(input)?;
@@ -96,6 +98,7 @@ fn parse_fields<'a>(input: &mut &'a str) -> PResult<'a, Vec<Field<'a>>> {
 }
 
 /// Parse a single field (name = value)
+#[inline]
 fn parse_field<'a>(input: &mut &'a str) -> PResult<'a, Field<'a>> {
     let name = utils::ws(lexer::field_name).parse_next(input)?;
     utils::ws('=').parse_next(input)?;

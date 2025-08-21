@@ -4,6 +4,7 @@ use winnow::ascii::multispace0;
 use winnow::prelude::*;
 
 /// Make a parser whitespace-insensitive
+#[inline]
 pub fn ws<'a, F, O>(mut parser: F) -> impl Parser<&'a str, O, winnow::error::ContextError>
 where
     F: Parser<&'a str, O, winnow::error::ContextError>,
@@ -17,6 +18,7 @@ where
 }
 
 /// Case-insensitive tag parser
+#[inline]
 #[must_use]
 pub fn tag_no_case<'a>(
     tag: &'static str,
@@ -43,6 +45,7 @@ pub fn tag_no_case<'a>(
 }
 
 /// Parse a delimited value with balanced delimiters
+#[inline]
 #[must_use]
 pub fn balanced_delimited<'a>(
     open: char,
