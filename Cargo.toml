@@ -47,6 +47,10 @@ serde = { version = "1.0", features = ["derive"] }
 tempfile = "3"
 
 
+[[bin]]
+name = "profile"
+path = "src/bin/profile.rs"
+
 [[bench]]
 name = "performance"
 harness = false

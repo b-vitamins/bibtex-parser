@@ -45,6 +45,7 @@
 pub mod delimiter;
 pub mod entry;
 pub mod lexer;
+pub mod simd;
 pub mod utils;
 pub mod value;
 

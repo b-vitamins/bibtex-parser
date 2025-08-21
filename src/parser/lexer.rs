@@ -2,6 +2,7 @@
 
 use super::{delimiter, PResult};
 use winnow::prelude::*;
+use memchr;
 use winnow::{
     ascii::digit1,
     combinator::{alt, opt},
@@ -22,97 +23,68 @@ pub fn field_name<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
     identifier.parse_next(input)
 }
 
-/// Parse balanced braces { ... } with optimized delimiter search
+/// Parse balanced braces { ... } with SIMD acceleration
 #[inline]
 pub fn balanced_braces<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
     let original_input = *input;
+    let bytes = input.as_bytes();
     let mut depth = 0;
     let mut pos = 0;
-    let bytes = input.as_bytes();
-
+    
+    // Use SIMD to find delimiters
     while pos < bytes.len() {
-        // Use optimized search for brace delimiters
-        if let Some((next_pos, delim)) = delimiter::find_brace_delimiter(bytes, pos) {
-            pos = next_pos;
-            match delim {
-                b'{' => depth += 1,
+        // Find next delimiter using SIMD
+        if let Some(offset) = memchr::memchr3(b'{', b'}', b'\\', &bytes[pos..]) {
+            let idx = pos + offset;
+            
+            // Include content up to delimiter
+            match bytes[idx] {
+                b'{' => {
+                    depth += 1;
+                    pos = idx + 1;
+                }
                 b'}' => {
                     if depth == 0 {
-                        let result = &original_input[..pos];
-                        *input = &input[pos..];
+                        let result = &original_input[..idx];
+                        *input = &input[idx..];
                         return Ok(result);
                     }
                     depth -= 1;
+                    pos = idx + 1;
                 }
-                b'\\' if pos + 1 < bytes.len() => {
+                b'\\' => {
                     // Skip escaped character
-                    pos += 2;
-                    continue;
+                    pos = idx + 2;
                 }
-                _ => {}
+                _ => unreachable!(),
             }
-            pos += 1;
         } else {
+            // No more delimiters found
             break;
         }
     }
-
+    
     Err(winnow::error::ErrMode::Backtrack(
         winnow::error::ContextError::default(),
     ))
 }
 
-/// Parse a quoted string "..." with optimized delimiter search
+/// Parse a quoted string "..." with SIMD acceleration
 #[inline]
 pub fn quoted_string<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
-    let start = *input;
     let bytes = input.as_bytes();
-
-    if bytes.is_empty() || bytes[0] != b'"' {
-        return Err(winnow::error::ErrMode::Backtrack(
+    
+    // Use SIMD-accelerated quote scanning
+    if let Some(end_pos) = super::simd::find_balanced_quotes(bytes) {
+        // Extract the content (without the quotes)
+        let result = &input[1..end_pos-1];
+        *input = &input[end_pos..];
+        Ok(result)
+    } else {
+        Err(winnow::error::ErrMode::Backtrack(
             winnow::error::ContextError::default(),
-        ));
+        ))
     }
-
-    let mut pos = 1; // Skip opening quote
-    let mut brace_depth = 0;
-
-    while pos < bytes.len() {
-        // Use optimized search for quote delimiters
-        if let Some((next_pos, delim)) = delimiter::find_quote_delimiter(bytes, pos) {
-            pos = next_pos;
-
-            match delim {
-                b'\\' if pos + 1 < bytes.len() => {
-                    // Skip escaped character
-                    pos += 2;
-                    // Continue without incrementing pos again
-                    continue;
-                }
-                b'"' if brace_depth == 0 => {
-                    // Found closing quote
-                    let result = &start[1..pos];
-                    *input = &start[pos + 1..];
-                    return Ok(result);
-                }
-                b'{' => {
-                    brace_depth += 1;
-                }
-                b'}' if brace_depth > 0 => {
-                    brace_depth -= 1;
-                }
-                _ => {}
-            }
-            // Only increment pos by 1 for non-escape characters
-            pos += 1;
-        } else {
-            break;
-        }
-    }
-
-    Err(winnow::error::ErrMode::Backtrack(
-        winnow::error::ContextError::default(),
-    ))
 }
 
 /// Parse a number (integer)
@@ -132,36 +104,42 @@ pub fn number<'a>(input: &mut &'a str) -> PResult<'a, i64> {
     Ok(num)
 }
 
-/// Parse balanced parentheses ( ... ) with optimized delimiter search
+/// Parse balanced parentheses ( ... ) with SIMD acceleration
 #[inline]
 pub fn balanced_parentheses<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
     let original_input = *input;
+    let bytes = input.as_bytes();
     let mut depth = 0;
     let mut pos = 0;
-    let bytes = input.as_bytes();
-
+    
+    // Use SIMD to find delimiters
     while pos < bytes.len() {
-        // Use optimized search for parenthesis delimiters
-        if let Some((next_pos, delim)) = delimiter::find_bytes2(bytes, b'(', b')', pos) {
-            pos = next_pos;
-            match delim {
-                b'(' => depth += 1,
+        // Find next delimiter using SIMD
+        if let Some(offset) = memchr::memchr2(b'(', b')', &bytes[pos..]) {
+            let idx = pos + offset;
+            
+            match bytes[idx] {
+                b'(' => {
+                    depth += 1;
+                    pos = idx + 1;
+                }
                 b')' => {
                     if depth == 0 {
-                        let result = &original_input[..pos];
-                        *input = &input[pos..];
+                        let result = &original_input[..idx];
+                        *input = &input[idx..];
                         return Ok(result);
                     }
                     depth -= 1;
+                    pos = idx + 1;
                 }
-                _ => {}
+                _ => unreachable!(),
             }
-            pos += 1;
         } else {
+            // No more delimiters found
             break;
         }
     }
-
+    
     Err(winnow::error::ErrMode::Backtrack(
         winnow::error::ContextError::default(),
     ))
