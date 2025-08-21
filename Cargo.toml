@@ -14,6 +14,9 @@ license = "MIT OR Apache-2.0"
 
 [features]
 default = []
+# Enable LaTeX to Unicode conversion
+latex_to_unicode = []
+# Enable multi-file parallel parsing
 parallel = ["rayon"]
 
 

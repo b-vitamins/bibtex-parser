@@ -1,6 +1,6 @@
 //! BibTeX database representation
 
-use crate::{Entry, Error, Result, Value, ValidationLevel, ValidationError};
+use crate::{Entry, Error, Result, ValidationError, ValidationLevel, Value};
 use ahash::AHashMap;
 use phf::phf_map;
 use std::borrow::Cow;
@@ -562,39 +562,42 @@ impl<'a> Database<'a> {
 
     /// Validate all entries in the database
     /// Returns a list of entries with their indices and validation errors
-    pub fn validate(&self, level: ValidationLevel) -> Vec<(usize, &Entry<'a>, Vec<ValidationError>)> {
+    pub fn validate(
+        &self,
+        level: ValidationLevel,
+    ) -> Vec<(usize, &Entry<'a>, Vec<ValidationError>)> {
         let mut invalid_entries = Vec::new();
-        
+
         for (index, entry) in self.entries.iter().enumerate() {
             if let Err(errors) = entry.validate(level) {
                 invalid_entries.push((index, entry, errors));
             }
         }
-        
+
         invalid_entries
     }
-    
+
     /// Check for duplicate citation keys
     /// Returns a list of duplicate keys (each key appears once in the list even if it has multiple duplicates)
     pub fn find_duplicate_keys(&self) -> Vec<&str> {
         let mut seen = std::collections::HashSet::new();
         let mut duplicates = std::collections::HashSet::new();
-        
+
         for entry in &self.entries {
             if !seen.insert(entry.key()) {
                 duplicates.insert(entry.key());
             }
         }
-        
+
         duplicates.into_iter().collect()
     }
-    
+
     /// Validate all entries and return a comprehensive validation report
     pub fn validate_comprehensive(&self, level: ValidationLevel) -> ValidationReport<'_> {
         let invalid_entries = self.validate(level);
         let duplicate_keys = self.find_duplicate_keys();
         let empty_entries = self.find_empty_entries();
-        
+
         ValidationReport {
             invalid_entries,
             duplicate_keys,
@@ -603,7 +606,7 @@ impl<'a> Database<'a> {
             validation_level: level,
         }
     }
-    
+
     /// Find entries with no fields (only key and type)
     fn find_empty_entries(&self) -> Vec<(usize, &Entry<'a>)> {
         self.entries
@@ -665,24 +668,24 @@ impl<'a> ValidationReport<'a> {
     /// Check if the database is completely valid
     #[must_use]
     pub fn is_valid(&self) -> bool {
-        self.invalid_entries.is_empty() 
-            && self.duplicate_keys.is_empty() 
+        self.invalid_entries.is_empty()
+            && self.duplicate_keys.is_empty()
             && self.empty_entries.is_empty()
     }
-    
+
     /// Get total number of issues found
     #[must_use]
     pub fn total_issues(&self) -> usize {
         self.invalid_entries.len() + self.duplicate_keys.len() + self.empty_entries.len()
     }
-    
+
     /// Get a summary of issues by severity
     #[must_use]
     pub fn issue_summary(&self) -> IssueSummary {
         let mut errors = 0;
         let mut warnings = 0;
         let mut infos = 0;
-        
+
         for (_, _, validation_errors) in &self.invalid_entries {
             for error in validation_errors {
                 match error.severity {
@@ -692,11 +695,15 @@ impl<'a> ValidationReport<'a> {
                 }
             }
         }
-        
+
         // Duplicate keys and empty entries are considered errors
         errors += self.duplicate_keys.len() + self.empty_entries.len();
-        
-        IssueSummary { errors, warnings, infos }
+
+        IssueSummary {
+            errors,
+            warnings,
+            infos,
+        }
     }
 }
 

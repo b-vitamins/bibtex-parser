@@ -1,6 +1,9 @@
-use bibtex_parser::{Database, EntryType, Value, ValidationLevel, ValidationError, ValidationSeverity, parse_bibtex, ParsedItem};
-use std::borrow::Cow;
+use bibtex_parser::{
+    parse_bibtex, Database, EntryType, ParsedItem, ValidationError, ValidationLevel,
+    ValidationSeverity, Value,
+};
 use pretty_assertions::assert_eq;
+use std::borrow::Cow;
 
 #[test]
 fn test_parse_simple_file() {
@@ -618,14 +621,18 @@ fn test_percent_line_comments() {
         }
         % Final comment at the end
     "#;
-    
+
     let db = Database::parser().parse(input).unwrap();
     let comments = db.comments();
-    
+
     // Should have 2 % comments (% comments inside entries are not valid BibTeX)
-    assert!(comments.iter().any(|c| c.contains("This is a line comment at the start")));
-    assert!(comments.iter().any(|c| c.contains("Final comment at the end")));
-    
+    assert!(comments
+        .iter()
+        .any(|c| c.contains("This is a line comment at the start")));
+    assert!(comments
+        .iter()
+        .any(|c| c.contains("Final comment at the end")));
+
     // Ensure the entry still parses correctly
     assert_eq!(db.entries().len(), 1);
     let entry = &db.entries()[0];
@@ -636,7 +643,7 @@ fn test_percent_line_comments() {
 #[test]
 fn test_percent_comment_not_consumed_by_whitespace() {
     let input = "   % Comment with leading whitespace\n@article{test, title=\"Test Title\"}";
-    
+
     let db = Database::parser().parse(input).unwrap();
     assert_eq!(db.comments().len(), 1);
     assert!(db.comments()[0].contains("Comment with leading whitespace"));
@@ -651,16 +658,16 @@ fn test_mixed_comment_types() {
         Random text comment
         @article{test, title="Test"}
     "#;
-    
+
     let db = Database::parser().parse(input).unwrap();
     assert!(db.comments().len() >= 3);
-    
+
     // Verify all three types of comments are captured
     let comments = db.comments();
     assert!(comments.iter().any(|c| c.contains("Line comment")));
     assert!(comments.iter().any(|c| c.contains("Formal comment")));
     assert!(comments.iter().any(|c| c.contains("Random text comment")));
-    
+
     assert_eq!(db.entries().len(), 1);
 }
 
@@ -674,15 +681,17 @@ fn test_percent_comment_variations() {
         @article{test, title="Test"}
         % Comment after entry
     "#;
-    
+
     let db = Database::parser().parse(input).unwrap();
     let comments = db.comments();
-    
+
     // Should capture all percent comments including empty ones
     assert!(comments.iter().any(|c| c.contains("Simple comment")));
-    assert!(comments.iter().any(|c| c.contains("Another comment without space")));
+    assert!(comments
+        .iter()
+        .any(|c| c.contains("Another comment without space")));
     assert!(comments.iter().any(|c| c.contains("Comment after entry")));
-    
+
     assert_eq!(db.entries().len(), 1);
 }
 
@@ -691,16 +700,22 @@ fn test_percent_comment_in_complex_bibtex() {
     // Use the complex fixture which already has a % comment
     let input = include_str!("fixtures/complex.bib");
     let db = Database::parser().parse(input).unwrap();
-    
+
     // The complex.bib file has "% Another inline comment" on line 38
     let comments = db.comments();
-    assert!(comments.iter().any(|c| c.contains("Another inline comment")));
-    
+    assert!(comments
+        .iter()
+        .any(|c| c.contains("Another inline comment")));
+
     // Should also have the formal @Comment entry
-    assert!(comments.iter().any(|c| c.contains("This is a formal comment entry")));
-    
+    assert!(comments
+        .iter()
+        .any(|c| c.contains("This is a formal comment entry")));
+
     // And the text comment at the beginning
-    assert!(comments.iter().any(|c| c.contains("This is a comment outside of any entry")));
+    assert!(comments
+        .iter()
+        .any(|c| c.contains("This is a comment outside of any entry")));
 }
 
 #[test]
@@ -718,53 +733,95 @@ fn test_digit_string_fallback() {
             chapter = 3rd
         }
     "#;
-    
+
     let db = Database::parser().parse(input).unwrap();
     assert_eq!(db.entries().len(), 1);
-    
+
     let entry = &db.entries()[0];
     assert_eq!(entry.key(), "test1");
-    
+
     // Pure number should remain as Number type
     assert_eq!(entry.get_as_string("year"), Some("2024".to_string()));
-    match entry.fields().iter().find(|f| f.name == "year").unwrap().value {
+    match entry
+        .fields()
+        .iter()
+        .find(|f| f.name == "year")
+        .unwrap()
+        .value
+    {
         Value::Number(n) => assert_eq!(n, 2024),
         _ => panic!("Expected Number value for pure number"),
     }
-    
+
     // Mixed alphanumeric should be Literal strings
     assert_eq!(entry.get("volume"), Some("12b"));
-    match entry.fields().iter().find(|f| f.name == "volume").unwrap().value {
+    match entry
+        .fields()
+        .iter()
+        .find(|f| f.name == "volume")
+        .unwrap()
+        .value
+    {
         Value::Literal(ref s) => assert_eq!(s, "12b"),
         _ => panic!("Expected Literal value for mixed alphanumeric"),
     }
-    
+
     assert_eq!(entry.get("issue"), Some("2024a"));
-    match entry.fields().iter().find(|f| f.name == "issue").unwrap().value {
+    match entry
+        .fields()
+        .iter()
+        .find(|f| f.name == "issue")
+        .unwrap()
+        .value
+    {
         Value::Literal(ref s) => assert_eq!(s, "2024a"),
         _ => panic!("Expected Literal value for year with letter"),
     }
-    
+
     assert_eq!(entry.get("pages"), Some("123-456"));
-    match entry.fields().iter().find(|f| f.name == "pages").unwrap().value {
+    match entry
+        .fields()
+        .iter()
+        .find(|f| f.name == "pages")
+        .unwrap()
+        .value
+    {
         Value::Literal(ref s) => assert_eq!(s, "123-456"),
         _ => panic!("Expected Literal value for page range"),
     }
-    
+
     assert_eq!(entry.get("version"), Some("1.2.3"));
-    match entry.fields().iter().find(|f| f.name == "version").unwrap().value {
+    match entry
+        .fields()
+        .iter()
+        .find(|f| f.name == "version")
+        .unwrap()
+        .value
+    {
         Value::Literal(ref s) => assert_eq!(s, "1.2.3"),
         _ => panic!("Expected Literal value for dotted version"),
     }
-    
+
     assert_eq!(entry.get("edition"), Some("2nd"));
-    match entry.fields().iter().find(|f| f.name == "edition").unwrap().value {
+    match entry
+        .fields()
+        .iter()
+        .find(|f| f.name == "edition")
+        .unwrap()
+        .value
+    {
         Value::Literal(ref s) => assert_eq!(s, "2nd"),
         _ => panic!("Expected Literal value for ordinal"),
     }
-    
+
     assert_eq!(entry.get("chapter"), Some("3rd"));
-    match entry.fields().iter().find(|f| f.name == "chapter").unwrap().value {
+    match entry
+        .fields()
+        .iter()
+        .find(|f| f.name == "chapter")
+        .unwrap()
+        .value
+    {
         Value::Literal(ref s) => assert_eq!(s, "3rd"),
         _ => panic!("Expected Literal value for ordinal"),
     }
@@ -785,10 +842,10 @@ fn test_mixed_value_types() {
             isbn = 978-0123456789
         }
     "#;
-    
+
     let db = Database::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
-    
+
     // All should parse successfully and return appropriate string representations
     assert_eq!(entry.get_as_string("year"), Some("2024".to_string()));
     assert_eq!(entry.get_as_string("volume"), Some("12".to_string()));
@@ -797,30 +854,57 @@ fn test_mixed_value_types() {
     assert_eq!(entry.get_as_string("version"), Some("1.2.3".to_string()));
     assert_eq!(entry.get_as_string("id"), Some("abc123".to_string()));
     assert_eq!(entry.get_as_string("doi"), Some("10.1000/123".to_string()));
-    assert_eq!(entry.get_as_string("isbn"), Some("978-0123456789".to_string()));
-    
+    assert_eq!(
+        entry.get_as_string("isbn"),
+        Some("978-0123456789".to_string())
+    );
+
     // Check specific value types
     // Year should be Number
-    match entry.fields().iter().find(|f| f.name == "year").unwrap().value {
-        Value::Number(_) => {},
+    match entry
+        .fields()
+        .iter()
+        .find(|f| f.name == "year")
+        .unwrap()
+        .value
+    {
+        Value::Number(_) => {}
         _ => panic!("Year should be Number type"),
     }
-    
+
     // Volume (quoted) should be Literal
-    match entry.fields().iter().find(|f| f.name == "volume").unwrap().value {
-        Value::Literal(_) => {},
+    match entry
+        .fields()
+        .iter()
+        .find(|f| f.name == "volume")
+        .unwrap()
+        .value
+    {
+        Value::Literal(_) => {}
         _ => panic!("Quoted number should be Literal type"),
     }
-    
+
     // Issue (ordinal) should be Literal
-    match entry.fields().iter().find(|f| f.name == "issue").unwrap().value {
-        Value::Literal(_) => {},
+    match entry
+        .fields()
+        .iter()
+        .find(|f| f.name == "issue")
+        .unwrap()
+        .value
+    {
+        Value::Literal(_) => {}
         _ => panic!("Ordinal should be Literal type"),
     }
-    
+
     // ID (quoted) should be Literal
-    match entry.fields().iter().find(|f| f.name == "id").unwrap().value {
-        Value::Literal(_) => {},
+    match entry
+        .fields()
+        .iter()
+        .find(|f| f.name == "id")
+        .unwrap()
+        .value
+    {
+        Value::Literal(_) => {}
         _ => panic!("Quoted identifier should be Literal type"),
     }
 }
@@ -836,28 +920,46 @@ fn test_string_variable_vs_literal_digit() {
             issue = 12b
         }
     "#;
-    
+
     let db = Database::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
-    
+
     assert_eq!(entry.get_as_string("year"), Some("2024".to_string()));
     assert_eq!(entry.get("volume"), Some("2024a"));
     assert_eq!(entry.get("issue"), Some("12b"));
-    
+
     // Verify the value types
     // year should be expanded to Literal since string variables get expanded during parsing
-    match entry.fields().iter().find(|f| f.name == "year").unwrap().value {
+    match entry
+        .fields()
+        .iter()
+        .find(|f| f.name == "year")
+        .unwrap()
+        .value
+    {
         Value::Literal(ref s) => assert_eq!(s, "2024"),
         _ => panic!("Expanded string variable should be Literal type"),
     }
-    
+
     // volume and issue should be Literals
-    match entry.fields().iter().find(|f| f.name == "volume").unwrap().value {
+    match entry
+        .fields()
+        .iter()
+        .find(|f| f.name == "volume")
+        .unwrap()
+        .value
+    {
         Value::Literal(ref s) => assert_eq!(s, "2024a"),
         _ => panic!("Digit-string should be Literal type"),
     }
-    
-    match entry.fields().iter().find(|f| f.name == "issue").unwrap().value {
+
+    match entry
+        .fields()
+        .iter()
+        .find(|f| f.name == "issue")
+        .unwrap()
+        .value
+    {
         Value::Literal(ref s) => assert_eq!(s, "12b"),
         _ => panic!("Digit-string should be Literal type"),
     }
@@ -887,10 +989,10 @@ fn test_edge_case_digit_strings() {
             code2 = 456def
         }
     "#;
-    
+
     let db = Database::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
-    
+
     // All should parse as string literals
     let expected_values = [
         ("number1", "1st"),
@@ -911,25 +1013,31 @@ fn test_edge_case_digit_strings() {
         ("code1", "123ABC"),
         ("code2", "456def"),
     ];
-    
+
     for (field_name, expected_value) in expected_values {
         assert_eq!(
-            entry.get(field_name), 
+            entry.get(field_name),
             Some(expected_value),
-            "Field {} should have value '{}'", 
-            field_name, 
+            "Field {} should have value '{}'",
+            field_name,
             expected_value
         );
-        
+
         // Verify all are Literal types
-        match entry.fields().iter().find(|f| f.name == field_name).unwrap().value {
+        match entry
+            .fields()
+            .iter()
+            .find(|f| f.name == field_name)
+            .unwrap()
+            .value
+        {
             Value::Literal(ref s) => assert_eq!(s, expected_value),
             _ => panic!("Field {} should be Literal type", field_name),
         }
     }
 }
 
-#[test]  
+#[test]
 fn test_digit_string_in_concatenation() {
     // Test that digit strings work in concatenations
     let input = r#"
@@ -939,22 +1047,34 @@ fn test_digit_string_in_concatenation() {
             year = 2024 # "a"
         }
     "#;
-    
+
     let db = Database::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
-    
-    assert_eq!(entry.get_as_string("note"), Some("Version 1.2.3 released".to_string()));
-    assert_eq!(entry.get_as_string("pages"), Some("100-200, 300-400".to_string()));
+
+    assert_eq!(
+        entry.get_as_string("note"),
+        Some("Version 1.2.3 released".to_string())
+    );
+    assert_eq!(
+        entry.get_as_string("pages"),
+        Some("100-200, 300-400".to_string())
+    );
     assert_eq!(entry.get_as_string("year"), Some("2024a".to_string()));
-    
+
     // Verify concatenation structure
-    match entry.fields().iter().find(|f| f.name == "note").unwrap().value {
+    match entry
+        .fields()
+        .iter()
+        .find(|f| f.name == "note")
+        .unwrap()
+        .value
+    {
         Value::Concat(ref parts) => {
             assert_eq!(parts.len(), 3);
             assert_eq!(parts[0], Value::Literal(Cow::Borrowed("Version ")));
             assert_eq!(parts[1], Value::Literal(Cow::Borrowed("1.2.3")));
             assert_eq!(parts[2], Value::Literal(Cow::Borrowed(" released")));
-        },
+        }
         _ => panic!("Expected concatenated value"),
     }
 }
@@ -973,10 +1093,10 @@ fn test_backward_compatibility_pure_numbers() {
             zero = 0
         }
     "#;
-    
+
     let db = Database::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
-    
+
     // All should be parsed as Number type
     let number_fields = [
         ("year", 2024),
@@ -987,7 +1107,7 @@ fn test_backward_compatibility_pure_numbers() {
         ("negative", -5),
         ("zero", 0),
     ];
-    
+
     for (field_name, expected_num) in number_fields {
         assert_eq!(
             entry.get_as_string(field_name),
@@ -996,9 +1116,15 @@ fn test_backward_compatibility_pure_numbers() {
             field_name,
             expected_num
         );
-        
+
         // Verify all are Number types
-        match entry.fields().iter().find(|f| f.name == field_name).unwrap().value {
+        match entry
+            .fields()
+            .iter()
+            .find(|f| f.name == field_name)
+            .unwrap()
+            .value
+        {
             Value::Number(n) => assert_eq!(n, expected_num),
             _ => panic!("Field {} should be Number type", field_name),
         }
@@ -1020,15 +1146,15 @@ fn test_raw_parse_api_basic() {
             year = 2024
         }
     "#;
-    
+
     let items = parse_bibtex(input).unwrap();
-    
+
     // Count different item types
     let mut entries = 0;
     let mut strings = 0;
     let mut preambles = 0;
     let mut comments = 0;
-    
+
     for item in &items {
         match item {
             ParsedItem::Entry(_) => entries += 1,
@@ -1037,7 +1163,7 @@ fn test_raw_parse_api_basic() {
             ParsedItem::Comment(_) => comments += 1,
         }
     }
-    
+
     assert_eq!(entries, 1);
     assert_eq!(strings, 1);
     assert_eq!(preambles, 1);
@@ -1050,27 +1176,28 @@ fn test_raw_api_no_expansion() {
         @string{name = "John"}
         @article{test, author = name}
     "#;
-    
+
     let items = parse_bibtex(input).unwrap();
-    
+
     // Find the entry
-    let entry = items.iter().find_map(|item| {
-        if let ParsedItem::Entry(e) = item {
-            Some(e)
-        } else {
-            None
-        }
-    }).unwrap();
-    
-    // The author field should still be a variable reference, not expanded
-    let author_field = entry.fields.iter()
-        .find(|f| f.name == "author")
+    let entry = items
+        .iter()
+        .find_map(|item| {
+            if let ParsedItem::Entry(e) = item {
+                Some(e)
+            } else {
+                None
+            }
+        })
         .unwrap();
-    
+
+    // The author field should still be a variable reference, not expanded
+    let author_field = entry.fields.iter().find(|f| f.name == "author").unwrap();
+
     match &author_field.value {
         Value::Variable(var_name) => {
             assert_eq!(var_name.as_ref(), "name");
-        },
+        }
         _ => panic!("Expected variable reference, not expanded value"),
     }
 }
@@ -1083,18 +1210,16 @@ fn test_raw_api_preserves_structure() {
             year = 2024
         }
     "#;
-    
+
     let items = parse_bibtex(input).unwrap();
     let entry = match &items[0] {
         ParsedItem::Entry(e) => e,
         _ => panic!("Expected entry"),
     };
-    
+
     // Check that concatenation is preserved in raw form
-    let title_field = entry.fields.iter()
-        .find(|f| f.name == "title")
-        .unwrap();
-    
+    let title_field = entry.fields.iter().find(|f| f.name == "title").unwrap();
+
     // Should be a Concat value with 3 parts
     match &title_field.value {
         Value::Concat(parts) => {
@@ -1102,7 +1227,7 @@ fn test_raw_api_preserves_structure() {
             assert_eq!(parts[0], Value::Literal(Cow::Borrowed("Part 1")));
             assert_eq!(parts[1], Value::Literal(Cow::Borrowed(" and ")));
             assert_eq!(parts[2], Value::Literal(Cow::Borrowed("Part 2")));
-        },
+        }
         _ => panic!("Expected concatenated value"),
     }
 }
@@ -1116,27 +1241,39 @@ fn test_raw_api_comment_types() {
         @article{test, title = "Test"}
         Another text comment
     "#;
-    
+
     let items = parse_bibtex(input).unwrap();
-    
-    let comments: Vec<&str> = items.iter().filter_map(|item| {
-        if let ParsedItem::Comment(text) = item {
-            Some(*text)
-        } else {
-            None
-        }
-    }).collect();
-    
+
+    let comments: Vec<&str> = items
+        .iter()
+        .filter_map(|item| {
+            if let ParsedItem::Comment(text) = item {
+                Some(*text)
+            } else {
+                None
+            }
+        })
+        .collect();
+
     // Should capture all types of comments
     assert!(comments.iter().any(|c| c.contains("Line comment")));
     assert!(comments.iter().any(|c| c.contains("Formal comment")));
-    assert!(comments.iter().any(|c| c.contains("Random text before entry")));
+    assert!(comments
+        .iter()
+        .any(|c| c.contains("Random text before entry")));
     assert!(comments.iter().any(|c| c.contains("Another text comment")));
-    
+
     // Should still parse the entry
-    let entries: Vec<_> = items.iter().filter_map(|item| {
-        if let ParsedItem::Entry(e) = item { Some(e) } else { None }
-    }).collect();
+    let entries: Vec<_> = items
+        .iter()
+        .filter_map(|item| {
+            if let ParsedItem::Entry(e) = item {
+                Some(e)
+            } else {
+                None
+            }
+        })
+        .collect();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].key(), "test");
 }
@@ -1149,23 +1286,26 @@ fn test_raw_api_string_definitions() {
         @string{full = name # ", " # institution}
         @article{test, author = full}
     "#;
-    
+
     let items = parse_bibtex(input).unwrap();
-    
+
     // Find string definitions
-    let strings: Vec<_> = items.iter().filter_map(|item| {
-        if let ParsedItem::String(name, value) = item {
-            Some((name, value))
-        } else {
-            None
-        }
-    }).collect();
-    
+    let strings: Vec<_> = items
+        .iter()
+        .filter_map(|item| {
+            if let ParsedItem::String(name, value) = item {
+                Some((name, value))
+            } else {
+                None
+            }
+        })
+        .collect();
+
     assert_eq!(strings.len(), 3);
     assert_eq!(*strings[0].0, "name");
     assert_eq!(*strings[1].0, "institution");
     assert_eq!(*strings[2].0, "full");
-    
+
     // Check that 'full' string contains concatenation
     match strings[2].1 {
         Value::Concat(ref parts) => {
@@ -1174,23 +1314,28 @@ fn test_raw_api_string_definitions() {
             assert!(matches!(parts[0], Value::Variable(_)));
             assert_eq!(parts[1], Value::Literal(Cow::Borrowed(", ")));
             assert!(matches!(parts[2], Value::Variable(_)));
-        },
+        }
         _ => panic!("Expected concatenated value for 'full' string"),
     }
-    
+
     // Find the entry and verify it has unexpanded variable reference
-    let entry = items.iter().find_map(|item| {
-        if let ParsedItem::Entry(e) = item { Some(e) } else { None }
-    }).unwrap();
-    
-    let author_field = entry.fields.iter()
-        .find(|f| f.name == "author")
+    let entry = items
+        .iter()
+        .find_map(|item| {
+            if let ParsedItem::Entry(e) = item {
+                Some(e)
+            } else {
+                None
+            }
+        })
         .unwrap();
-    
+
+    let author_field = entry.fields.iter().find(|f| f.name == "author").unwrap();
+
     match &author_field.value {
         Value::Variable(var_name) => {
             assert_eq!(var_name.as_ref(), "full");
-        },
+        }
         _ => panic!("Expected variable reference in entry"),
     }
 }
@@ -1204,31 +1349,36 @@ fn test_raw_api_vs_database_api() {
             year = 2024
         }
     "#;
-    
+
     // Parse with raw API
     let raw_items = parse_bibtex(input).unwrap();
-    
+
     // Parse with Database API
     let db = Database::parser().parse(input).unwrap();
-    
+
     // Raw API should have unexpanded variables
-    let raw_entry = raw_items.iter().find_map(|item| {
-        if let ParsedItem::Entry(e) = item { Some(e) } else { None }
-    }).unwrap();
-    
-    let raw_title = raw_entry.fields.iter()
-        .find(|f| f.name == "title")
+    let raw_entry = raw_items
+        .iter()
+        .find_map(|item| {
+            if let ParsedItem::Entry(e) = item {
+                Some(e)
+            } else {
+                None
+            }
+        })
         .unwrap();
-    
+
+    let raw_title = raw_entry.fields.iter().find(|f| f.name == "title").unwrap();
+
     match &raw_title.value {
         Value::Concat(parts) => {
             assert_eq!(parts.len(), 2);
             assert_eq!(parts[0], Value::Literal(Cow::Borrowed("Database ")));
             assert!(matches!(parts[1], Value::Variable(_)));
-        },
+        }
         _ => panic!("Expected concatenated value with variable reference"),
     }
-    
+
     // Database API should have expanded variables
     let db_entry = &db.entries()[0];
     assert_eq!(db_entry.get("title"), Some("Database VLDB"));
@@ -1242,30 +1392,37 @@ fn test_raw_api_preambles() {
         @preamble{style # " preamble"}
         @article{test, title = "Test"}
     "#;
-    
+
     let items = parse_bibtex(input).unwrap();
-    
-    let preambles: Vec<_> = items.iter().filter_map(|item| {
-        if let ParsedItem::Preamble(value) = item { Some(value) } else { None }
-    }).collect();
-    
+
+    let preambles: Vec<_> = items
+        .iter()
+        .filter_map(|item| {
+            if let ParsedItem::Preamble(value) = item {
+                Some(value)
+            } else {
+                None
+            }
+        })
+        .collect();
+
     assert_eq!(preambles.len(), 2);
-    
+
     // First preamble should be simple literal
     match preambles[0] {
         Value::Literal(ref text) => {
             assert_eq!(text.as_ref(), "Basic preamble");
-        },
+        }
         _ => panic!("Expected literal preamble"),
     }
-    
+
     // Second preamble should be concatenation with variable reference
     match preambles[1] {
         Value::Concat(ref parts) => {
             assert_eq!(parts.len(), 2);
             assert!(matches!(parts[0], Value::Variable(_)));
             assert_eq!(parts[1], Value::Literal(Cow::Borrowed(" preamble")));
-        },
+        }
         _ => panic!("Expected concatenated preamble"),
     }
 }
@@ -1283,9 +1440,9 @@ fn test_raw_api_maintains_order() {
         @preamble{"Preamble 2"}
         % Comment 3
     "#;
-    
+
     let items = parse_bibtex(input).unwrap();
-    
+
     // Verify items are in parse order
     assert!(matches!(items[0], ParsedItem::Comment(_))); // Comment 1
     assert!(matches!(items[1], ParsedItem::String(_, _))); // var1
@@ -1296,20 +1453,20 @@ fn test_raw_api_maintains_order() {
     assert!(matches!(items[6], ParsedItem::Entry(_))); // entry2
     assert!(matches!(items[7], ParsedItem::Preamble(_))); // Preamble 2
     assert!(matches!(items[8], ParsedItem::Comment(_))); // Comment 3
-    
+
     // Verify specific content
     if let ParsedItem::String(name, _) = &items[1] {
         assert_eq!(*name, "var1");
     }
-    
+
     if let ParsedItem::Entry(entry) = &items[3] {
         assert_eq!(entry.key(), "entry1");
     }
-    
+
     if let ParsedItem::String(name, _) = &items[5] {
         assert_eq!(*name, "var2");
     }
-    
+
     if let ParsedItem::Entry(entry) = &items[6] {
         assert_eq!(entry.key(), "entry2");
     }
@@ -1319,16 +1476,16 @@ fn test_raw_api_maintains_order() {
 fn test_raw_api_complex_file() {
     let input = include_str!("fixtures/complex.bib");
     let items = parse_bibtex(input).unwrap();
-    
+
     // Should parse the complex file without errors
     assert!(!items.is_empty());
-    
+
     // Count different types
     let mut entry_count = 0;
     let mut string_count = 0;
     let mut preamble_count = 0;
     let mut comment_count = 0;
-    
+
     for item in &items {
         match item {
             ParsedItem::Entry(_) => entry_count += 1,
@@ -1337,13 +1494,13 @@ fn test_raw_api_complex_file() {
             ParsedItem::Comment(_) => comment_count += 1,
         }
     }
-    
+
     // Should have various types of items
     assert!(entry_count > 0);
     assert!(string_count > 0);
     assert!(preamble_count > 0);
     assert!(comment_count > 0);
-    
+
     // Compare with Database API to ensure same parsing capability
     let db = Database::parser().parse(input).unwrap();
     assert_eq!(entry_count, db.entries().len());
@@ -1355,10 +1512,10 @@ fn test_raw_api_complex_file() {
 #[test]
 fn test_raw_api_error_handling() {
     let malformed_input = r#"@article{unclosed, title = "No closing brace""#;
-    
+
     let result = parse_bibtex(malformed_input);
     assert!(result.is_err());
-    
+
     // Error should contain helpful information
     let error = result.unwrap_err();
     let error_msg = error.to_string();
@@ -1375,24 +1532,29 @@ fn test_raw_api_month_constants() {
             year = 2024
         }
     "#;
-    
+
     let items = parse_bibtex(input).unwrap();
-    let entry = items.iter().find_map(|item| {
-        if let ParsedItem::Entry(e) = item { Some(e) } else { None }
-    }).unwrap();
-    
-    // Month should be a variable reference in raw API
-    let month_field = entry.fields.iter()
-        .find(|f| f.name == "month")
+    let entry = items
+        .iter()
+        .find_map(|item| {
+            if let ParsedItem::Entry(e) = item {
+                Some(e)
+            } else {
+                None
+            }
+        })
         .unwrap();
-    
+
+    // Month should be a variable reference in raw API
+    let month_field = entry.fields.iter().find(|f| f.name == "month").unwrap();
+
     match &month_field.value {
         Value::Variable(var_name) => {
             assert_eq!(var_name.as_ref(), "jan");
-        },
+        }
         _ => panic!("Expected variable reference for month constant"),
     }
-    
+
     // Compare with Database API which should expand month constants
     let db = Database::parser().parse(input).unwrap();
     let db_entry = &db.entries()[0];
@@ -1406,19 +1568,28 @@ fn test_raw_api_performance() {
         @string{conference = "VLDB"}
         @string{year = "2024"}
         @preamble{"Database Conference Proceedings"}
-    "#.repeat(100) + &"@article{test, title = \"Performance Test\", year = 2024}".repeat(1000);
-    
+    "#
+    .repeat(100)
+        + &"@article{test, title = \"Performance Test\", year = 2024}".repeat(1000);
+
     let start = std::time::Instant::now();
     let items = parse_bibtex(&input).unwrap();
     let duration = start.elapsed();
-    
+
     // Should complete quickly
-    assert!(duration.as_millis() < 100, "Raw API parsing took too long: {:?}", duration);
-    
+    assert!(
+        duration.as_millis() < 100,
+        "Raw API parsing took too long: {:?}",
+        duration
+    );
+
     // Should parse all items
     assert!(!items.is_empty());
-    
-    let entry_count = items.iter().filter(|item| matches!(item, ParsedItem::Entry(_))).count();
+
+    let entry_count = items
+        .iter()
+        .filter(|item| matches!(item, ParsedItem::Entry(_)))
+        .count();
     assert_eq!(entry_count, 1000);
 }
 
@@ -1426,7 +1597,7 @@ fn test_raw_api_performance() {
 fn test_parsed_item_debug() {
     let input = r#"@article{test, title = "Debug Test"}"#;
     let items = parse_bibtex(input).unwrap();
-    
+
     // Verify ParsedItem implements Debug
     let debug_str = format!("{:?}", items[0]);
     assert!(debug_str.contains("Entry"));
@@ -1437,14 +1608,14 @@ fn test_parsed_item_debug() {
 fn test_parsed_item_clone() {
     let input = r#"@string{name = "Clone Test"}"#;
     let items = parse_bibtex(input).unwrap();
-    
+
     // Verify ParsedItem implements Clone
     let cloned_item = items[0].clone();
-    
+
     match (&items[0], &cloned_item) {
         (ParsedItem::String(name1, _), ParsedItem::String(name2, _)) => {
             assert_eq!(*name1, *name2);
-        },
+        }
         _ => panic!("Clone failed"),
     }
 }
@@ -1454,7 +1625,7 @@ fn test_parsed_item_partial_eq() {
     let input = r#"@string{name = "PartialEq Test"}"#;
     let items1 = parse_bibtex(input).unwrap();
     let items2 = parse_bibtex(input).unwrap();
-    
+
     // Verify ParsedItem implements PartialEq
     assert_eq!(items1[0], items2[0]);
 }
@@ -1471,10 +1642,10 @@ fn test_validation_levels() {
             year = 2024
         }
     "#;
-    
+
     let db = Database::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
-    
+
     // Should pass all validation levels
     assert!(entry.validate(ValidationLevel::Minimal).is_ok());
     assert!(entry.validate(ValidationLevel::Standard).is_ok());
@@ -1489,18 +1660,20 @@ fn test_missing_required_fields() {
             title = "Test Article"
         }
     "#;
-    
+
     let db = Database::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
-    
+
     let result = entry.validate(ValidationLevel::Minimal);
     assert!(result.is_err());
-    
+
     let errors = result.unwrap_err();
     assert_eq!(errors.len(), 2); // Missing journal and year
-    assert!(errors.iter().any(|e| e.field == Some("journal".to_string())));
+    assert!(errors
+        .iter()
+        .any(|e| e.field == Some("journal".to_string())));
     assert!(errors.iter().any(|e| e.field == Some("year".to_string())));
-    
+
     // All should be error-level
     for error in &errors {
         assert_eq!(error.severity, ValidationSeverity::Error);
@@ -1519,15 +1692,16 @@ fn test_validation_warnings() {
             doi = "not-a-doi"
         }
     "#;
-    
+
     let db = Database::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
-    
+
     let result = entry.validate(ValidationLevel::Strict);
     assert!(result.is_err());
-    
+
     let errors = result.unwrap_err();
-    let warnings = errors.iter()
+    let warnings = errors
+        .iter()
         .filter(|e| e.severity == ValidationSeverity::Warning)
         .count();
     assert!(warnings >= 3); // Year, pages, DOI warnings
@@ -1543,7 +1717,7 @@ fn test_backward_compatible_is_valid() {
             author = "A", title = "T"
         }
     "#;
-    
+
     let db = Database::parser().parse(input).unwrap();
     assert!(db.entries()[0].is_valid());
     assert!(!db.entries()[1].is_valid());
@@ -1556,10 +1730,10 @@ fn test_database_validation() {
         @article{invalid, author="A", title="T"}
         @article{valid2, author="B", title="T2", journal="J2", year=2024}
     "#;
-    
+
     let db = Database::parser().parse(input).unwrap();
     let invalid = db.validate(ValidationLevel::Minimal);
-    
+
     assert_eq!(invalid.len(), 1);
     assert_eq!(invalid[0].0, 1); // Index of invalid entry
     assert_eq!(invalid[0].1.key(), "invalid");
@@ -1572,10 +1746,10 @@ fn test_duplicate_keys() {
         @article{unique, title="Unique"}  
         @article{dup, title="Second"}
     "#;
-    
+
     let db = Database::parser().parse(input).unwrap();
     let duplicates = db.find_duplicate_keys();
-    
+
     assert_eq!(duplicates.len(), 1);
     assert_eq!(duplicates[0], "dup");
 }
@@ -1588,16 +1762,16 @@ fn test_comprehensive_validation_report() {
         @article{dup, author="B", title="T2", journal="J2", year=1}
         @misc{empty_entry, title="Empty Entry"}
     "#;
-    
+
     let db = Database::parser().parse(input).unwrap();
     let report = db.validate_comprehensive(ValidationLevel::Standard);
-    
+
     assert!(!report.is_valid());
     assert_eq!(report.total_entries, 4);
     assert_eq!(report.duplicate_keys.len(), 1);
     assert_eq!(report.empty_entries.len(), 0); // misc entry has title so not empty
     assert!(report.invalid_entries.len() >= 2); // invalid + year=1 warning
-    
+
     let summary = report.issue_summary();
     assert!(summary.errors > 0); // Duplicates + empty + missing required fields
     assert!(summary.warnings > 0); // Year=1 warning
@@ -1610,7 +1784,7 @@ fn test_validation_error_display() {
     assert!(display.contains("title"));
     assert!(display.contains("Missing required field"));
     assert!(display.contains("Error"));
-    
+
     let warning = ValidationError::warning(None, "Entry-level warning");
     let display = format!("{}", warning);
     assert!(display.contains("<entry>"));
@@ -1633,15 +1807,15 @@ fn test_validation_field_formats() {
             volume = "not-a-number"
         }
     "#;
-    
+
     let db = Database::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
-    
+
     let result = entry.validate(ValidationLevel::Strict);
     assert!(result.is_err());
-    
+
     let errors = result.unwrap_err();
-    
+
     // Check for specific format warnings (in strict mode)
     assert!(errors.iter().any(|e| e.field == Some("doi".to_string())));
     assert!(errors.iter().any(|e| e.field == Some("url".to_string())));
@@ -1671,20 +1845,22 @@ fn test_validation_book_author_editor() {
             year = 2024
         }
     "#;
-    
+
     let db = Database::parser().parse(input).unwrap();
-    
+
     // First book should have error about missing author/editor
     let result1 = db.entries()[0].validate(ValidationLevel::Standard);
     assert!(result1.is_err());
     let errors1 = result1.unwrap_err();
     // Should error because no author OR editor
-    assert!(errors1.iter().any(|e| e.message.contains("either 'author' or 'editor'")));
-    
+    assert!(errors1
+        .iter()
+        .any(|e| e.message.contains("either 'author' or 'editor'")));
+
     // Second book should be valid (has author and all required fields)
     let result2 = db.entries()[1].validate(ValidationLevel::Standard);
     assert!(result2.is_ok());
-    
+
     // Third book should be valid (has editor and all required fields)
     let result3 = db.entries()[2].validate(ValidationLevel::Standard);
     assert!(result3.is_ok());
@@ -1700,15 +1876,16 @@ fn test_validation_empty_fields() {
             year = 2024
         }
     "#;
-    
+
     let db = Database::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
-    
+
     let result = entry.validate(ValidationLevel::Standard);
     assert!(result.is_err());
-    
+
     let errors = result.unwrap_err();
-    let empty_field_warnings = errors.iter()
+    let empty_field_warnings = errors
+        .iter()
         .filter(|e| e.message.contains("empty value"))
         .count();
     assert_eq!(empty_field_warnings, 2); // author and title are empty
@@ -1732,18 +1909,20 @@ fn test_validation_crossref() {
             crossref = "   "
         }
     "#;
-    
+
     let db = Database::parser().parse(input).unwrap();
-    
+
     // Valid crossref should pass strict validation
     let result1 = db.entries()[0].validate(ValidationLevel::Strict);
     assert!(result1.is_ok());
-    
+
     // Empty crossref should fail strict validation
     let result2 = db.entries()[1].validate(ValidationLevel::Strict);
     assert!(result2.is_err());
     let errors2 = result2.unwrap_err();
-    assert!(errors2.iter().any(|e| e.field == Some("crossref".to_string()) && e.severity == ValidationSeverity::Error));
+    assert!(errors2.iter().any(
+        |e| e.field == Some("crossref".to_string()) && e.severity == ValidationSeverity::Error
+    ));
 }
 
 #[test]
@@ -1756,13 +1935,13 @@ fn test_validation_case_insensitive_field_checking() {
             YEAR = 2024
         }
     "#;
-    
+
     let db = Database::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
-    
+
     // Should pass all validation levels with case-insensitive field checking
     assert!(entry.validate(ValidationLevel::Minimal).is_ok());
-    assert!(entry.validate(ValidationLevel::Standard).is_ok());  
+    assert!(entry.validate(ValidationLevel::Standard).is_ok());
     assert!(entry.validate(ValidationLevel::Strict).is_ok());
 }
 
@@ -1778,18 +1957,18 @@ fn test_validation_standard_vs_strict() {
             month = "invalid-month"
         }
     "#;
-    
+
     let db = Database::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
-    
+
     // Standard should pass (only basic checks)
     let result_standard = entry.validate(ValidationLevel::Standard);
     assert!(result_standard.is_ok());
-    
+
     // Strict should fail (format checks)
     let result_strict = entry.validate(ValidationLevel::Strict);
     assert!(result_strict.is_err());
-    
+
     let errors = result_strict.unwrap_err();
     assert!(errors.iter().any(|e| e.field == Some("doi".to_string())));
     assert!(errors.iter().any(|e| e.field == Some("month".to_string())));
@@ -1803,30 +1982,36 @@ fn test_validation_year_checks() {
         @article{normal_year, author="A", title="T", journal="J", year=2024}
         @article{string_year, author="A", title="T", journal="J", year="not-a-year"}
     "#;
-    
+
     let db = Database::parser().parse(input).unwrap();
-    
+
     // Future year should have warning
     let result1 = db.entries()[0].validate(ValidationLevel::Standard);
     assert!(result1.is_err());
     let errors1 = result1.unwrap_err();
-    assert!(errors1.iter().any(|e| e.field == Some("year".to_string()) && e.message.contains("unlikely")));
-    
-    // Ancient year should have warning  
+    assert!(errors1
+        .iter()
+        .any(|e| e.field == Some("year".to_string()) && e.message.contains("unlikely")));
+
+    // Ancient year should have warning
     let result2 = db.entries()[1].validate(ValidationLevel::Standard);
     assert!(result2.is_err());
     let errors2 = result2.unwrap_err();
-    assert!(errors2.iter().any(|e| e.field == Some("year".to_string()) && e.message.contains("unlikely")));
-    
+    assert!(errors2
+        .iter()
+        .any(|e| e.field == Some("year".to_string()) && e.message.contains("unlikely")));
+
     // Normal year should pass
     let result3 = db.entries()[2].validate(ValidationLevel::Standard);
     assert!(result3.is_ok());
-    
+
     // String year should have warning
     let result4 = db.entries()[3].validate(ValidationLevel::Standard);
     assert!(result4.is_err());
     let errors4 = result4.unwrap_err();
-    assert!(errors4.iter().any(|e| e.field == Some("year".to_string()) && e.message.contains("number")));
+    assert!(errors4
+        .iter()
+        .any(|e| e.field == Some("year".to_string()) && e.message.contains("number")));
 }
 
 #[test]
@@ -1839,15 +2024,15 @@ fn test_validation_pages_format() {
         @article{bad_pages1, author="A", title="T", journal="J", year=2024, pages="12 to 34"}
         @article{bad_pages2, author="A", title="T", journal="J", year=2024, pages="twelve"}
     "#;
-    
+
     let db = Database::parser().parse(input).unwrap();
-    
+
     // Good page formats should pass
     for i in 0..4 {
         let result = db.entries()[i].validate(ValidationLevel::Standard);
         assert!(result.is_ok(), "Entry {} should have valid pages", i);
     }
-    
+
     // Bad page formats should have warnings
     for i in 4..6 {
         let result = db.entries()[i].validate(ValidationLevel::Standard);
@@ -1873,19 +2058,24 @@ fn test_validation_performance() {
             url = "https://example.com",
             month = "January"
         }
-    "#.repeat(100);
-    
+    "#
+    .repeat(100);
+
     let db = Database::parser().parse(&input).unwrap();
-    
+
     // Measure validation time
     let start = std::time::Instant::now();
     for entry in db.entries() {
         let _ = entry.validate(ValidationLevel::Strict);
     }
     let duration = start.elapsed();
-    
+
     // Should complete quickly - validation is opt-in so should have minimal impact
-    assert!(duration.as_millis() < 50, "Validation took too long: {:?}", duration);
+    assert!(
+        duration.as_millis() < 50,
+        "Validation took too long: {:?}",
+        duration
+    );
 }
 
 #[test]
@@ -1910,10 +2100,10 @@ fn test_issue_summary() {
             month = "bad-month"
         }
     "#;
-    
+
     let db = Database::parser().parse(input).unwrap();
     let report = db.validate_comprehensive(ValidationLevel::Strict);
-    
+
     let summary = report.issue_summary();
     assert!(summary.errors > 0);
     assert!(summary.warnings > 0);
@@ -1923,12 +2113,533 @@ fn test_issue_summary() {
 fn test_validation_zero_cost_when_not_used() {
     // Test that parsing performance is not affected when validation is not used
     let input = "@article{test, author=\"A\", title=\"T\", journal=\"J\", year=2024}".repeat(1000);
-    
+
     let start = std::time::Instant::now();
     let db = Database::parser().parse(&input).unwrap();
     let parse_duration = start.elapsed();
-    
+
     // Parsing should still be fast
-    assert!(parse_duration.as_millis() < 100, "Parsing with validation code present took too long: {:?}", parse_duration);
+    assert!(
+        parse_duration.as_millis() < 100,
+        "Parsing with validation code present took too long: {:?}",
+        parse_duration
+    );
     assert_eq!(db.entries().len(), 1000);
+}
+
+// LATEX TO UNICODE CONVERSION TESTS
+
+#[cfg(feature = "latex_to_unicode")]
+#[test]
+fn test_latex_to_unicode_basic_accents() {
+    let input = r#"
+        @article{test2024,
+            author = "Fran\c{c}ois R\'emi",
+            title = "M\"{u}ller and Schr\"{o}dinger's work",
+            journal = "Nature",
+            year = 2024
+        }
+    "#;
+
+    let db = Database::parser().parse(input).unwrap();
+    let entry = &db.entries()[0];
+
+    // Test unicode conversion
+    assert_eq!(
+        entry.get_unicode("author"),
+        Some("François Rémi".to_string())
+    );
+
+    assert_eq!(
+        entry.get_unicode("title"),
+        Some("Müller and Schrödinger's work".to_string())
+    );
+
+    // Original should still be available
+    assert_eq!(entry.get("author"), Some("Fran\\c{c}ois R\\'emi"));
+
+    assert_eq!(
+        entry.get("title"),
+        Some("M\\\"{u}ller and Schr\\\"{o}dinger's work")
+    );
+}
+
+#[cfg(feature = "latex_to_unicode")]
+#[test]
+fn test_latex_to_unicode_case_insensitive() {
+    let input = r#"
+        @article{test2024,
+            AUTHOR = "Jos\'e Garc\'ia",
+            Title = "\\alpha and \\beta particles"
+        }
+    "#;
+
+    let db = Database::parser().parse(input).unwrap();
+    let entry = &db.entries()[0];
+
+    // Test case-insensitive unicode conversion
+    assert_eq!(
+        entry.get_unicode_ignore_case("author"),
+        Some("José García".to_string())
+    );
+
+    assert_eq!(
+        entry.get_unicode_ignore_case("TITLE"),
+        Some("α and β particles".to_string())
+    );
+
+    assert_eq!(
+        entry.get_unicode_ignore_case("title"),
+        Some("α and β particles".to_string())
+    );
+}
+
+#[cfg(feature = "latex_to_unicode")]
+#[test]
+fn test_latex_to_unicode_all_field_types() {
+    let input = r#"
+        @article{test,
+            author = "Jos\'e Garc\'ia",
+            title = "\\alpha and \\beta",
+            year = 2024,
+            note = "See M\\\"uller's work \\ldots"
+        }
+    "#;
+
+    let db = Database::parser().parse(input).unwrap();
+    let entry = &db.entries()[0];
+
+    // Test get_as_unicode_string variants (handles all value types)
+    assert_eq!(
+        entry.get_as_unicode_string("author"),
+        Some("José García".to_string())
+    );
+
+    assert_eq!(
+        entry.get_as_unicode_string("title"),
+        Some("α and β".to_string())
+    );
+
+    // Should work with numbers too
+    assert_eq!(
+        entry.get_as_unicode_string("year"),
+        Some("2024".to_string())
+    );
+
+    assert_eq!(
+        entry.get_as_unicode_string("note"),
+        Some("See Müller's work …".to_string())
+    );
+
+    // Case-insensitive version
+    assert_eq!(
+        entry.get_as_unicode_string_ignore_case("AUTHOR"),
+        Some("José García".to_string())
+    );
+}
+
+#[cfg(feature = "latex_to_unicode")]
+#[test]
+fn test_latex_to_unicode_all_fields() {
+    let input = r#"
+        @article{test,
+            author = "Jos\'e Garc\'ia",
+            title = "\\alpha and \\beta particles", 
+            note = "See also: M\\\"uller \\ldots",
+            journal = "Journal of \\gamma-ray Physics",
+            year = 2024
+        }
+    "#;
+
+    let db = Database::parser().parse(input).unwrap();
+    let entry = &db.entries()[0];
+
+    let unicode_fields = entry.fields_unicode();
+
+    // Should only include string literal fields (excludes year=2024 which is Number)
+    assert_eq!(unicode_fields.len(), 4);
+
+    let author = unicode_fields
+        .iter()
+        .find(|(k, _)| k == "author")
+        .map(|(_, v)| v.as_str())
+        .unwrap();
+    assert_eq!(author, "José García");
+
+    let title = unicode_fields
+        .iter()
+        .find(|(k, _)| k == "title")
+        .map(|(_, v)| v.as_str())
+        .unwrap();
+    assert_eq!(title, "α and β particles");
+
+    let note = unicode_fields
+        .iter()
+        .find(|(k, _)| k == "note")
+        .map(|(_, v)| v.as_str())
+        .unwrap();
+    assert_eq!(note, "See also: Müller …");
+
+    let journal = unicode_fields
+        .iter()
+        .find(|(k, _)| k == "journal")
+        .map(|(_, v)| v.as_str())
+        .unwrap();
+    assert_eq!(journal, "Journal of γ-ray Physics");
+}
+
+#[cfg(feature = "latex_to_unicode")]
+#[test]
+fn test_latex_to_unicode_comprehensive_accents() {
+    let input = r#"
+        @article{accents_test,
+            acute = "\\'{a}\\'{e}\\'{i}\\'{o}\\'{u}",
+            grave = "\\`{a}\\`{e}\\`{i}\\`{o}\\`{u}",
+            circumflex = "\\^{a}\\^{e}\\^{i}\\^{o}\\^{u}",
+            umlaut = "\\\"{a}\\\"{e}\\\"{i}\\\"{o}\\\"{u}",
+            tilde = "\\~{a}\\~{n}\\~{o}",
+            cedilla = "\\c{c}\\c{C}",
+            ring = "\\r{a}\\aa\\AA",
+            ligatures = "\\ae\\AE\\oe\\ss\\o\\O"
+        }
+    "#;
+
+    let db = Database::parser().parse(input).unwrap();
+    let entry = &db.entries()[0];
+
+    assert_eq!(entry.get_unicode("acute"), Some("áéíóú".to_string()));
+    assert_eq!(entry.get_unicode("grave"), Some("àèìòù".to_string()));
+    assert_eq!(entry.get_unicode("circumflex"), Some("âêîôû".to_string()));
+    assert_eq!(entry.get_unicode("umlaut"), Some("äëïöü".to_string()));
+    assert_eq!(entry.get_unicode("tilde"), Some("ãñõ".to_string()));
+    assert_eq!(entry.get_unicode("cedilla"), Some("çÇ".to_string()));
+    assert_eq!(entry.get_unicode("ring"), Some("ååÅ".to_string())); // Multiple representations
+    assert_eq!(entry.get_unicode("ligatures"), Some("æÆœßøØ".to_string()));
+}
+
+#[cfg(feature = "latex_to_unicode")]
+#[test]
+fn test_latex_to_unicode_greek_letters() {
+    let input = r#"
+        @article{greek_test,
+            lowercase = "\\alpha \\beta \\gamma \\delta \\epsilon \\lambda \\mu \\pi \\sigma \\omega",
+            uppercase = "\\Gamma \\Delta \\Lambda \\Pi \\Sigma \\Omega",
+            math_context = "The \\alpha-particle has energy \\sim 5 MeV"
+        }
+    "#;
+
+    let db = Database::parser().parse(input).unwrap();
+    let entry = &db.entries()[0];
+
+    assert_eq!(
+        entry.get_unicode("lowercase"),
+        Some("α β γ δ ε λ μ π σ ω".to_string())
+    );
+
+    assert_eq!(
+        entry.get_unicode("uppercase"),
+        Some("Γ Δ Λ Π Σ Ω".to_string())
+    );
+
+    assert_eq!(
+        entry.get_unicode("math_context"),
+        Some("The α-particle has energy ∼ 5 MeV".to_string())
+    );
+}
+
+#[cfg(feature = "latex_to_unicode")]
+#[test]
+fn test_latex_to_unicode_mathematical_symbols() {
+    let input = r#"
+        @article{math_test,
+            inequalities = "\\leq \\geq \\neq \\approx",
+            operators = "\\pm \\mp \\times \\div",
+            sets = "\\in \\notin \\subset \\cup \\cap",
+            arrows = "\\rightarrow \\leftarrow \\Rightarrow",
+            misc = "\\infty \\partial \\nabla \\ldots"
+        }
+    "#;
+
+    let db = Database::parser().parse(input).unwrap();
+    let entry = &db.entries()[0];
+
+    assert_eq!(
+        entry.get_unicode("inequalities"),
+        Some("≤ ≥ ≠ ≈".to_string())
+    );
+
+    assert_eq!(entry.get_unicode("operators"), Some("± ∓ × ÷".to_string()));
+
+    assert_eq!(entry.get_unicode("sets"), Some("∈ ∉ ⊂ ∪ ∩".to_string()));
+
+    assert_eq!(entry.get_unicode("arrows"), Some("→ ← ⇒".to_string()));
+
+    assert_eq!(entry.get_unicode("misc"), Some("∞ ∂ ∇ …".to_string()));
+}
+
+#[cfg(feature = "latex_to_unicode")]
+#[test]
+fn test_latex_to_unicode_symbols_and_punctuation() {
+    let input = r#"
+        @article{symbols_test,
+            escape_chars = "\\& \\% \\$ \\# \\\\ \\{ \\}",
+            quotes = "\\lq test\\rq and \\lqq nested\\rqq",
+            misc_symbols = "\\copyright \\textregistered \\texttrademark \\degree",
+            currency = "\\pounds \\textsterling",
+            tildes = "non~breaking~spaces"
+        }
+    "#;
+
+    let db = Database::parser().parse(input).unwrap();
+    let entry = &db.entries()[0];
+
+    assert_eq!(
+        entry.get_unicode("escape_chars"),
+        Some("& % $ # \\\\ { }".to_string())
+    );
+
+    assert_eq!(
+        entry.get_unicode("quotes"),
+        Some("'test' and \u{201c}nested\u{201d}".to_string())
+    );
+
+    assert_eq!(
+        entry.get_unicode("misc_symbols"),
+        Some("© ® ™ °".to_string())
+    );
+
+    assert_eq!(entry.get_unicode("currency"), Some("£ £".to_string()));
+
+    // Non-breaking spaces (tildes) should become regular spaces
+    assert_eq!(
+        entry.get_unicode("tildes"),
+        Some("non breaking spaces".to_string())
+    );
+}
+
+#[cfg(feature = "latex_to_unicode")]
+#[test]
+fn test_latex_to_unicode_mixed_content() {
+    let input = r#"
+        @article{mixed_test,
+            complex_title = "Schr\"{o}dinger's equation: $i\\hbar\\frac{\\partial}{\\partial t}\\psi = \\hat{H}\\psi$",
+            author_names = "M\\\"uller, Hans and Garc\\'ia, Jos\\'e and M\\o ller, \\O le",
+            institution = "Institut f\\\"ur Theoretische Physik, Universit\\\"at M\\\"unchen"
+        }
+    "#;
+
+    let db = Database::parser().parse(input).unwrap();
+    let entry = &db.entries()[0];
+
+    // Complex scientific text with mixed LaTeX
+    assert_eq!(
+        entry.get_unicode("complex_title"),
+        Some("Schrödinger's equation: $iℏ∂/∂t ψ = Ĥψ$".to_string())
+    );
+
+    // Multiple name formats
+    assert_eq!(
+        entry.get_unicode("author_names"),
+        Some("Müller, Hans and García, José and Møller, Øle".to_string())
+    );
+
+    // German institution with umlauts
+    assert_eq!(
+        entry.get_unicode("institution"),
+        Some("Institut für Theoretische Physik, Universität München".to_string())
+    );
+}
+
+#[cfg(feature = "latex_to_unicode")]
+#[test]
+fn test_latex_to_unicode_no_conversion() {
+    let input = r#"
+        @article{plain_test,
+            plain_title = "This is plain ASCII text",
+            no_latex = "No LaTeX sequences here",
+            mixed = "Some plain text with \\alpha mixed in"
+        }
+    "#;
+
+    let db = Database::parser().parse(input).unwrap();
+    let entry = &db.entries()[0];
+
+    // Plain text should be unchanged (fast path)
+    assert_eq!(
+        entry.get_unicode("plain_title"),
+        Some("This is plain ASCII text".to_string())
+    );
+
+    assert_eq!(
+        entry.get_unicode("no_latex"),
+        Some("No LaTeX sequences here".to_string())
+    );
+
+    // Mixed content should have partial conversion
+    assert_eq!(
+        entry.get_unicode("mixed"),
+        Some("Some plain text with α mixed in".to_string())
+    );
+}
+
+#[cfg(feature = "latex_to_unicode")]
+#[test]
+fn test_latex_to_unicode_edge_cases() {
+    let input = r#"
+        @article{edge_test,
+            incomplete_sequences = "\\\\ \\\\' incomplete",
+            unknown_commands = "\\unknown{test} \\xyz",
+            malformed = "\\' incomplete \\c",
+            empty = "",
+            backslashes = "C:\\\\path\\\\to\\\\file"
+        }
+    "#;
+
+    let db = Database::parser().parse(input).unwrap();
+    let entry = &db.entries()[0];
+
+    // Incomplete/unknown sequences should be left unchanged
+    // BibTeX stores "\\\\ \\\\'" as 4 backslashes + space + 2 backslashes + apostrophe
+    // The 4 backslashes get normalized to 2
+    assert_eq!(
+        entry.get_unicode("incomplete_sequences"),
+        Some("\\\\ \\\\' incomplete".to_string())
+    );
+
+    // Unknown commands: BibTeX stores with doubled backslashes
+    // but they're not converted since they're not recognized LaTeX
+    assert_eq!(
+        entry.get_unicode("unknown_commands"),
+        Some("\\\\unknown{test} \\\\xyz".to_string())
+    );
+
+    // Malformed sequences: BibTeX stores with doubled backslashes
+    assert_eq!(
+        entry.get_unicode("malformed"),
+        Some("\\\\' incomplete \\\\c".to_string())
+    );
+
+    assert_eq!(entry.get_unicode("empty"), Some("".to_string()));
+
+    // Windows paths: BibTeX stores with 4 backslashes per backslash
+    // These get normalized to 2 backslashes each
+    assert_eq!(
+        entry.get_unicode("backslashes"),
+        Some("C:\\\\path\\\\to\\\\file".to_string())
+    );
+}
+
+#[cfg(feature = "latex_to_unicode")]
+#[test]
+fn test_latex_to_unicode_performance_regression() {
+    // Test that enabling unicode feature doesn't significantly slow down parsing
+    let input = r#"
+        @article{performance_test,
+            author = "Hans M\\\"uller and Fran\\c{c}ois Dupont",
+            title = "Research on \\alpha-decay and \\beta-emission",
+            journal = "Journal f\\\"ur Kernphysik",
+            year = 2024,
+            note = "See Schr\\\"odinger's work \\ldots"
+        }
+    "#
+    .repeat(100);
+
+    let start = std::time::Instant::now();
+    let db = Database::parser().parse(&input).unwrap();
+    let parse_time = start.elapsed();
+
+    // Parsing should still be fast even with unicode feature enabled
+    assert!(
+        parse_time.as_millis() < 100,
+        "Parsing with unicode feature took too long: {:?}",
+        parse_time
+    );
+
+    assert_eq!(db.entries().len(), 100);
+
+    // Test that unicode conversion itself is reasonably fast
+    let start = std::time::Instant::now();
+    for entry in db.entries() {
+        let _ = entry.get_unicode("author");
+        let _ = entry.get_unicode("title");
+        let _ = entry.get_unicode("note");
+    }
+    let unicode_time = start.elapsed();
+
+    assert!(
+        unicode_time.as_millis() < 50,
+        "Unicode conversion took too long: {:?}",
+        unicode_time
+    );
+}
+
+#[cfg(feature = "latex_to_unicode")]
+#[test]
+fn test_latex_to_unicode_with_string_expansion() {
+    let input = r#"
+        @string{institution = "Institut f\\\"ur Physik"}
+        @string{title_prefix = "\\alpha-particle studies at "}
+        
+        @article{expanded_test,
+            author = "M\\\"uller, Hans",
+            title = title_prefix # institution,
+            note = "See also \\ldots"
+        }
+    "#;
+
+    let db = Database::parser().parse(&input).unwrap();
+    let entry = &db.entries()[0];
+
+    // String expansion happens before unicode conversion
+    assert_eq!(
+        entry.get_unicode("author"),
+        Some("Müller, Hans".to_string())
+    );
+
+    assert_eq!(
+        entry.get_unicode("title"),
+        Some("α-particle studies at Institut für Physik".to_string())
+    );
+
+    assert_eq!(entry.get_unicode("note"), Some("See also …".to_string()));
+}
+
+#[cfg(feature = "latex_to_unicode")]
+#[test]
+fn test_latex_to_unicode_doctest_examples() {
+    // Test examples from the documentation
+    let input1 = r#"@article{test, author = "Jos\'e Garc\'ia"}"#;
+    let db1 = Database::parser().parse(input1).unwrap();
+    let entry1 = &db1.entries()[0];
+    assert_eq!(
+        entry1.get_unicode("author"),
+        Some("José García".to_string())
+    );
+
+    let input2 = r#"@article{test, TITLE = "M\\\"uller's work"}"#;
+    let db2 = Database::parser().parse(input2).unwrap();
+    let entry2 = &db2.entries()[0];
+    assert_eq!(
+        entry2.get_unicode_ignore_case("title"),
+        Some("Müller's work".to_string())
+    );
+}
+
+// Test that methods don't exist when feature is disabled
+#[cfg(not(feature = "latex_to_unicode"))]
+#[test]
+fn test_latex_to_unicode_methods_not_available() {
+    let input = r#"@article{test, author = "Jos\'e"}"#;
+    let db = Database::parser().parse(input).unwrap();
+    let entry = &db.entries()[0];
+
+    // These methods should not exist when feature is disabled
+    // This is a compile-time test - if this compiles, the feature-gating worked
+
+    // entry.get_unicode("author"); // Should not compile
+    // entry.get_unicode_ignore_case("author"); // Should not compile
+    // entry.fields_unicode(); // Should not compile
+
+    // Regular methods should still work
+    assert_eq!(entry.get("author"), Some("Jos\\'e"));
 }

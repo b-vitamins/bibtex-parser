@@ -187,19 +187,19 @@ pub enum ParsedItem<'a> {
     /// Contains the entry in its raw parsed form with field values that may
     /// reference string variables or contain concatenations.
     Entry(crate::Entry<'a>),
-    
+
     /// A string definition (`@string{name = value}`)
     ///
     /// Contains the variable name and its value. The value itself may contain
     /// references to other string variables or concatenations.
     String(&'a str, crate::Value<'a>),
-    
+
     /// A preamble (`@preamble{value}`)
     ///
     /// Contains the preamble value, which may reference string variables
     /// or contain concatenations.
     Preamble(crate::Value<'a>),
-    
+
     /// A comment (both `% line comment` and `@comment{...}`)
     ///
     /// Contains the raw comment text exactly as it appears in the source,

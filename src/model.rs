@@ -53,7 +53,7 @@ impl ValidationError {
             severity: ValidationSeverity::Error,
         }
     }
-    
+
     /// Create a new warning-level validation error
     #[must_use]
     pub fn warning(field: Option<&str>, message: impl Into<String>) -> Self {
@@ -63,7 +63,7 @@ impl ValidationError {
             severity: ValidationSeverity::Warning,
         }
     }
-    
+
     /// Create a new info-level validation error
     #[must_use]
     pub fn info(field: Option<&str>, message: impl Into<String>) -> Self {
@@ -196,10 +196,10 @@ impl<'a> Entry<'a> {
     /// Returns Ok(()) if valid, or Err with a list of validation errors
     pub fn validate(&self, level: ValidationLevel) -> Result<(), Vec<ValidationError>> {
         let mut errors = Vec::new();
-        
+
         // Always check required fields
         self.validate_required_fields(&mut errors);
-        
+
         match level {
             ValidationLevel::Minimal => {
                 // Only required fields
@@ -215,14 +215,14 @@ impl<'a> Entry<'a> {
                 self.validate_cross_references(&mut errors);
             }
         }
-        
+
         if errors.is_empty() {
             Ok(())
         } else {
             Err(errors)
         }
     }
-    
+
     /// Validate required fields for the entry type
     fn validate_required_fields(&self, errors: &mut Vec<ValidationError>) {
         // Special handling for book entries which can have either author or editor
@@ -233,7 +233,10 @@ impl<'a> Entry<'a> {
                     if !self.has_field(field) {
                         errors.push(ValidationError::error(
                             Some(field),
-                            format!("Required field '{}' is missing for {} entry", field, self.ty)
+                            format!(
+                                "Required field '{}' is missing for {} entry",
+                                field, self.ty
+                            ),
                         ));
                     }
                 }
@@ -241,81 +244,84 @@ impl<'a> Entry<'a> {
                 if !self.has_field("author") && !self.has_field("editor") {
                     errors.push(ValidationError::error(
                         None,
-                        "Book entry must have either 'author' or 'editor' field"
+                        "Book entry must have either 'author' or 'editor' field",
                     ));
                 }
-            },
+            }
             _ => {
                 // Standard required field checking
                 for &field in self.ty.required_fields() {
                     if !self.has_field(field) {
                         errors.push(ValidationError::error(
                             Some(field),
-                            format!("Required field '{}' is missing for {} entry", field, self.ty)
+                            format!(
+                                "Required field '{}' is missing for {} entry",
+                                field, self.ty
+                            ),
                         ));
                     }
                 }
             }
         }
     }
-    
+
     /// Validate common issues that might cause problems
     fn validate_common_issues(&self, errors: &mut Vec<ValidationError>) {
         // Check for common issues
-        
+
         // Year should be a valid number and recent
         if let Some(year_str) = self.get_as_string_ignore_case("year") {
             if let Ok(year) = year_str.parse::<i32>() {
                 if year < 1000 || year > 2100 {
                     errors.push(ValidationError::warning(
                         Some("year"),
-                        format!("Year {} seems unlikely", year)
+                        format!("Year {} seems unlikely", year),
                     ));
                 }
             } else {
                 errors.push(ValidationError::warning(
                     Some("year"),
-                    "Year should be a number"
+                    "Year should be a number",
                 ));
             }
         }
-        
+
         // Pages should have valid format (e.g., "12-24" or "12--24")
         if let Some(pages) = self.get_ignore_case("pages") {
             if !is_valid_page_range(pages) {
                 errors.push(ValidationError::warning(
                     Some("pages"),
-                    "Pages should be in format '12-34' or '12--34'"
+                    "Pages should be in format '12-34' or '12--34'",
                 ));
             }
         }
-        
+
         // Author and editor shouldn't both be missing for some types (but not books, handled above)
         match self.ty {
             EntryType::InBook | EntryType::InProceedings => {
                 if !self.has_field("author") && !self.has_field("editor") {
                     errors.push(ValidationError::warning(
                         None,
-                        "Entry should have either 'author' or 'editor' field"
+                        "Entry should have either 'author' or 'editor' field",
                     ));
                 }
             }
             _ => {}
         }
-        
+
         // Check for empty fields
         for field in &self.fields {
             if let Some(value_str) = field.value.as_str() {
                 if value_str.trim().is_empty() {
                     errors.push(ValidationError::warning(
                         Some(&field.name),
-                        "Field has empty value"
+                        "Field has empty value",
                     ));
                 }
             }
         }
     }
-    
+
     /// Validate specific field formats for strict checking
     fn validate_field_formats(&self, errors: &mut Vec<ValidationError>) {
         // DOI format
@@ -323,77 +329,190 @@ impl<'a> Entry<'a> {
             if !doi.starts_with("10.") {
                 errors.push(ValidationError::warning(
                     Some("doi"),
-                    "DOI should start with '10.'"
+                    "DOI should start with '10.'",
                 ));
             }
         }
-        
+
         // URL format
         if let Some(url) = self.get_ignore_case("url") {
             if !url.starts_with("http://") && !url.starts_with("https://") {
                 errors.push(ValidationError::warning(
                     Some("url"),
-                    "URL should start with http:// or https://"
+                    "URL should start with http:// or https://",
                 ));
             }
         }
-        
+
         // ISBN format (basic check)
         if let Some(isbn) = self.get_ignore_case("isbn") {
             let digits_only: String = isbn.chars().filter(|c| c.is_ascii_digit()).collect();
             if digits_only.len() != 10 && digits_only.len() != 13 {
                 errors.push(ValidationError::warning(
                     Some("isbn"),
-                    "ISBN should have 10 or 13 digits"
+                    "ISBN should have 10 or 13 digits",
                 ));
             }
         }
-        
+
         // Month should be valid
         if let Some(month) = self.get_ignore_case("month") {
             if !is_valid_month(month) {
                 errors.push(ValidationError::info(
                     Some("month"),
-                    "Month should be a standard abbreviation (jan, feb, etc.) or full name"
+                    "Month should be a standard abbreviation (jan, feb, etc.) or full name",
                 ));
             }
         }
-        
+
         // Volume and number should be numeric if present
         for field_name in &["volume", "number"] {
             if let Some(value) = self.get_ignore_case(field_name) {
                 if value.parse::<i32>().is_err() && !value.contains('-') {
                     errors.push(ValidationError::info(
                         Some(field_name),
-                        format!("{} should typically be numeric", field_name)
+                        format!("{} should typically be numeric", field_name),
                     ));
                 }
             }
         }
     }
-    
+
     /// Validate cross-references for strict checking
     fn validate_cross_references(&self, errors: &mut Vec<ValidationError>) {
         if let Some(crossref) = self.get_ignore_case("crossref") {
             if crossref.trim().is_empty() {
                 errors.push(ValidationError::error(
                     Some("crossref"),
-                    "Cross-reference is empty"
+                    "Cross-reference is empty",
                 ));
             }
         }
     }
-    
+
     /// Helper to check if entry has a field (case-insensitive)
     fn has_field(&self, name: &str) -> bool {
-        self.get_ignore_case(name).is_some() 
-            || self.get_as_string_ignore_case(name).is_some()
+        self.get_ignore_case(name).is_some() || self.get_as_string_ignore_case(name).is_some()
     }
 
     /// Check if entry has all required fields for its type (backward compatible)
     #[must_use]
     pub fn is_valid(&self) -> bool {
         self.validate(ValidationLevel::Minimal).is_ok()
+    }
+
+    /// Get a field value with LaTeX sequences converted to Unicode (case-sensitive)
+    ///
+    /// This method converts common LaTeX escape sequences like `\'e` to `é` and `\"{o}` to `ö`.
+    /// Returns `None` if the field doesn't exist or isn't a string literal.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[cfg(feature = "latex_to_unicode")]
+    /// # {
+    /// # use bibtex_parser::Database;
+    /// let bibtex = r#"@article{test, author = "Jos\'e Garc\'ia"}"#;
+    /// let db = Database::parser().parse(bibtex).unwrap();
+    /// let entry = &db.entries()[0];
+    /// assert_eq!(entry.get_unicode("author"), Some("José García".to_string()));
+    /// # }
+    /// ```
+    #[cfg(feature = "latex_to_unicode")]
+    #[must_use]
+    pub fn get_unicode(&self, name: &str) -> Option<String> {
+        self.get(name)
+            .map(|s| crate::latex_unicode::latex_to_unicode(s))
+    }
+
+    /// Get a field value with LaTeX sequences converted to Unicode (case-insensitive)
+    ///
+    /// This method converts common LaTeX escape sequences like `\'e` to `é` and `\"{o}` to `ö`.
+    /// Returns `None` if the field doesn't exist or isn't a string literal.
+    /// Field name matching is case-insensitive.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[cfg(feature = "latex_to_unicode")]
+    /// # {
+    /// # use bibtex_parser::Database;
+    /// let bibtex = r#"@article{test, TITLE = "M\\\"uller's work"}"#;
+    /// let db = Database::parser().parse(bibtex).unwrap();
+    /// let entry = &db.entries()[0];
+    /// assert_eq!(entry.get_unicode_ignore_case("title"), Some("Müller's work".to_string()));
+    /// # }
+    /// ```
+    #[cfg(feature = "latex_to_unicode")]
+    #[must_use]
+    pub fn get_unicode_ignore_case(&self, name: &str) -> Option<String> {
+        self.get_ignore_case(name)
+            .map(|s| crate::latex_unicode::latex_to_unicode(s))
+    }
+
+    /// Get a field value as string with LaTeX conversion (case-sensitive)
+    ///
+    /// Similar to `get_as_string()` but converts LaTeX sequences to Unicode.
+    /// This handles all field types (literals, numbers, variables, concatenations).
+    #[cfg(feature = "latex_to_unicode")]
+    #[must_use]
+    pub fn get_as_unicode_string(&self, name: &str) -> Option<String> {
+        self.get_as_string(name)
+            .map(|s| crate::latex_unicode::latex_to_unicode(&s))
+    }
+
+    /// Get a field value as string with LaTeX conversion (case-insensitive)
+    ///
+    /// Similar to `get_as_string_ignore_case()` but converts LaTeX sequences to Unicode.
+    /// This handles all field types (literals, numbers, variables, concatenations).
+    #[cfg(feature = "latex_to_unicode")]
+    #[must_use]
+    pub fn get_as_unicode_string_ignore_case(&self, name: &str) -> Option<String> {
+        self.get_as_string_ignore_case(name)
+            .map(|s| crate::latex_unicode::latex_to_unicode(&s))
+    }
+
+    /// Get all fields with LaTeX converted to Unicode
+    ///
+    /// Returns a vector of (field_name, unicode_value) pairs for all string literal fields.
+    /// Non-string fields (numbers, variables) are excluded.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[cfg(feature = "latex_to_unicode")]
+    /// # {
+    /// # use bibtex_parser::Database;
+    /// let bibtex = r#"@article{test,
+    ///     author = "Jos\'e Garc\'ia",
+    ///     title = "\\alpha and \\beta particles",
+    ///     year = 2024
+    /// }"#;
+    /// let db = Database::parser().parse(bibtex).unwrap();
+    /// let entry = &db.entries()[0];
+    /// let unicode_fields = entry.fields_unicode();
+    ///
+    /// let author = unicode_fields.iter()
+    ///     .find(|(k, _)| k == "author")
+    ///     .map(|(_, v)| v.as_str())
+    ///     .unwrap();
+    /// assert_eq!(author, "José García");
+    /// # }
+    /// ```
+    #[cfg(feature = "latex_to_unicode")]
+    #[must_use]
+    pub fn fields_unicode(&self) -> Vec<(String, String)> {
+        self.fields
+            .iter()
+            .filter_map(|f| {
+                f.value.as_str().map(|s| {
+                    (
+                        f.name.to_string(),
+                        crate::latex_unicode::latex_to_unicode(s),
+                    )
+                })
+            })
+            .collect()
     }
 
     /// Convert to owned version
@@ -638,24 +757,24 @@ fn is_valid_page_range(pages: &str) -> bool {
     if pages.trim().is_empty() {
         return false;
     }
-    
+
     // Accept single page numbers
     if pages.chars().all(|c| c.is_ascii_digit()) {
         return true;
     }
-    
+
     // Check for range patterns - must contain dash or comma
     if !pages.contains('-') && !pages.contains(',') {
         return false;
     }
-    
+
     // Split by comma for multiple ranges
     for range in pages.split(',') {
         let range = range.trim();
         if range.is_empty() {
             continue;
         }
-        
+
         // Check individual range
         if range.contains("--") {
             // LaTeX-style double dash
@@ -671,7 +790,7 @@ fn is_valid_page_range(pages: &str) -> bool {
             }
         }
     }
-    
+
     true
 }
 
@@ -679,12 +798,32 @@ fn is_valid_page_range(pages: &str) -> bool {
 /// Accepts standard month abbreviations and full month names
 fn is_valid_month(month: &str) -> bool {
     let month_lower = month.to_lowercase();
-    
+
     // Standard BibTeX month abbreviations and full names
-    matches!(month_lower.as_str(),
-        "jan" | "feb" | "mar" | "apr" | "may" | "jun" |
-        "jul" | "aug" | "sep" | "oct" | "nov" | "dec" |
-        "january" | "february" | "march" | "april" | "june" |
-        "july" | "august" | "september" | "october" | "november" | "december"
+    matches!(
+        month_lower.as_str(),
+        "jan"
+            | "feb"
+            | "mar"
+            | "apr"
+            | "may"
+            | "jun"
+            | "jul"
+            | "aug"
+            | "sep"
+            | "oct"
+            | "nov"
+            | "dec"
+            | "january"
+            | "february"
+            | "march"
+            | "april"
+            | "june"
+            | "july"
+            | "august"
+            | "september"
+            | "october"
+            | "november"
+            | "december"
     ) || month.parse::<i32>().is_ok_and(|m| (1..=12).contains(&m))
 }

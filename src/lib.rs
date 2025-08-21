@@ -1,4 +1,4 @@
-#![allow(clippy::multiple_crate_versions)]
+#![allow(clippy::multiple_crate_versions, clippy::must_use_candidate)]
 #![deny(clippy::all)]
 #![warn(clippy::pedantic)]
 //! # bibtex-parser
@@ -56,21 +56,26 @@ pub mod error;
 pub mod model;
 pub mod parser;
 
+#[cfg(feature = "latex_to_unicode")]
+pub mod latex_unicode;
+
 mod database;
 mod writer;
 
-pub use database::{Database, DatabaseBuilder, ParseOptions, ValidationReport, IssueSummary};
+pub use database::{Database, DatabaseBuilder, IssueSummary, ParseOptions, ValidationReport};
 pub use error::{Error, Result};
-pub use model::{Entry, EntryType, Field, Value, ValidationLevel, ValidationError, ValidationSeverity};
+pub use model::{
+    Entry, EntryType, Field, ValidationError, ValidationLevel, ValidationSeverity, Value,
+};
 pub use parser::{parse_bibtex, ParsedItem};
 pub use writer::{to_file, to_string, Writer};
 
 /// Re-export of common parser functions
 pub mod prelude {
     pub use crate::{
-        Database, DatabaseBuilder, Entry, EntryType, Error, ParseOptions, ParsedItem, Result, Value,
-        ValidationLevel, ValidationError, ValidationSeverity, ValidationReport, IssueSummary,
-        parse_bibtex,
+        parse_bibtex, Database, DatabaseBuilder, Entry, EntryType, Error, IssueSummary,
+        ParseOptions, ParsedItem, Result, ValidationError, ValidationLevel, ValidationReport,
+        ValidationSeverity, Value,
     };
 }
 

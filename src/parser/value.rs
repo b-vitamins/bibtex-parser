@@ -76,30 +76,32 @@ fn parse_braced_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
 /// This handles cases like "2024a", "12b", "1.2.3", etc.
 fn parse_number_or_digit_string<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
     let start_input = *input;
-    
+
     // Try to parse as a pure number first, but only if it consumes a complete token
     if let Ok(num) = lexer::number(input) {
         // Check if number consumed entire token (next char should be whitespace, delimiter, or end)
-        if input.is_empty() || input.chars().next().map_or(true, |c| {
-            c.is_whitespace() || c == ',' || c == '}' || c == ')' || c == '#'
-        }) {
+        if input.is_empty()
+            || input.chars().next().map_or(true, |c| {
+                c.is_whitespace() || c == ',' || c == '}' || c == ')' || c == '#'
+            })
+        {
             return Ok(Value::Number(num));
         }
     }
-    
+
     // Reset input and try to parse as identifier starting with digit
     *input = start_input;
-    
+
     // Check if first character is a digit - if not, this parser doesn't apply
     if !input.chars().next().map_or(false, |c| c.is_ascii_digit()) {
         return Err(winnow::error::ErrMode::Backtrack(
             winnow::error::ContextError::default(),
         ));
     }
-    
+
     // Parse as identifier (allows digits, letters, hyphens, dots, etc.)
     let ident = lexer::identifier(input)?;
-    
+
     // Since it starts with a digit, treat as string literal
     Ok(Value::Literal(Cow::Borrowed(ident)))
 }

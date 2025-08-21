@@ -37,34 +37,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         
         @misc{empty_entry, title="Minimal Entry"}
     "#;
-    
+
     let db = Database::parser().parse(bibtex)?;
-    
+
     println!("=== BibTeX Validation Report ===\n");
-    
+
     // Basic validation statistics
     println!("Total entries: {}", db.entries().len());
     println!("Total strings: {}", db.strings().len());
     println!("Total preambles: {}", db.preambles().len());
     println!("Total comments: {}\n", db.comments().len());
-    
+
     // Demonstrate different validation levels
     println!("=== Validation by Level ===");
-    
+
     for (level_name, level) in [
         ("Minimal", ValidationLevel::Minimal),
-        ("Standard", ValidationLevel::Standard), 
-        ("Strict", ValidationLevel::Strict)
+        ("Standard", ValidationLevel::Standard),
+        ("Strict", ValidationLevel::Strict),
     ] {
         println!("\n--- {} Validation ---", level_name);
         let invalid = db.validate(level);
-        
+
         if invalid.is_empty() {
             println!("✓ All entries are valid!");
         } else {
             println!("✗ Found {} entries with issues:", invalid.len());
             for (index, entry, errors) in &invalid {
-                println!("  Entry {} ({}): {} issue(s)", index, entry.key(), errors.len());
+                println!(
+                    "  Entry {} ({}): {} issue(s)",
+                    index,
+                    entry.key(),
+                    errors.len()
+                );
                 for error in errors {
                     let field = error.field.as_deref().unwrap_or("<entry>");
                     println!("    [{:?}] {}: {}", error.severity, field, error.message);
@@ -72,11 +77,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    
+
     // Comprehensive validation report
     println!("\n=== Comprehensive Validation Report ===");
     let report = db.validate_comprehensive(ValidationLevel::Standard);
-    
+
     if report.is_valid() {
         println!("✓ Database is completely valid!");
     } else {
@@ -85,7 +90,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  - {} errors", summary.errors);
         println!("  - {} warnings", summary.warnings);
         println!("  - {} info messages", summary.infos);
-        
+
         // Show duplicate keys
         if !report.duplicate_keys.is_empty() {
             println!("\n🔄 Duplicate Keys:");
@@ -93,7 +98,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("  - {}", key);
             }
         }
-        
+
         // Show empty entries
         if !report.empty_entries.is_empty() {
             println!("\n📝 Empty Entries:");
@@ -101,7 +106,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("  - Entry {} ({}): no fields", index, entry.key());
             }
         }
-        
+
         // Show validation issues by entry
         if !report.invalid_entries.is_empty() {
             println!("\n⚠️  Validation Issues:");
@@ -114,26 +119,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    
+
     // Individual entry validation examples
     println!("\n=== Individual Entry Validation ===");
-    
+
     for (i, entry) in db.entries().iter().enumerate() {
         println!("\nEntry {}: {}", i, entry.key());
-        
+
         // Quick check
         if entry.is_valid() {
             println!("  ✓ Has all required fields");
         } else {
             println!("  ✗ Missing required fields");
         }
-        
+
         // Detailed validation
         match entry.validate(ValidationLevel::Strict) {
             Ok(()) => println!("  ✓ Passes strict validation"),
             Err(errors) => {
                 println!("  ✗ {} validation issue(s):", errors.len());
-                for error in &errors[..3.min(errors.len())] { // Show up to 3 errors
+                for error in &errors[..3.min(errors.len())] {
+                    // Show up to 3 errors
                     let field = error.field.as_deref().unwrap_or("<entry>");
                     println!("    - {}: {}", field, error.message);
                 }
@@ -143,7 +149,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    
+
     // Show some valid entries for comparison
     println!("\n=== Valid Entry Examples ===");
     for entry in db.entries() {
@@ -160,10 +166,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    
+
     println!("\n=== Performance Note ===");
     println!("Validation is opt-in and has zero cost when not used.");
     println!("Parsing performance remains unaffected: ~700 MB/s throughput maintained.");
-    
+
     Ok(())
 }
