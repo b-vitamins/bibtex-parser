@@ -272,10 +272,10 @@ impl<'a> Entry<'a> {
         // Year should be a valid number and recent
         if let Some(year_str) = self.get_as_string_ignore_case("year") {
             if let Ok(year) = year_str.parse::<i32>() {
-                if year < 1000 || year > 2100 {
+                if !(1000..=2100).contains(&year) {
                     errors.push(ValidationError::warning(
                         Some("year"),
-                        format!("Year {} seems unlikely", year),
+                        format!("Year {year} seems unlikely"),
                     ));
                 }
             } else {
@@ -346,7 +346,7 @@ impl<'a> Entry<'a> {
 
         // ISBN format (basic check)
         if let Some(isbn) = self.get_ignore_case("isbn") {
-            let digits_only: String = isbn.chars().filter(|c| c.is_ascii_digit()).collect();
+            let digits_only: String = isbn.chars().filter(char::is_ascii_digit).collect();
             if digits_only.len() != 10 && digits_only.len() != 13 {
                 errors.push(ValidationError::warning(
                     Some("isbn"),
@@ -371,7 +371,7 @@ impl<'a> Entry<'a> {
                 if value.parse::<i32>().is_err() && !value.contains('-') {
                     errors.push(ValidationError::info(
                         Some(field_name),
-                        format!("{} should typically be numeric", field_name),
+                        format!("{field_name} should typically be numeric"),
                     ));
                 }
             }
@@ -421,8 +421,7 @@ impl<'a> Entry<'a> {
     #[cfg(feature = "latex_to_unicode")]
     #[must_use]
     pub fn get_unicode(&self, name: &str) -> Option<String> {
-        self.get(name)
-            .map(|s| crate::latex_unicode::latex_to_unicode(s))
+        self.get(name).map(crate::latex_unicode::latex_to_unicode)
     }
 
     /// Get a field value with LaTeX sequences converted to Unicode (case-insensitive)
@@ -447,7 +446,7 @@ impl<'a> Entry<'a> {
     #[must_use]
     pub fn get_unicode_ignore_case(&self, name: &str) -> Option<String> {
         self.get_ignore_case(name)
-            .map(|s| crate::latex_unicode::latex_to_unicode(s))
+            .map(crate::latex_unicode::latex_to_unicode)
     }
 
     /// Get a field value as string with LaTeX conversion (case-sensitive)
@@ -474,7 +473,7 @@ impl<'a> Entry<'a> {
 
     /// Get all fields with LaTeX converted to Unicode
     ///
-    /// Returns a vector of (field_name, unicode_value) pairs for all string literal fields.
+    /// Returns a vector of (`field_name`, `unicode_value`) pairs for all string literal fields.
     /// Non-string fields (numbers, variables) are excluded.
     ///
     /// # Examples

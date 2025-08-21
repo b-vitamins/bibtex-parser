@@ -1,4 +1,3 @@
-#![allow(clippy::multiple_crate_versions, clippy::must_use_candidate)]
 #![deny(clippy::all)]
 #![warn(clippy::pedantic)]
 //! # bibtex-parser
@@ -49,7 +48,8 @@
 #![allow(
     clippy::module_name_repetitions,
     clippy::missing_errors_doc,
-    clippy::missing_panics_doc
+    clippy::missing_panics_doc,
+    clippy::multiple_crate_versions
 )]
 
 pub mod error;

@@ -290,12 +290,15 @@ impl<'a> Database<'a> {
     fn merge_databases_parallel(databases: Vec<Database<'static>>) -> Database<'static> {
         use rayon::prelude::*;
 
-        // Move entries out for parallel merging while collecting other data
-        let mut others: Vec<(
+        // Type alias to simplify complex type
+        type DatabaseComponents = (
             AHashMap<Cow<'static, str>, Value<'static>>,
             Vec<Value<'static>>,
             Vec<Cow<'static, str>>,
-        )> = Vec::with_capacity(databases.len());
+        );
+
+        // Move entries out for parallel merging while collecting other data
+        let mut others: Vec<DatabaseComponents> = Vec::with_capacity(databases.len());
         let entry_vecs: Vec<Vec<Entry<'static>>> = databases
             .into_iter()
             .map(|db| {
@@ -562,6 +565,7 @@ impl<'a> Database<'a> {
 
     /// Validate all entries in the database
     /// Returns a list of entries with their indices and validation errors
+    #[must_use]
     pub fn validate(
         &self,
         level: ValidationLevel,
@@ -579,6 +583,7 @@ impl<'a> Database<'a> {
 
     /// Check for duplicate citation keys
     /// Returns a list of duplicate keys (each key appears once in the list even if it has multiple duplicates)
+    #[must_use]
     pub fn find_duplicate_keys(&self) -> Vec<&str> {
         let mut seen = std::collections::HashSet::new();
         let mut duplicates = std::collections::HashSet::new();
@@ -593,6 +598,7 @@ impl<'a> Database<'a> {
     }
 
     /// Validate all entries and return a comprehensive validation report
+    #[must_use]
     pub fn validate_comprehensive(&self, level: ValidationLevel) -> ValidationReport<'_> {
         let invalid_entries = self.validate(level);
         let duplicate_keys = self.find_duplicate_keys();
@@ -967,12 +973,13 @@ mod tests {
 
         #[cfg(feature = "parallel")]
         {
+            use std::fs::write;
+            
             // Parallel only works for multiple files
             let db3 = Database::parser().threads(4).parse(input).unwrap();
             assert_eq!(db3.entries().len(), 1);
 
             // Multi-file parallel processing
-            use std::fs::write;
             let path1 = "/tmp/test1.bib";
             let path2 = "/tmp/test2.bib";
             write(path1, "@article{a1, title=\"A\"}").unwrap();
