@@ -291,7 +291,7 @@ fn test_all_month_abbreviations() {
 
     for (abbrev, full_name) in &months {
         let input = format!(r#"@article{{test, month = {}}}"#, abbrev);
-        let db = Database::parser().parse(input).unwrap();
+        let db = Database::parser().parse(&input).unwrap();
         let entry = &db.entries()[0];
 
         assert_eq!(
@@ -310,7 +310,7 @@ fn test_month_abbreviations_case_insensitive() {
 
     for variation in &variations {
         let input = format!(r#"@article{{test, month = {}}}"#, variation);
-        let db = Database::parser().parse(input).unwrap();
+        let db = Database::parser().parse(&input).unwrap();
         let entry = &db.entries()[0];
 
         assert_eq!(
@@ -2061,7 +2061,7 @@ fn test_validation_performance() {
     "#
     .repeat(100);
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Database::parser().parse(&input).unwrap();
 
     // Measure validation time
     let start = std::time::Instant::now();
@@ -2115,7 +2115,7 @@ fn test_validation_zero_cost_when_not_used() {
     let input = "@article{test, author=\"A\", title=\"T\", journal=\"J\", year=2024}".repeat(1000);
 
     let start = std::time::Instant::now();
-    let db = Database::parser().parse(input).unwrap();
+    let db = Database::parser().parse(&input).unwrap();
     let parse_duration = start.elapsed();
 
     // Parsing should still be fast
@@ -2545,7 +2545,7 @@ fn test_latex_to_unicode_performance_regression() {
     .repeat(100);
 
     let start = std::time::Instant::now();
-    let db = Database::parser().parse(input).unwrap();
+    let db = Database::parser().parse(&input).unwrap();
     let parse_time = start.elapsed();
 
     // Parsing should still be fast even with unicode feature enabled
