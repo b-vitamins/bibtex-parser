@@ -1,7 +1,23 @@
 //! Parser utilities
 
-use winnow::ascii::multispace0;
 use winnow::prelude::*;
+
+/// Fast inline whitespace skipping
+#[inline(always)]
+fn skip_whitespace(input: &mut &str) {
+    let bytes = input.as_bytes();
+    let mut pos = 0;
+    
+    // Unroll loop for common short whitespace runs
+    while pos < bytes.len() {
+        match bytes[pos] {
+            b' ' | b'\t' | b'\n' | b'\r' => pos += 1,
+            _ => break,
+        }
+    }
+    
+    *input = &input[pos..];
+}
 
 /// Make a parser whitespace-insensitive
 #[inline]
@@ -10,9 +26,9 @@ where
     F: Parser<&'a str, O, winnow::error::ContextError>,
 {
     move |input: &mut &'a str| {
-        let _ = multispace0.parse_next(input)?;
+        skip_whitespace(input);
         let output = parser.parse_next(input)?;
-        let _ = multispace0.parse_next(input)?;
+        skip_whitespace(input);
         Ok(output)
     }
 }
