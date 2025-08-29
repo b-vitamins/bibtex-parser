@@ -3,7 +3,7 @@
 use super::{lexer, utils, PResult};
 use crate::model::Value;
 use std::borrow::Cow;
-use winnow::combinator::{alt, separated};
+use winnow::combinator::separated;
 use winnow::prelude::*;
 
 /// Parse a BibTeX value (string, number, variable, or concatenation)
@@ -25,20 +25,29 @@ fn parse_concatenated_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
 }
 
 /// Parse a single value component
+#[inline]
 fn parse_single_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
-    alt((
-        parse_quoted_value,
-        parse_braced_value,
-        parse_number_or_digit_string,
-        parse_variable_value,
-    ))
-    .parse_next(input)
+    // Fast dispatch based on first character
+    let bytes = input.as_bytes();
+    if let Some(&first) = bytes.first() {
+        match first {
+            b'"' => parse_quoted_value(input),
+            b'{' => parse_braced_value(input),
+            b'0'..=b'9' | b'+' | b'-' => parse_number_or_digit_string(input),
+            _ => parse_variable_value(input),
+        }
+    } else {
+        Err(winnow::error::ErrMode::Backtrack(
+            winnow::error::ContextError::default(),
+        ))
+    }
 }
 
 /// Parse a quoted string value
 #[inline]
 fn parse_quoted_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
-    if !input.starts_with('"') {
+    // Quick check using byte access
+    if input.as_bytes().first() != Some(&b'"') {
         return Err(winnow::error::ErrMode::Backtrack(
             winnow::error::ContextError::default(),
         ));
@@ -52,28 +61,28 @@ fn parse_quoted_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
 /// Parse a braced string value
 #[inline]
 fn parse_braced_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
-    if !input.starts_with('{') {
+    // Quick check using byte access
+    let bytes = input.as_bytes();
+    if bytes.first() != Some(&b'{') {
         return Err(winnow::error::ErrMode::Backtrack(
             winnow::error::ContextError::default(),
         ));
     }
 
-    // Consume opening brace
-    *input = &input[1..];
-
-    // Parse balanced braces content
-    let content = lexer::balanced_braces(input)?;
-
-    // Consume closing brace
-    if input.starts_with('}') {
-        *input = &input[1..];
-    } else {
-        return Err(winnow::error::ErrMode::Backtrack(
-            winnow::error::ContextError::default(),
-        ));
-    }
-
-    Ok(Value::Literal(Cow::Borrowed(content)))
+    // Use SIMD-accelerated balanced brace finding
+    super::simd::find_balanced_braces(bytes).map_or_else(
+        || {
+            Err(winnow::error::ErrMode::Backtrack(
+                winnow::error::ContextError::default(),
+            ))
+        },
+        |end_pos| {
+            // Extract content (skip opening and closing braces)
+            let content = &input[1..end_pos - 1];
+            *input = &input[end_pos..];
+            Ok(Value::Literal(Cow::Borrowed(content)))
+        },
+    )
 }
 
 /// Parse either a number or a string that starts with digits
@@ -98,7 +107,7 @@ fn parse_number_or_digit_string<'a>(input: &mut &'a str) -> PResult<'a, Value<'a
     *input = start_input;
 
     // Check if first character is a digit - if not, this parser doesn't apply
-    if !input.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+    if !input.chars().next().is_some_and(|c| c.is_ascii_digit()) {
         return Err(winnow::error::ErrMode::Backtrack(
             winnow::error::ContextError::default(),
         ));

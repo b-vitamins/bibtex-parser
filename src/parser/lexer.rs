@@ -1,21 +1,28 @@
 //! Lexical analysis for BibTeX
 
 use super::{delimiter, PResult};
-use winnow::prelude::*;
 use memchr;
+use winnow::prelude::*;
 use winnow::{
     ascii::digit1,
     combinator::{alt, opt},
-    token::take_while,
 };
 
 /// Parse an identifier (letters, numbers, underscores, hyphens, colons)
 #[inline]
 pub fn identifier<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
-    take_while(1.., |c: char| {
-        c.is_alphanumeric() || c == '_' || c == '-' || c == ':' || c == '.'
-    })
-    .parse_next(input)
+    let bytes = input.as_bytes();
+    let len = super::simd::scan_identifier(bytes);
+
+    if len == 0 {
+        return Err(winnow::error::ErrMode::Backtrack(
+            winnow::error::ContextError::default(),
+        ));
+    }
+
+    let result = &input[..len];
+    *input = &input[len..];
+    Ok(result)
 }
 
 /// Parse a field name (same as identifier but typically lowercase)
@@ -30,13 +37,13 @@ pub fn balanced_braces<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
     let bytes = input.as_bytes();
     let mut depth = 0;
     let mut pos = 0;
-    
+
     // Use SIMD to find delimiters
     while pos < bytes.len() {
         // Find next delimiter using SIMD
         if let Some(offset) = memchr::memchr3(b'{', b'}', b'\\', &bytes[pos..]) {
             let idx = pos + offset;
-            
+
             // Include content up to delimiter
             match bytes[idx] {
                 b'{' => {
@@ -63,7 +70,7 @@ pub fn balanced_braces<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
             break;
         }
     }
-    
+
     Err(winnow::error::ErrMode::Backtrack(
         winnow::error::ContextError::default(),
     ))
@@ -73,18 +80,21 @@ pub fn balanced_braces<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
 #[inline]
 pub fn quoted_string<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
     let bytes = input.as_bytes();
-    
+
     // Use SIMD-accelerated quote scanning
-    if let Some(end_pos) = super::simd::find_balanced_quotes(bytes) {
-        // Extract the content (without the quotes)
-        let result = &input[1..end_pos-1];
-        *input = &input[end_pos..];
-        Ok(result)
-    } else {
-        Err(winnow::error::ErrMode::Backtrack(
-            winnow::error::ContextError::default(),
-        ))
-    }
+    super::simd::find_balanced_quotes(bytes).map_or_else(
+        || {
+            Err(winnow::error::ErrMode::Backtrack(
+                winnow::error::ContextError::default(),
+            ))
+        },
+        |end_pos| {
+            // Extract the content (without the quotes)
+            let result = &input[1..end_pos - 1];
+            *input = &input[end_pos..];
+            Ok(result)
+        },
+    )
 }
 
 /// Parse a number (integer)
@@ -111,13 +121,13 @@ pub fn balanced_parentheses<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
     let bytes = input.as_bytes();
     let mut depth = 0;
     let mut pos = 0;
-    
+
     // Use SIMD to find delimiters
     while pos < bytes.len() {
         // Find next delimiter using SIMD
         if let Some(offset) = memchr::memchr2(b'(', b')', &bytes[pos..]) {
             let idx = pos + offset;
-            
+
             match bytes[idx] {
                 b'(' => {
                     depth += 1;
@@ -139,7 +149,7 @@ pub fn balanced_parentheses<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
             break;
         }
     }
-    
+
     Err(winnow::error::ErrMode::Backtrack(
         winnow::error::ContextError::default(),
     ))

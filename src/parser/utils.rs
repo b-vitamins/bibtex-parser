@@ -3,20 +3,11 @@
 use winnow::prelude::*;
 
 /// Fast inline whitespace skipping
-#[inline(always)]
+#[inline]
 fn skip_whitespace(input: &mut &str) {
     let bytes = input.as_bytes();
-    let mut pos = 0;
-    
-    // Unroll loop for common short whitespace runs
-    while pos < bytes.len() {
-        match bytes[pos] {
-            b' ' | b'\t' | b'\n' | b'\r' => pos += 1,
-            _ => break,
-        }
-    }
-    
-    *input = &input[pos..];
+    let len = super::simd::scan_whitespace(bytes);
+    *input = &input[len..];
 }
 
 /// Make a parser whitespace-insensitive

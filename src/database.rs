@@ -670,7 +670,7 @@ pub struct ValidationReport<'a> {
     pub validation_level: ValidationLevel,
 }
 
-impl<'a> ValidationReport<'a> {
+impl ValidationReport<'_> {
     /// Check if the database is completely valid
     #[must_use]
     pub fn is_valid(&self) -> bool {
@@ -974,7 +974,7 @@ mod tests {
         #[cfg(feature = "parallel")]
         {
             use std::fs::write;
-            
+
             // Parallel only works for multiple files
             let db3 = Database::parser().threads(4).parse(input).unwrap();
             assert_eq!(db3.entries().len(), 1);
