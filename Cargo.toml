@@ -18,6 +18,8 @@ default = []
 latex_to_unicode = []
 # Enable multi-file parallel parsing
 parallel = ["rayon"]
+# Enable comparison with other parsers in benchmarks
+compare_parsers = []
 
 
 [dependencies]
@@ -53,23 +55,6 @@ path = "src/bin/profile.rs"
 
 [[bench]]
 name = "performance"
-harness = false
-
-[[bench]]
-name = "memory"
-harness = false
-
-[[bench]]
-name = "delimiter"
-harness = false
-
-[[bench]]
-name = "parallel"
-harness = false
-required-features = ["parallel"]
-
-[[bench]]
-name = "tugboat_compare"
 harness = false
 
 [profile.release]
