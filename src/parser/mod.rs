@@ -242,16 +242,16 @@ fn parse_item<'a>(input: &mut &'a str) -> PResult<'a, ParsedItem<'a>> {
         return Ok(ParsedItem::Comment(comment));
     }
 
-    // We have an @ at the start. Dispatch with a fast keyword check to avoid
-    // repeatedly backtracking through parser alternatives on every entry.
-    if starts_with_keyword(bytes, b"string") {
-        parse_string(input).map(|(k, v)| ParsedItem::String(k, v))
-    } else if starts_with_keyword(bytes, b"preamble") {
-        parse_preamble(input).map(ParsedItem::Preamble)
-    } else if starts_with_keyword(bytes, b"comment") {
-        parse_comment(input).map(ParsedItem::Comment)
-    } else {
-        entry::parse_entry(input).map(ParsedItem::Entry)
+    // We have an @ at the start. For regular entries, avoid testing all special
+    // keywords and dispatch directly based on the first letter.
+    let second = bytes.get(1).copied().unwrap_or_default();
+    match ascii_lower(second) {
+        b's' if starts_with_keyword(bytes, b"string") => {
+            parse_string(input).map(|(k, v)| ParsedItem::String(k, v))
+        }
+        b'p' if starts_with_keyword(bytes, b"preamble") => parse_preamble(input).map(ParsedItem::Preamble),
+        b'c' if starts_with_keyword(bytes, b"comment") => parse_comment(input).map(ParsedItem::Comment),
+        _ => entry::parse_entry_at(input).map(ParsedItem::Entry),
     }
 }
 
@@ -262,7 +262,7 @@ fn starts_with_keyword(input: &[u8], keyword: &[u8]) -> bool {
     }
 
     for (offset, &expected) in keyword.iter().enumerate() {
-        if input[offset + 1].to_ascii_lowercase() != expected {
+        if ascii_lower(input[offset + 1]) != expected {
             return false;
         }
     }
@@ -272,6 +272,15 @@ fn starts_with_keyword(input: &[u8], keyword: &[u8]) -> bool {
     }
 
     !is_identifier_char(input[keyword.len() + 1])
+}
+
+#[inline]
+const fn ascii_lower(byte: u8) -> u8 {
+    if b'A' <= byte && byte <= b'Z' {
+        byte + (b'a' - b'A')
+    } else {
+        byte
+    }
 }
 
 #[inline]

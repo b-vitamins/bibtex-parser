@@ -1,55 +1,67 @@
 //! Entry parsing for BibTeX
 
-use super::{lexer, utils, value, PResult};
+use super::{lexer, value, PResult};
 use crate::model::{Entry, EntryType, Field};
 use std::borrow::Cow;
-use winnow::prelude::*;
-use winnow::{ascii::multispace0, combinator::preceded};
 
 /// Parse a bibliography entry
 #[inline]
 pub fn parse_entry<'a>(input: &mut &'a str) -> PResult<'a, Entry<'a>> {
-    preceded((multispace0, '@'), parse_entry_content).parse_next(input)
+    lexer::skip_whitespace(input);
+    parse_entry_at(input)
 }
 
-/// Parse the content of an entry after the @
+/// Parse a bibliography entry when `input` is already positioned at `@`.
+#[inline]
+pub fn parse_entry_at<'a>(input: &mut &'a str) -> PResult<'a, Entry<'a>> {
+    match input.as_bytes().first() {
+        Some(b'@') => {
+            *input = &input[1..];
+            parse_entry_content(input)
+        }
+        _ => Err(winnow::error::ErrMode::Backtrack(
+            winnow::error::ContextError::default(),
+        )),
+    }
+}
+
 fn parse_entry_content<'a>(input: &mut &'a str) -> PResult<'a, Entry<'a>> {
-    // Parse entry type
-    let entry_type_str = lexer::identifier.parse_next(input)?;
+    let entry_type_str = lexer::identifier(input)?;
     let entry_type = EntryType::parse(entry_type_str);
 
-    // Skip whitespace
     lexer::skip_whitespace(input);
 
-    // Check delimiter and parse accordingly
-    if input.starts_with('{') {
-        *input = &input[1..];
-        let entry = parse_entry_body(input, entry_type)?;
-        utils::ws('}').parse_next(input)?;
-        Ok(entry)
-    } else if input.starts_with('(') {
-        *input = &input[1..];
-        let entry = parse_entry_body(input, entry_type)?;
-        utils::ws(')').parse_next(input)?;
-        Ok(entry)
-    } else {
-        Err(winnow::error::ErrMode::Backtrack(
-            winnow::error::ContextError::default(),
-        ))
-    }
+    let closing_delimiter = match input.as_bytes().first() {
+        Some(b'{') => b'}',
+        Some(b'(') => b')',
+        _ => {
+            return Err(winnow::error::ErrMode::Backtrack(
+                winnow::error::ContextError::default(),
+            ))
+        }
+    };
+    *input = &input[1..];
+
+    parse_entry_body(input, entry_type, closing_delimiter)
 }
 
 /// Parse the body of an entry (key and fields)
 #[inline]
-fn parse_entry_body<'a>(input: &mut &'a str, entry_type: EntryType<'a>) -> PResult<'a, Entry<'a>> {
-    // Parse citation key
-    let key = utils::ws(lexer::identifier).parse_next(input)?;
+fn parse_entry_body<'a>(
+    input: &mut &'a str,
+    entry_type: EntryType<'a>,
+    closing_delimiter: u8,
+) -> PResult<'a, Entry<'a>> {
+    lexer::skip_whitespace(input);
+    let key = lexer::identifier(input)?;
 
-    // Parse comma
-    utils::ws(',').parse_next(input)?;
+    lexer::skip_whitespace(input);
+    expect_byte(input, b',')?;
 
-    // Parse fields
-    let fields = parse_fields.parse_next(input)?;
+    let fields = parse_fields(input, closing_delimiter)?;
+
+    lexer::skip_whitespace(input);
+    expect_byte(input, closing_delimiter)?;
 
     Ok(Entry {
         ty: entry_type,
@@ -58,39 +70,48 @@ fn parse_entry_body<'a>(input: &mut &'a str, entry_type: EntryType<'a>) -> PResu
     })
 }
 
-/// Parse all fields in an entry
-fn parse_fields<'a>(input: &mut &'a str) -> PResult<'a, Vec<Field<'a>>> {
+#[inline]
+fn expect_byte<'a>(input: &mut &'a str, byte: u8) -> PResult<'a, ()> {
+    match input.as_bytes().first() {
+        Some(&b) if b == byte => {
+            *input = &input[1..];
+            Ok(())
+        }
+        _ => Err(winnow::error::ErrMode::Backtrack(
+            winnow::error::ContextError::default(),
+        )),
+    }
+}
+
+/// Parse all fields in an entry.
+fn parse_fields<'a>(input: &mut &'a str, closing_delimiter: u8) -> PResult<'a, Vec<Field<'a>>> {
     let mut fields = Vec::new();
 
     loop {
-        // Skip whitespace
         lexer::skip_whitespace(input);
 
-        // Check if we've reached the end
-        if input.starts_with('}') || input.starts_with(')') || input.is_empty() {
+        let first = match input.as_bytes().first() {
+            Some(&b) => b,
+            None => break,
+        };
+        if first == closing_delimiter {
             break;
         }
 
-        // Try to parse a field
-        match parse_field(input) {
-            Ok(field) => {
-                fields.push(field);
+        let field = parse_field(input)?;
+        fields.push(field);
 
-                // Look for comma
-                lexer::skip_whitespace(input);
-                if input.starts_with(',') {
-                    *input = &input[1..];
-                } else {
-                    // No comma, we should be at the end
-                    lexer::skip_whitespace(input);
-                    if !input.starts_with('}') && !input.starts_with(')') {
-                        return Err(winnow::error::ErrMode::Backtrack(
-                            winnow::error::ContextError::default(),
-                        ));
-                    }
-                }
+        lexer::skip_whitespace(input);
+        match input.as_bytes().first() {
+            Some(b',') => {
+                *input = &input[1..];
             }
-            Err(_) => break,
+            Some(&b) if b == closing_delimiter => {}
+            _ => {
+                return Err(winnow::error::ErrMode::Backtrack(
+                    winnow::error::ContextError::default(),
+                ))
+            }
         }
     }
 
@@ -100,9 +121,12 @@ fn parse_fields<'a>(input: &mut &'a str) -> PResult<'a, Vec<Field<'a>>> {
 /// Parse a single field (name = value)
 #[inline]
 fn parse_field<'a>(input: &mut &'a str) -> PResult<'a, Field<'a>> {
-    let name = utils::ws(lexer::field_name).parse_next(input)?;
-    utils::ws('=').parse_next(input)?;
-    let value = utils::ws(value::parse_value).parse_next(input)?;
+    lexer::skip_whitespace(input);
+    let name = lexer::field_name(input)?;
+    lexer::skip_whitespace(input);
+    expect_byte(input, b'=')?;
+    lexer::skip_whitespace(input);
+    let value = value::parse_value(input)?;
 
     Ok(Field {
         name: Cow::Borrowed(name),

@@ -1,27 +1,57 @@
 //! Value parsing for BibTeX fields
 
-use super::{lexer, utils, PResult};
+use super::{lexer, PResult};
 use crate::model::Value;
 use std::borrow::Cow;
-use winnow::combinator::separated;
-use winnow::prelude::*;
 
 /// Parse a BibTeX value (string, number, variable, or concatenation)
 #[inline]
 pub fn parse_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
-    parse_concatenated_value.parse_next(input)
+    parse_concatenated_value(input)
 }
 
 /// Parse a concatenated value (value # value # ...)
 #[inline]
 fn parse_concatenated_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
-    let parts: Vec<Value<'a>> =
-        separated(1.., parse_single_value, utils::ws('#')).parse_next(input)?;
+    let first = parse_single_value(input)?;
 
-    match parts.len() {
-        1 => Ok(parts.into_iter().next().unwrap()),
-        _ => Ok(Value::Concat(Box::new(parts))), // Box the Vec to keep enum small
+    // Fast path: most fields are a single value with no concatenation.
+    if !consume_concat_separator(input) {
+        return Ok(first);
     }
+
+    // Slow path: parse one or more `# value` segments.
+    let mut parts = Vec::with_capacity(4);
+    parts.push(first);
+
+    loop {
+        let part = parse_single_value(input)?;
+        parts.push(part);
+
+        if !consume_concat_separator(input) {
+            break;
+        }
+    }
+
+    Ok(Value::Concat(Box::new(parts)))
+}
+
+/// Consume optional whitespace + `#` + optional whitespace.
+///
+/// Returns `true` if a concatenation separator was consumed. If no separator
+/// is present, input is left untouched.
+#[inline]
+fn consume_concat_separator(input: &mut &str) -> bool {
+    let mut probe = *input;
+    lexer::skip_whitespace(&mut probe);
+    if probe.as_bytes().first() != Some(&b'#') {
+        return false;
+    }
+
+    probe = &probe[1..];
+    lexer::skip_whitespace(&mut probe);
+    *input = probe;
+    true
 }
 
 /// Parse a single value component
