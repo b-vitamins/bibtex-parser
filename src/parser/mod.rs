@@ -242,16 +242,44 @@ fn parse_item<'a>(input: &mut &'a str) -> PResult<'a, ParsedItem<'a>> {
         return Ok(ParsedItem::Comment(comment));
     }
 
-    // We have an @ at the start, parse accordingly
-    // Order matters: put specific parsers (string, preamble, comment) first
-    // because they match exact keywords, while entry parser is more general
-    winnow::combinator::alt((
-        parse_string.map(|(k, v)| ParsedItem::String(k, v)),
-        parse_preamble.map(ParsedItem::Preamble),
-        parse_comment.map(ParsedItem::Comment),
-        entry::parse_entry.map(ParsedItem::Entry),
-    ))
-    .parse_next(input)
+    // We have an @ at the start. Dispatch with a fast keyword check to avoid
+    // repeatedly backtracking through parser alternatives on every entry.
+    if starts_with_keyword(bytes, b"string") {
+        parse_string(input).map(|(k, v)| ParsedItem::String(k, v))
+    } else if starts_with_keyword(bytes, b"preamble") {
+        parse_preamble(input).map(ParsedItem::Preamble)
+    } else if starts_with_keyword(bytes, b"comment") {
+        parse_comment(input).map(ParsedItem::Comment)
+    } else {
+        entry::parse_entry(input).map(ParsedItem::Entry)
+    }
+}
+
+#[inline]
+fn starts_with_keyword(input: &[u8], keyword: &[u8]) -> bool {
+    if input.first() != Some(&b'@') || input.len() < keyword.len() + 1 {
+        return false;
+    }
+
+    for (offset, &expected) in keyword.iter().enumerate() {
+        if input[offset + 1].to_ascii_lowercase() != expected {
+            return false;
+        }
+    }
+
+    if input.len() == keyword.len() + 1 {
+        return true;
+    }
+
+    !is_identifier_char(input[keyword.len() + 1])
+}
+
+#[inline]
+const fn is_identifier_char(byte: u8) -> bool {
+    matches!(
+        byte,
+        b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z' | b'_' | b'-' | b':' | b'.'
+    )
 }
 
 /// Parse a @string definition

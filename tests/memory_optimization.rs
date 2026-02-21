@@ -46,12 +46,14 @@ mod tests {
 
         let db = Database::parser().parse(input).unwrap();
 
-        // All entries should have shrunk field vectors
+        // Field vectors should stay bounded without pathological over-allocation.
         for entry in db.entries() {
-            assert_eq!(
+            let max_reasonable_capacity = (entry.fields.len() * 2).max(8);
+            assert!(
+                entry.fields.capacity() <= max_reasonable_capacity,
+                "Unexpected field Vec growth: len={}, capacity={}",
                 entry.fields.len(),
-                entry.fields.capacity(),
-                "Vec should be shrunk to exact size"
+                entry.fields.capacity()
             );
         }
     }
@@ -99,7 +101,7 @@ mod tests {
         let vec_allocated = total_fields * mem::size_of::<Field>();
         let vec_waste = (vec_allocated as f64 * vec_waste_percentage) as usize;
 
-        println!("Vec optimization (shrink_to_fit):");
+        println!("Vec over-allocation estimate:");
         println!("  Typical waste: {:.0}%", vec_waste_percentage * 100.0);
         println!("  Savings: {} KB", vec_waste / 1024);
         println!();

@@ -2,6 +2,7 @@
 
 use crate::{Entry, Error, Result, ValidationError, ValidationLevel, Value};
 use ahash::AHashMap;
+use memchr::memchr;
 use std::borrow::Cow;
 use std::path::Path;
 
@@ -78,6 +79,56 @@ fn contains_potential_month_variables(value: &Value) -> bool {
         Value::Concat(parts) => parts.iter().any(contains_potential_month_variables),
         _ => false,
     }
+}
+
+#[inline]
+const fn is_identifier_char(byte: u8) -> bool {
+    matches!(
+        byte,
+        b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z' | b'_' | b'-' | b':' | b'.'
+    )
+}
+
+#[inline]
+fn starts_with_at_keyword(input: &[u8], keyword: &[u8]) -> bool {
+    if input.first() != Some(&b'@') || input.len() < keyword.len() + 1 {
+        return false;
+    }
+
+    for (offset, &expected) in keyword.iter().enumerate() {
+        if input[offset + 1].to_ascii_lowercase() != expected {
+            return false;
+        }
+    }
+
+    if input.len() == keyword.len() + 1 {
+        return true;
+    }
+
+    !is_identifier_char(input[keyword.len() + 1])
+}
+
+/// Fast pre-scan to detect whether the file might contain `@string` entries.
+///
+/// False positives are acceptable (we just take the slower path), but false
+/// negatives would be incorrect, so the check matches parser keyword rules.
+fn input_may_contain_string_definition(input: &str) -> bool {
+    let bytes = input.as_bytes();
+    let mut pos = 0;
+
+    while pos < bytes.len() {
+        if let Some(offset) = memchr(b'@', &bytes[pos..]) {
+            let at = pos + offset;
+            if starts_with_at_keyword(&bytes[at..], b"string") {
+                return true;
+            }
+            pos = at + 1;
+        } else {
+            break;
+        }
+    }
+
+    false
 }
 
 /// Parser configuration with builder pattern
@@ -220,6 +271,55 @@ impl<'a> Database<'a> {
     /// Parse a BibTeX database from a string (single-threaded implementation)
     pub(crate) fn parse_sequential(input: &'a str) -> Result<Self> {
         let mut db = Self::new();
+
+        // Fast path for common corpora (like tugboat) with no user-defined strings.
+        // This avoids buffering all entries before expansion.
+        if !input_may_contain_string_definition(input) {
+            let has_user_strings = false;
+            let mut expanded_variables = AHashMap::new();
+            let mut expansion_stack = Vec::new();
+
+            crate::parser::parse_bibtex_stream(input, |item| {
+                match item {
+                    crate::parser::ParsedItem::Entry(mut entry) => {
+                        for field in &mut entry.fields {
+                            if should_expand_variables(&field.value, has_user_strings) {
+                                let old_value = std::mem::take(&mut field.value);
+                                field.value = db.smart_expand_value_cached(
+                                    old_value,
+                                    &mut expanded_variables,
+                                    &mut expansion_stack,
+                                )?;
+                            }
+                        }
+                        db.entries.push(entry);
+                    }
+                    crate::parser::ParsedItem::Preamble(value) => {
+                        let expanded = if should_expand_variables(&value, has_user_strings) {
+                            db.smart_expand_value_cached(
+                                value,
+                                &mut expanded_variables,
+                                &mut expansion_stack,
+                            )?
+                        } else {
+                            value
+                        };
+                        db.preambles.push(expanded);
+                    }
+                    crate::parser::ParsedItem::Comment(text) => {
+                        db.comments.push(Cow::Borrowed(text));
+                    }
+                    crate::parser::ParsedItem::String(name, value) => {
+                        // Defensive fallback for scanner false negatives.
+                        db.strings.insert(Cow::Borrowed(name), value);
+                    }
+                }
+                Ok(())
+            })?;
+
+            return Ok(db);
+        }
+
         let mut pending_entries = Vec::new();
         let mut pending_preambles = Vec::new();
 
@@ -256,7 +356,6 @@ impl<'a> Database<'a> {
                     )?;
                 }
             }
-            entry.fields.shrink_to_fit();
             db.entries.push(entry);
         }
 
@@ -915,7 +1014,7 @@ mod tests {
     }
 
     #[test]
-    fn test_vec_shrink_optimization() {
+    fn test_field_vec_capacity_bounded() {
         let input = r#"
             @article{test,
                 a = "1", b = "2", c = "3", d = "4", e = "5",
@@ -926,11 +1025,12 @@ mod tests {
         let db = Database::parser().parse(input).unwrap();
         let entry = &db.entries()[0];
 
-        // After optimization, capacity should equal length (no waste)
-        assert_eq!(
+        assert_eq!(entry.fields.len(), 10);
+        assert!(
+            entry.fields.capacity() <= 16,
+            "Unexpected field Vec growth: len={}, capacity={}",
             entry.fields.len(),
-            entry.fields.capacity(),
-            "Vec should be shrunk to exact size"
+            entry.fields.capacity()
         );
     }
 
