@@ -2,38 +2,52 @@
 
 use crate::{Entry, Error, Result, ValidationError, ValidationLevel, Value};
 use ahash::AHashMap;
-use phf::phf_map;
 use std::borrow::Cow;
 use std::path::Path;
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
-/// Compile-time perfect hash map for BibTeX month abbreviations
-///
-/// These are standard BibTeX month constants that expand to full month names.
-/// User-defined @string variables take precedence over these constants.
-static MONTH_ABBREVIATIONS: phf::Map<&'static str, &'static str> = phf_map! {
-    "jan" => "January",
-    "feb" => "February",
-    "mar" => "March",
-    "apr" => "April",
-    "may" => "May",
-    "jun" => "June",
-    "jul" => "July",
-    "aug" => "August",
-    "sep" => "September",
-    "oct" => "October",
-    "nov" => "November",
-    "dec" => "December",
-};
+#[inline]
+const fn to_ascii_lower(byte: u8) -> u8 {
+    if b'A' <= byte && byte <= b'Z' {
+        byte + (b'a' - b'A')
+    } else {
+        byte
+    }
+}
 
 /// Get month expansion for a given abbreviation (case-insensitive)
 ///
 /// Returns None if the name is not a recognized month abbreviation.
 /// This is used as a fallback when user-defined string variables are not found.
 fn get_month_expansion(name: &str) -> Option<&'static str> {
-    MONTH_ABBREVIATIONS.get(&name.to_lowercase()).copied()
+    let bytes = name.as_bytes();
+    if bytes.len() != 3 {
+        return None;
+    }
+
+    let key = (
+        to_ascii_lower(bytes[0]),
+        to_ascii_lower(bytes[1]),
+        to_ascii_lower(bytes[2]),
+    );
+
+    match key {
+        (b'j', b'a', b'n') => Some("January"),
+        (b'f', b'e', b'b') => Some("February"),
+        (b'm', b'a', b'r') => Some("March"),
+        (b'a', b'p', b'r') => Some("April"),
+        (b'm', b'a', b'y') => Some("May"),
+        (b'j', b'u', b'n') => Some("June"),
+        (b'j', b'u', b'l') => Some("July"),
+        (b'a', b'u', b'g') => Some("August"),
+        (b's', b'e', b'p') => Some("September"),
+        (b'o', b'c', b't') => Some("October"),
+        (b'n', b'o', b'v') => Some("November"),
+        (b'd', b'e', b'c') => Some("December"),
+        _ => None,
+    }
 }
 
 /// Check if a value contains variables that need expansion
@@ -60,7 +74,7 @@ fn contains_variables(value: &Value) -> bool {
 /// Check if a value contains variables that might be month constants
 fn contains_potential_month_variables(value: &Value) -> bool {
     match value {
-        Value::Variable(name) => MONTH_ABBREVIATIONS.contains_key(&name.to_lowercase()),
+        Value::Variable(name) => get_month_expansion(name).is_some(),
         Value::Concat(parts) => parts.iter().any(contains_potential_month_variables),
         _ => false,
     }
@@ -205,74 +219,54 @@ impl<'a> Database<'a> {
 
     /// Parse a BibTeX database from a string (single-threaded implementation)
     pub(crate) fn parse_sequential(input: &'a str) -> Result<Self> {
-        let items = crate::parser::parse_bibtex(input)?;
         let mut db = Self::new();
+        let mut pending_entries = Vec::new();
+        let mut pending_preambles = Vec::new();
 
-        // OPTIMIZATION: Pre-size collections based on item types
-        let (entry_count, string_count, comment_count) =
-            items.iter().fold((0, 0, 0), |(e, s, c), item| match item {
-                crate::parser::ParsedItem::Entry(_) => (e + 1, s, c),
-                crate::parser::ParsedItem::String(_, _) => (e, s + 1, c),
-                crate::parser::ParsedItem::Comment(_) => (e, s, c + 1),
-                crate::parser::ParsedItem::Preamble(_) => (e, s, c),
-            });
-
-        db.entries.reserve_exact(entry_count);
-        db.strings.reserve(string_count);
-        db.comments.reserve(comment_count);
-
-        // Single pass with move semantics to avoid clone
-        let mut string_items = Vec::with_capacity(string_count);
-        let mut other_items = Vec::with_capacity(items.len() - string_count);
-
-        for item in items {
+        crate::parser::parse_bibtex_stream(input, |item| {
             match item {
-                crate::parser::ParsedItem::String(_, _) => string_items.push(item),
-                _ => other_items.push(item),
-            }
-        }
-
-        // Process strings first
-        for item in string_items {
-            if let crate::parser::ParsedItem::String(name, value) = item {
-                db.strings.insert(Cow::Borrowed(name), value);
-            }
-        }
-
-        // Process other items
-        for item in other_items {
-            match item {
-                crate::parser::ParsedItem::Entry(mut entry) => {
-                    // Expand variables if we have user strings or potential month constants
-                    let has_user_strings = !db.strings.is_empty();
-                    for field in &mut entry.fields {
-                        // Only expand if the field needs expansion
-                        if should_expand_variables(&field.value, has_user_strings) {
-                            // Use std::mem::take to move the value without cloning
-                            let old_value = std::mem::take(&mut field.value);
-                            field.value = db.smart_expand_value(old_value)?;
-                        }
-                    }
-
-                    // OPTIMIZATION: Shrink Vec to exact size to save memory
-                    entry.fields.shrink_to_fit();
-
-                    db.entries.push(entry);
-                }
-                crate::parser::ParsedItem::Preamble(value) => {
-                    let has_user_strings = !db.strings.is_empty();
-                    let expanded = if should_expand_variables(&value, has_user_strings) {
-                        db.smart_expand_value(value)?
-                    } else {
-                        value
-                    };
-                    db.preambles.push(expanded);
+                crate::parser::ParsedItem::Entry(entry) => pending_entries.push(entry),
+                crate::parser::ParsedItem::Preamble(value) => pending_preambles.push(value),
+                crate::parser::ParsedItem::String(name, value) => {
+                    db.strings.insert(Cow::Borrowed(name), value);
                 }
                 crate::parser::ParsedItem::Comment(text) => {
                     db.comments.push(Cow::Borrowed(text));
                 }
-                crate::parser::ParsedItem::String(_, _) => unreachable!(),
             }
+            Ok(())
+        })?;
+
+        db.entries.reserve_exact(pending_entries.len());
+        db.preambles.reserve_exact(pending_preambles.len());
+
+        // Expand after parsing so all @string definitions are available globally.
+        let has_user_strings = !db.strings.is_empty();
+        let mut expanded_variables = AHashMap::with_capacity(db.strings.len());
+        let mut expansion_stack = Vec::new();
+
+        for mut entry in pending_entries {
+            for field in &mut entry.fields {
+                if should_expand_variables(&field.value, has_user_strings) {
+                    let old_value = std::mem::take(&mut field.value);
+                    field.value = db.smart_expand_value_cached(
+                        old_value,
+                        &mut expanded_variables,
+                        &mut expansion_stack,
+                    )?;
+                }
+            }
+            entry.fields.shrink_to_fit();
+            db.entries.push(entry);
+        }
+
+        for value in pending_preambles {
+            let expanded = if should_expand_variables(&value, has_user_strings) {
+                db.smart_expand_value_cached(value, &mut expanded_variables, &mut expansion_stack)?
+            } else {
+                value
+            };
+            db.preambles.push(expanded);
         }
 
         Ok(db)
@@ -407,14 +401,32 @@ impl<'a> Database<'a> {
             .collect()
     }
 
-    /// Smart value expansion that preserves borrowing when possible
-    fn smart_expand_value(&self, value: Value<'a>) -> Result<Value<'a>> {
+    /// Smart expansion with memoization for repeated variable references.
+    fn smart_expand_value_cached(
+        &self,
+        value: Value<'a>,
+        expanded_variables: &mut AHashMap<String, Value<'a>>,
+        expansion_stack: &mut Vec<String>,
+    ) -> Result<Value<'a>> {
         match value {
             // Simple literals and numbers stay as-is (zero-copy!)
             Value::Literal(_) | Value::Number(_) => Ok(value),
 
             // Variables need to be resolved
             Value::Variable(name) => {
+                if let Some(expanded) = expanded_variables.get(name.as_ref()) {
+                    return Ok(expanded.clone());
+                }
+
+                if expansion_stack.iter().any(|v| v == name.as_ref()) {
+                    let mut cycle = expansion_stack.join(" -> ");
+                    if !cycle.is_empty() {
+                        cycle.push_str(" -> ");
+                    }
+                    cycle.push_str(name.as_ref());
+                    return Err(Error::CircularReference(cycle));
+                }
+
                 // First check user-defined strings
                 self.strings.get(name.as_ref()).map_or_else(
                     || {
@@ -428,14 +440,27 @@ impl<'a> Database<'a> {
                         )
                     },
                     |user_value| {
-                        // Recursively expand the variable's value
-                        self.smart_expand_value(user_value.clone())
+                        // Recursively expand the variable's value and cache the result
+                        let variable_name = name.as_ref().to_string();
+                        expansion_stack.push(variable_name.clone());
+                        let expanded = self.smart_expand_value_cached(
+                            user_value.clone(),
+                            expanded_variables,
+                            expansion_stack,
+                        );
+                        expansion_stack.pop();
+
+                        let expanded = expanded?;
+                        expanded_variables.insert(variable_name, expanded.clone());
+                        Ok(expanded)
                     },
                 )
             }
 
             // Concatenations need special handling
-            Value::Concat(parts) => self.expand_concatenation(*parts),
+            Value::Concat(parts) => {
+                self.expand_concatenation_cached(*parts, expanded_variables, expansion_stack)
+            }
         }
     }
 
@@ -473,11 +498,24 @@ impl<'a> Database<'a> {
 
     /// Expand a concatenation, only converting to owned when necessary
     fn expand_concatenation(&self, parts: Vec<Value<'a>>) -> Result<Value<'a>> {
+        let mut expanded_variables = AHashMap::new();
+        let mut expansion_stack = Vec::new();
+        self.expand_concatenation_cached(parts, &mut expanded_variables, &mut expansion_stack)
+    }
+
+    /// Cached concatenation expansion used by hot parsing paths.
+    fn expand_concatenation_cached(
+        &self,
+        parts: Vec<Value<'a>>,
+        expanded_variables: &mut AHashMap<String, Value<'a>>,
+        expansion_stack: &mut Vec<String>,
+    ) -> Result<Value<'a>> {
         let mut expanded_parts = Vec::with_capacity(parts.len());
 
         // First, expand all parts
         for part in parts {
-            let expanded = self.smart_expand_value(part)?;
+            let expanded =
+                self.smart_expand_value_cached(part, expanded_variables, expansion_stack)?;
             expanded_parts.push(expanded);
         }
 

@@ -116,18 +116,33 @@ pub type PResult<'a, O> = winnow::PResult<O, winnow::error::ContextError>;
 /// ```
 pub fn parse_bibtex(input: &str) -> Result<Vec<ParsedItem>> {
     let mut items = Vec::new();
+    parse_bibtex_stream(input, |item| {
+        items.push(item);
+        Ok(())
+    })?;
+    Ok(items)
+}
+
+/// Parse a BibTeX file and stream raw items to a callback.
+///
+/// This avoids allocating an intermediate `Vec<ParsedItem>` when the caller
+/// can process items incrementally.
+pub(crate) fn parse_bibtex_stream<'a, F>(input: &'a str, mut on_item: F) -> Result<()>
+where
+    F: FnMut(ParsedItem<'a>) -> Result<()>,
+{
     let mut remaining = input;
 
-    while !remaining.trim().is_empty() {
-        // Skip only whitespace (not comments!)
-        remaining = remaining.trim_start();
+    loop {
+        // Skip ASCII whitespace without Unicode trimming overhead.
+        lexer::skip_whitespace(&mut remaining);
         if remaining.is_empty() {
             break;
         }
 
         // Try to parse an item (including comments)
         match parse_item(&mut remaining) {
-            Ok(item) => items.push(item),
+            Ok(item) => on_item(item)?,
             Err(e) => {
                 // Calculate line/column for error
                 let consumed = input.len() - remaining.len();
@@ -143,7 +158,7 @@ pub fn parse_bibtex(input: &str) -> Result<Vec<ParsedItem>> {
         }
     }
 
-    Ok(items)
+    Ok(())
 }
 
 /// A raw parsed item from a BibTeX file before processing
@@ -210,9 +225,6 @@ pub enum ParsedItem<'a> {
 
 /// Parse a single item (entry, string, preamble, or comment) with optimized delimiter search
 fn parse_item<'a>(input: &mut &'a str) -> PResult<'a, ParsedItem<'a>> {
-    // Skip whitespace
-    lexer::skip_whitespace(input);
-
     // Use optimized delimiter search to find @ or handle as comment
     let bytes = input.as_bytes();
 
