@@ -59,8 +59,6 @@ fn parse_entry_body<'a>(
     expect_byte(input, b',')?;
 
     let fields = parse_fields(input, closing_delimiter)?;
-
-    lexer::skip_whitespace(input);
     expect_byte(input, closing_delimiter)?;
 
     Ok(Entry {
@@ -85,7 +83,7 @@ fn expect_byte<'a>(input: &mut &'a str, byte: u8) -> PResult<'a, ()> {
 
 /// Parse all fields in an entry.
 fn parse_fields<'a>(input: &mut &'a str, closing_delimiter: u8) -> PResult<'a, Vec<Field<'a>>> {
-    let mut fields = Vec::new();
+    let mut fields = Vec::with_capacity(8);
 
     loop {
         lexer::skip_whitespace(input);
@@ -98,8 +96,16 @@ fn parse_fields<'a>(input: &mut &'a str, closing_delimiter: u8) -> PResult<'a, V
             break;
         }
 
-        let field = parse_field(input)?;
-        fields.push(field);
+        let name = lexer::field_name(input)?;
+        lexer::skip_whitespace(input);
+        expect_byte(input, b'=')?;
+        lexer::skip_whitespace(input);
+        let value = value::parse_value(input)?;
+
+        fields.push(Field {
+            name: Cow::Borrowed(name),
+            value,
+        });
 
         lexer::skip_whitespace(input);
         match input.as_bytes().first() {
@@ -116,22 +122,6 @@ fn parse_fields<'a>(input: &mut &'a str, closing_delimiter: u8) -> PResult<'a, V
     }
 
     Ok(fields)
-}
-
-/// Parse a single field (name = value)
-#[inline]
-fn parse_field<'a>(input: &mut &'a str) -> PResult<'a, Field<'a>> {
-    lexer::skip_whitespace(input);
-    let name = lexer::field_name(input)?;
-    lexer::skip_whitespace(input);
-    expect_byte(input, b'=')?;
-    lexer::skip_whitespace(input);
-    let value = value::parse_value(input)?;
-
-    Ok(Field {
-        name: Cow::Borrowed(name),
-        value,
-    })
 }
 
 #[cfg(test)]

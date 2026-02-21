@@ -119,35 +119,95 @@ fn parse_braced_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
 /// This handles cases like "2024a", "12b", "1.2.3", etc.
 #[inline]
 fn parse_number_or_digit_string<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
-    let start_input = *input;
+    let bytes = input.as_bytes();
+    let Some(&first) = bytes.first() else {
+        return Err(winnow::error::ErrMode::Backtrack(
+            winnow::error::ContextError::default(),
+        ));
+    };
 
-    // Try to parse as a pure number first, but only if it consumes a complete token
-    if let Ok(num) = lexer::number(input) {
-        // Check if number consumed entire token (next char should be whitespace, delimiter, or end)
-        if input.is_empty()
-            || input.chars().next().map_or(true, |c| {
-                c.is_whitespace() || c == ',' || c == '}' || c == ')' || c == '#'
-            })
-        {
-            return Ok(Value::Number(num));
-        }
-    }
-
-    // Reset input and try to parse as identifier starting with digit
-    *input = start_input;
-
-    // Check if first character is a digit - if not, this parser doesn't apply
-    if !input.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+    let len = super::simd::scan_identifier(bytes);
+    if len == 0 {
         return Err(winnow::error::ErrMode::Backtrack(
             winnow::error::ContextError::default(),
         ));
     }
 
-    // Parse as identifier (allows digits, letters, hyphens, dots, etc.)
-    let ident = lexer::identifier(input)?;
+    let token = &input[..len];
+    let token_bytes = token.as_bytes();
 
-    // Since it starts with a digit, treat as string literal
-    Ok(Value::Literal(Cow::Borrowed(ident)))
+    // Signed values must be strict integers (e.g., +42, -1).
+    // Non-digit suffixes after a sign are rejected for compatibility.
+    if first == b'+' || first == b'-' {
+        if token_bytes.len() <= 1 || !token_bytes[1..].iter().all(u8::is_ascii_digit) {
+            return Err(winnow::error::ErrMode::Backtrack(
+                winnow::error::ContextError::default(),
+            ));
+        }
+        let num = parse_i64_ascii(token)?;
+        *input = &input[len..];
+        return Ok(Value::Number(num));
+    }
+
+    // Digit-starting tokens parse as numbers when fully numeric,
+    // otherwise as literals (e.g. 2024a).
+    if !first.is_ascii_digit() {
+        return Err(winnow::error::ErrMode::Backtrack(
+            winnow::error::ContextError::default(),
+        ));
+    }
+
+    *input = &input[len..];
+    if token_bytes.iter().all(u8::is_ascii_digit) {
+        let num = parse_i64_ascii(token)?;
+        Ok(Value::Number(num))
+    } else {
+        Ok(Value::Literal(Cow::Borrowed(token)))
+    }
+}
+
+#[inline]
+fn parse_i64_ascii(token: &str) -> PResult<'_, i64> {
+    let bytes = token.as_bytes();
+    let (negative, start) = match bytes.first() {
+        Some(b'-') => (true, 1),
+        Some(b'+') => (false, 1),
+        _ => (false, 0),
+    };
+
+    if start >= bytes.len() {
+        return Err(winnow::error::ErrMode::Backtrack(
+            winnow::error::ContextError::default(),
+        ));
+    }
+
+    let mut value: i64 = 0;
+    for &byte in &bytes[start..] {
+        if !byte.is_ascii_digit() {
+            return Err(winnow::error::ErrMode::Backtrack(
+                winnow::error::ContextError::default(),
+            ));
+        }
+
+        let digit = i64::from(byte - b'0');
+        value = if negative {
+            value
+                .checked_mul(10)
+                .and_then(|v| v.checked_sub(digit))
+                .ok_or_else(|| {
+                    winnow::error::ErrMode::Backtrack(winnow::error::ContextError::default())
+                })?
+        } else {
+            value
+                .checked_mul(10)
+                .and_then(|v| v.checked_add(digit))
+                .ok_or_else(|| {
+                    winnow::error::ErrMode::Backtrack(winnow::error::ContextError::default())
+                })?
+        };
+    }
+
+    Ok(value)
 }
 
 /// Parse a variable reference

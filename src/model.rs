@@ -556,17 +556,23 @@ impl<'a> EntryType<'a> {
     /// Parse from string (case-insensitive)
     #[must_use]
     pub fn parse(s: &'a str) -> Self {
-        match s.to_lowercase().as_str() {
-            "article" => Self::Article,
-            "book" => Self::Book,
-            "inbook" => Self::InBook,
-            "inproceedings" | "conference" => Self::InProceedings,
-            "proceedings" => Self::Proceedings,
-            "mastersthesis" => Self::MastersThesis,
-            "phdthesis" => Self::PhdThesis,
-            "techreport" => Self::TechReport,
-            "unpublished" => Self::Unpublished,
-            "misc" => Self::Misc,
+        let bytes = s.as_bytes();
+        if bytes.is_empty() {
+            return Self::Custom(Cow::Borrowed(s));
+        }
+
+        match ascii_lower(bytes[0]) {
+            b'a' if s.eq_ignore_ascii_case("article") => Self::Article,
+            b'b' if s.eq_ignore_ascii_case("book") => Self::Book,
+            b'c' if s.eq_ignore_ascii_case("conference") => Self::InProceedings,
+            b'i' if s.eq_ignore_ascii_case("inbook") => Self::InBook,
+            b'i' if s.eq_ignore_ascii_case("inproceedings") => Self::InProceedings,
+            b'm' if s.eq_ignore_ascii_case("mastersthesis") => Self::MastersThesis,
+            b'm' if s.eq_ignore_ascii_case("misc") => Self::Misc,
+            b'p' if s.eq_ignore_ascii_case("phdthesis") => Self::PhdThesis,
+            b'p' if s.eq_ignore_ascii_case("proceedings") => Self::Proceedings,
+            b't' if s.eq_ignore_ascii_case("techreport") => Self::TechReport,
+            b'u' if s.eq_ignore_ascii_case("unpublished") => Self::Unpublished,
             _ => Self::Custom(Cow::Borrowed(s)),
         }
     }
@@ -603,6 +609,15 @@ impl<'a> EntryType<'a> {
             Self::Unpublished => EntryType::Unpublished,
             Self::Misc => EntryType::Misc,
         }
+    }
+}
+
+#[inline]
+const fn ascii_lower(byte: u8) -> u8 {
+    if b'A' <= byte && byte <= b'Z' {
+        byte + (b'a' - b'A')
+    } else {
+        byte
     }
 }
 

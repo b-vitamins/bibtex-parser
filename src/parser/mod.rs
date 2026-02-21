@@ -242,8 +242,8 @@ fn parse_item<'a>(input: &mut &'a str) -> PResult<'a, ParsedItem<'a>> {
         return Ok(ParsedItem::Comment(comment));
     }
 
-    // We have an @ at the start. For regular entries, avoid testing all special
-    // keywords and dispatch directly based on the first letter.
+    // We have an @ at the start. For regular entries, avoid checking all
+    // special keywords and dispatch directly based on the first letter.
     let second = bytes.get(1).copied().unwrap_or_default();
     match ascii_lower(second) {
         b's' if starts_with_keyword(bytes, b"string") => {

@@ -157,16 +157,7 @@ pub fn balanced_parentheses<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
 
 /// Fast whitespace skipping (optimal for short runs per profiling)
 pub fn skip_whitespace(input: &mut &str) {
-    let bytes = input.as_bytes();
-    let mut pos = 0;
-
-    while pos < bytes.len() {
-        match bytes[pos] {
-            b' ' | b'\t' | b'\n' | b'\r' => pos += 1,
-            _ => break,
-        }
-    }
-
+    let pos = super::simd::scan_whitespace(input.as_bytes());
     *input = &input[pos..];
 }
 

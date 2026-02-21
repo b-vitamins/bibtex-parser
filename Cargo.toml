@@ -64,7 +64,7 @@ codegen-units = 1
 
 [profile.bench]
 inherits = "release"
-debug = true
+debug = false
 strip = false
 opt-level = 3
 lto = "fat"

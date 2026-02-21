@@ -51,16 +51,9 @@ fn get_month_expansion(name: &str) -> Option<&'static str> {
     }
 }
 
-/// Check if a value contains variables that need expansion
-/// Only expand if we have user strings OR if variables might be month constants
-fn should_expand_variables(value: &Value, has_user_strings: bool) -> bool {
-    if has_user_strings {
-        // If we have user strings, expand all variables
-        contains_variables(value)
-    } else {
-        // If no user strings, only expand if variables might be month constants
-        contains_potential_month_variables(value)
-    }
+#[inline]
+fn user_strings_shadow_month_constants(strings: &AHashMap<Cow<'_, str>, Value<'_>>) -> bool {
+    strings.keys().any(|name| get_month_expansion(name.as_ref()).is_some())
 }
 
 /// Check if a value contains any variables
@@ -96,7 +89,7 @@ fn starts_with_at_keyword(input: &[u8], keyword: &[u8]) -> bool {
     }
 
     for (offset, &expected) in keyword.iter().enumerate() {
-        if input[offset + 1].to_ascii_lowercase() != expected {
+        if to_ascii_lower(input[offset + 1]) != expected {
             return false;
         }
     }
@@ -122,6 +115,40 @@ fn input_may_contain_string_definition(input: &str) -> bool {
             if starts_with_at_keyword(&bytes[at..], b"string") {
                 return true;
             }
+            pos = at + 1;
+        } else {
+            break;
+        }
+    }
+
+    false
+}
+
+/// Detect whether a `@string` may appear after a regular entry.
+///
+/// False positives are acceptable (we take the conservative slow path), but
+/// false negatives would be incorrect, so keyword matching mirrors parser rules.
+fn input_may_have_late_string_definition(input: &str) -> bool {
+    let bytes = input.as_bytes();
+    let mut pos = 0;
+    let mut saw_regular_entry = false;
+
+    while pos < bytes.len() {
+        if let Some(offset) = memchr(b'@', &bytes[pos..]) {
+            let at = pos + offset;
+            let tail = &bytes[at..];
+
+            if starts_with_at_keyword(tail, b"string") {
+                if saw_regular_entry {
+                    return true;
+                }
+            } else if !starts_with_at_keyword(tail, b"preamble")
+                && !starts_with_at_keyword(tail, b"comment")
+            {
+                // Anything else that looks like `@<identifier>` is treated as a regular entry.
+                saw_regular_entry = true;
+            }
+
             pos = at + 1;
         } else {
             break;
@@ -234,6 +261,57 @@ pub struct Database<'a> {
 }
 
 impl<'a> Database<'a> {
+    #[inline]
+    fn expand_value_for_parse(
+        &self,
+        value: &mut Value<'a>,
+        has_user_strings: bool,
+        month_constants_shadowed: bool,
+        expanded_variables: &mut AHashMap<String, Value<'a>>,
+        expansion_stack: &mut Vec<String>,
+    ) -> Result<()> {
+        match value {
+            Value::Literal(_) | Value::Number(_) => Ok(()),
+            Value::Variable(name) => {
+                if !has_user_strings || !month_constants_shadowed {
+                    if let Some(month_value) = get_month_expansion(name.as_ref()) {
+                        *value = Value::Literal(Cow::Borrowed(month_value));
+                        return Ok(());
+                    }
+                }
+
+                if has_user_strings {
+                    let old_value = std::mem::take(value);
+                    *value = self.smart_expand_value_cached(
+                        old_value,
+                        expanded_variables,
+                        expansion_stack,
+                    )?;
+                }
+
+                Ok(())
+            }
+            Value::Concat(parts) => {
+                let needs_expansion = if has_user_strings {
+                    parts.iter().any(contains_variables)
+                } else {
+                    parts.iter().any(contains_potential_month_variables)
+                };
+
+                if needs_expansion {
+                    let old_value = std::mem::take(value);
+                    *value = self.smart_expand_value_cached(
+                        old_value,
+                        expanded_variables,
+                        expansion_stack,
+                    )?;
+                }
+
+                Ok(())
+            }
+        }
+    }
+
     /// Create a new empty database
     #[must_use]
     pub fn new() -> Self {
@@ -276,6 +354,7 @@ impl<'a> Database<'a> {
         // This avoids buffering all entries before expansion.
         if !input_may_contain_string_definition(input) {
             let has_user_strings = false;
+            let month_constants_shadowed = false;
             let mut expanded_variables = AHashMap::new();
             let mut expansion_stack = Vec::new();
 
@@ -283,27 +362,25 @@ impl<'a> Database<'a> {
                 match item {
                     crate::parser::ParsedItem::Entry(mut entry) => {
                         for field in &mut entry.fields {
-                            if should_expand_variables(&field.value, has_user_strings) {
-                                let old_value = std::mem::take(&mut field.value);
-                                field.value = db.smart_expand_value_cached(
-                                    old_value,
-                                    &mut expanded_variables,
-                                    &mut expansion_stack,
-                                )?;
-                            }
+                            db.expand_value_for_parse(
+                                &mut field.value,
+                                has_user_strings,
+                                month_constants_shadowed,
+                                &mut expanded_variables,
+                                &mut expansion_stack,
+                            )?;
                         }
                         db.entries.push(entry);
                     }
                     crate::parser::ParsedItem::Preamble(value) => {
-                        let expanded = if should_expand_variables(&value, has_user_strings) {
-                            db.smart_expand_value_cached(
-                                value,
-                                &mut expanded_variables,
-                                &mut expansion_stack,
-                            )?
-                        } else {
-                            value
-                        };
+                        let mut expanded = value;
+                        db.expand_value_for_parse(
+                            &mut expanded,
+                            has_user_strings,
+                            month_constants_shadowed,
+                            &mut expanded_variables,
+                            &mut expansion_stack,
+                        )?;
                         db.preambles.push(expanded);
                     }
                     crate::parser::ParsedItem::Comment(text) => {
@@ -316,6 +393,65 @@ impl<'a> Database<'a> {
                 }
                 Ok(())
             })?;
+
+            return Ok(db);
+        }
+
+        // Single-pass path when all @string definitions appear before regular
+        // entries. This keeps correctness while avoiding buffering entries and
+        // a full second pass over them.
+        if !input_may_have_late_string_definition(input) {
+            let mut pending_preambles = Vec::new();
+            let mut expanded_variables = AHashMap::new();
+            let mut expansion_stack = Vec::new();
+            let mut month_constants_shadowed = None;
+
+            crate::parser::parse_bibtex_stream(input, |item| {
+                match item {
+                    crate::parser::ParsedItem::Entry(mut entry) => {
+                        let has_user_strings = !db.strings.is_empty();
+                        let month_constants_shadowed = *month_constants_shadowed.get_or_insert_with(
+                            || {
+                                has_user_strings
+                                    && user_strings_shadow_month_constants(&db.strings)
+                            },
+                        );
+                        for field in &mut entry.fields {
+                            db.expand_value_for_parse(
+                                &mut field.value,
+                                has_user_strings,
+                                month_constants_shadowed,
+                                &mut expanded_variables,
+                                &mut expansion_stack,
+                            )?;
+                        }
+                        db.entries.push(entry);
+                    }
+                    crate::parser::ParsedItem::Preamble(value) => pending_preambles.push(value),
+                    crate::parser::ParsedItem::String(name, value) => {
+                        db.strings.insert(Cow::Borrowed(name), value);
+                    }
+                    crate::parser::ParsedItem::Comment(text) => {
+                        db.comments.push(Cow::Borrowed(text));
+                    }
+                }
+                Ok(())
+            })?;
+
+            let has_user_strings = !db.strings.is_empty();
+            let month_constants_shadowed =
+                has_user_strings && user_strings_shadow_month_constants(&db.strings);
+            for value in pending_preambles {
+                let mut expanded = value;
+                db.expand_value_for_parse(
+                    &mut expanded,
+                    has_user_strings,
+                    month_constants_shadowed,
+                    &mut expanded_variables,
+                    &mut expansion_stack,
+                )?;
+                db.preambles.push(expanded);
+            }
 
             return Ok(db);
         }
@@ -342,29 +478,33 @@ impl<'a> Database<'a> {
 
         // Expand after parsing so all @string definitions are available globally.
         let has_user_strings = !db.strings.is_empty();
+        let month_constants_shadowed =
+            has_user_strings && user_strings_shadow_month_constants(&db.strings);
         let mut expanded_variables = AHashMap::with_capacity(db.strings.len());
         let mut expansion_stack = Vec::new();
 
         for mut entry in pending_entries {
             for field in &mut entry.fields {
-                if should_expand_variables(&field.value, has_user_strings) {
-                    let old_value = std::mem::take(&mut field.value);
-                    field.value = db.smart_expand_value_cached(
-                        old_value,
-                        &mut expanded_variables,
-                        &mut expansion_stack,
-                    )?;
-                }
+                db.expand_value_for_parse(
+                    &mut field.value,
+                    has_user_strings,
+                    month_constants_shadowed,
+                    &mut expanded_variables,
+                    &mut expansion_stack,
+                )?;
             }
             db.entries.push(entry);
         }
 
         for value in pending_preambles {
-            let expanded = if should_expand_variables(&value, has_user_strings) {
-                db.smart_expand_value_cached(value, &mut expanded_variables, &mut expansion_stack)?
-            } else {
-                value
-            };
+            let mut expanded = value;
+            db.expand_value_for_parse(
+                &mut expanded,
+                has_user_strings,
+                month_constants_shadowed,
+                &mut expanded_variables,
+                &mut expansion_stack,
+            )?;
             db.preambles.push(expanded);
         }
 
