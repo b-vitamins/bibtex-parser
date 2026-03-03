@@ -10,6 +10,15 @@ pub fn parse_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
     parse_concatenated_value(input)
 }
 
+/// Parse a field value and consume trailing ASCII whitespace.
+///
+/// This variant is used by entry parsing so the field loop can read the
+/// delimiter directly without re-scanning whitespace.
+#[inline]
+pub(crate) fn parse_value_field<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
+    parse_concatenated_value_field(input)
+}
+
 /// Parse a concatenated value (value # value # ...)
 #[inline]
 fn parse_concatenated_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
@@ -29,6 +38,37 @@ fn parse_concatenated_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
         parts.push(part);
 
         if !consume_concat_separator(input) {
+            break;
+        }
+    }
+
+    Ok(Value::Concat(Box::new(parts)))
+}
+
+/// Parse a concatenated value and consume trailing ASCII whitespace.
+#[inline]
+fn parse_concatenated_value_field<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
+    let first = parse_single_value(input)?;
+    lexer::skip_whitespace(input);
+
+    if input.as_bytes().first() != Some(&b'#') {
+        return Ok(first);
+    }
+
+    // Slow path: parse one or more `# value` segments.
+    let mut parts = Vec::with_capacity(4);
+    parts.push(first);
+
+    loop {
+        // Consume '#'
+        *input = &input[1..];
+        lexer::skip_whitespace(input);
+
+        let part = parse_single_value(input)?;
+        parts.push(part);
+        lexer::skip_whitespace(input);
+
+        if input.as_bytes().first() != Some(&b'#') {
             break;
         }
     }

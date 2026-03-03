@@ -100,14 +100,13 @@ fn parse_fields<'a>(input: &mut &'a str, closing_delimiter: u8) -> PResult<'a, V
         lexer::skip_whitespace(input);
         expect_byte(input, b'=')?;
         lexer::skip_whitespace(input);
-        let value = value::parse_value(input)?;
+        let value = value::parse_value_field(input)?;
 
         fields.push(Field {
             name: Cow::Borrowed(name),
             value,
         });
 
-        lexer::skip_whitespace(input);
         match input.as_bytes().first() {
             Some(b',') => {
                 *input = &input[1..];
