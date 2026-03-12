@@ -80,7 +80,7 @@ pub mod prelude {
 }
 
 /// Parse a BibTeX database from a string
-pub fn parse(input: &str) -> Result<Database> {
+pub fn parse(input: &str) -> Result<Database<'_>> {
     Database::parser().parse(input)
 }
 

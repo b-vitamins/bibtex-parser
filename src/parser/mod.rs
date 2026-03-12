@@ -114,7 +114,7 @@ pub type PResult<'a, O> = winnow::PResult<O, winnow::error::ContextError>;
 /// }
 /// # Ok::<(), bibtex_parser::Error>(())
 /// ```
-pub fn parse_bibtex(input: &str) -> Result<Vec<ParsedItem>> {
+pub fn parse_bibtex(input: &str) -> Result<Vec<ParsedItem<'_>>> {
     let mut items = Vec::new();
     parse_bibtex_stream(input, |item| {
         items.push(item);
