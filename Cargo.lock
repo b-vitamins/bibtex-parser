@@ -111,6 +111,7 @@ dependencies = [
  "criterion",
  "insta",
  "lazy_static",
+ "libc",
  "memchr",
  "nom-bibtex",
  "phf",

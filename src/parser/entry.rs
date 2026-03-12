@@ -88,9 +88,8 @@ fn parse_fields<'a>(input: &mut &'a str, closing_delimiter: u8) -> PResult<'a, V
     loop {
         lexer::skip_whitespace(input);
 
-        let first = match input.as_bytes().first() {
-            Some(&b) => b,
-            None => break,
+        let Some(&first) = input.as_bytes().first() else {
+            break;
         };
         if first == closing_delimiter {
             break;

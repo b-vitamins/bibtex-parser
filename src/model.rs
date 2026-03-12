@@ -5,20 +5,15 @@ use std::borrow::Cow;
 use std::fmt;
 
 /// Validation strictness level for BibTeX entries
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ValidationLevel {
     /// Only check that required fields exist
     Minimal,
     /// Check required fields and common issues (default)
+    #[default]
     Standard,
     /// Strict validation including field formats and cross-references
     Strict,
-}
-
-impl Default for ValidationLevel {
-    fn default() -> Self {
-        Self::Standard
-    }
 }
 
 /// Represents a validation error for a BibTeX entry
@@ -698,7 +693,7 @@ pub enum Value<'a> {
     /// Number literal
     Number(i64),
     /// Concatenated values (boxed to reduce enum size from 32 to 24 bytes)
-    Concat(Box<Vec<Value<'a>>>),
+    Concat(Box<Vec<Self>>),
     /// Variable reference
     Variable(Cow<'a, str>),
 }

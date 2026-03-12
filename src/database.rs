@@ -53,7 +53,9 @@ fn get_month_expansion(name: &str) -> Option<&'static str> {
 
 #[inline]
 fn user_strings_shadow_month_constants(strings: &AHashMap<Cow<'_, str>, Value<'_>>) -> bool {
-    strings.keys().any(|name| get_month_expansion(name.as_ref()).is_some())
+    strings
+        .keys()
+        .any(|name| get_month_expansion(name.as_ref()).is_some())
 }
 
 /// Check if a value contains any variables
@@ -247,6 +249,99 @@ impl ParseOptions {
     }
 }
 
+const SMALL_STRING_CACHE_LIMIT: usize = 16;
+
+#[derive(Debug, Clone)]
+struct SmallExpansionSlot<'a> {
+    name: Cow<'a, str>,
+    raw: Value<'a>,
+    expanded: Option<Value<'a>>,
+}
+
+#[derive(Debug)]
+struct ExpansionState<'a> {
+    configured_for_user_strings: bool,
+    small_slots: Option<Vec<SmallExpansionSlot<'a>>>,
+    expanded_variables: AHashMap<Cow<'a, str>, Value<'a>>,
+    expansion_stack: Vec<Cow<'a, str>>,
+}
+
+impl<'a> ExpansionState<'a> {
+    #[inline]
+    fn new(strings: &AHashMap<Cow<'a, str>, Value<'a>>) -> Self {
+        let small_slots = if !strings.is_empty() && strings.len() <= SMALL_STRING_CACHE_LIMIT {
+            let mut slots = Vec::with_capacity(strings.len());
+            for (name, value) in strings {
+                slots.push(SmallExpansionSlot {
+                    name: name.clone(),
+                    raw: value.clone(),
+                    expanded: None,
+                });
+            }
+            Some(slots)
+        } else {
+            None
+        };
+
+        let expanded_variables = if small_slots.is_some() {
+            AHashMap::new()
+        } else {
+            AHashMap::with_capacity(strings.len())
+        };
+
+        Self {
+            configured_for_user_strings: !strings.is_empty(),
+            small_slots,
+            expanded_variables,
+            expansion_stack: Vec::with_capacity(strings.len().min(SMALL_STRING_CACHE_LIMIT)),
+        }
+    }
+
+    #[inline]
+    fn ensure_configured(&mut self, strings: &AHashMap<Cow<'a, str>, Value<'a>>) {
+        if !self.configured_for_user_strings && !strings.is_empty() {
+            *self = Self::new(strings);
+        }
+    }
+
+    #[inline]
+    fn contains_in_stack(&self, name: &str) -> bool {
+        self.expansion_stack
+            .iter()
+            .any(|variable| variable.as_ref() == name)
+    }
+
+    #[inline]
+    fn cached_value(&self, name: &str) -> Option<&Value<'a>> {
+        self.small_slots.as_ref().map_or_else(
+            || self.expanded_variables.get(name),
+            |slots| {
+                slots
+                    .iter()
+                    .find(|slot| slot.name.as_ref() == name)
+                    .and_then(|slot| slot.expanded.as_ref())
+            },
+        )
+    }
+
+    fn cycle_message(&self, name: &str) -> String {
+        let mut cycle = String::new();
+
+        for variable in &self.expansion_stack {
+            if !cycle.is_empty() {
+                cycle.push_str(" -> ");
+            }
+            cycle.push_str(variable.as_ref());
+        }
+
+        if !cycle.is_empty() {
+            cycle.push_str(" -> ");
+        }
+        cycle.push_str(name);
+        cycle
+    }
+}
+
 /// A parsed BibTeX database
 #[derive(Debug, Clone, Default)]
 pub struct Database<'a> {
@@ -267,8 +362,7 @@ impl<'a> Database<'a> {
         value: &mut Value<'a>,
         has_user_strings: bool,
         month_constants_shadowed: bool,
-        expanded_variables: &mut AHashMap<String, Value<'a>>,
-        expansion_stack: &mut Vec<String>,
+        expansion_state: &mut ExpansionState<'a>,
     ) -> Result<()> {
         match value {
             Value::Literal(_) | Value::Number(_) => Ok(()),
@@ -282,11 +376,7 @@ impl<'a> Database<'a> {
 
                 if has_user_strings {
                     let old_value = std::mem::take(value);
-                    *value = self.smart_expand_value_cached(
-                        old_value,
-                        expanded_variables,
-                        expansion_stack,
-                    )?;
+                    *value = self.smart_expand_value_cached(old_value, expansion_state)?;
                 }
 
                 Ok(())
@@ -300,11 +390,7 @@ impl<'a> Database<'a> {
 
                 if needs_expansion {
                     let old_value = std::mem::take(value);
-                    *value = self.smart_expand_value_cached(
-                        old_value,
-                        expanded_variables,
-                        expansion_stack,
-                    )?;
+                    *value = self.smart_expand_value_cached(old_value, expansion_state)?;
                 }
 
                 Ok(())
@@ -353,109 +439,110 @@ impl<'a> Database<'a> {
         // Fast path for common corpora (like tugboat) with no user-defined strings.
         // This avoids buffering all entries before expansion.
         if !input_may_contain_string_definition(input) {
-            let has_user_strings = false;
-            let month_constants_shadowed = false;
-            let mut expanded_variables = AHashMap::new();
-            let mut expansion_stack = Vec::new();
-
-            crate::parser::parse_bibtex_stream(input, |item| {
-                match item {
-                    crate::parser::ParsedItem::Entry(mut entry) => {
-                        for field in &mut entry.fields {
-                            db.expand_value_for_parse(
-                                &mut field.value,
-                                has_user_strings,
-                                month_constants_shadowed,
-                                &mut expanded_variables,
-                                &mut expansion_stack,
-                            )?;
-                        }
-                        db.entries.push(entry);
-                    }
-                    crate::parser::ParsedItem::Preamble(value) => {
-                        let mut expanded = value;
-                        db.expand_value_for_parse(
-                            &mut expanded,
-                            has_user_strings,
-                            month_constants_shadowed,
-                            &mut expanded_variables,
-                            &mut expansion_stack,
-                        )?;
-                        db.preambles.push(expanded);
-                    }
-                    crate::parser::ParsedItem::Comment(text) => {
-                        db.comments.push(Cow::Borrowed(text));
-                    }
-                    crate::parser::ParsedItem::String(name, value) => {
-                        // Defensive fallback for scanner false negatives.
-                        db.strings.insert(Cow::Borrowed(name), value);
-                    }
-                }
-                Ok(())
-            })?;
-
-            return Ok(db);
+            db.parse_without_string_definitions(input)?;
+        } else if !input_may_have_late_string_definition(input) {
+            // Single-pass path when all @string definitions appear before regular
+            // entries. This keeps correctness while avoiding buffering entries and
+            // a full second pass over them.
+            db.parse_with_early_string_definitions(input)?;
+        } else {
+            db.parse_with_late_string_definitions(input)?;
         }
 
-        // Single-pass path when all @string definitions appear before regular
-        // entries. This keeps correctness while avoiding buffering entries and
-        // a full second pass over them.
-        if !input_may_have_late_string_definition(input) {
-            let mut pending_preambles = Vec::new();
-            let mut expanded_variables = AHashMap::new();
-            let mut expansion_stack = Vec::new();
-            let mut month_constants_shadowed = None;
+        Ok(db)
+    }
 
-            crate::parser::parse_bibtex_stream(input, |item| {
-                match item {
-                    crate::parser::ParsedItem::Entry(mut entry) => {
-                        let has_user_strings = !db.strings.is_empty();
-                        let month_constants_shadowed = *month_constants_shadowed.get_or_insert_with(
-                            || {
-                                has_user_strings
-                                    && user_strings_shadow_month_constants(&db.strings)
-                            },
-                        );
-                        for field in &mut entry.fields {
-                            db.expand_value_for_parse(
-                                &mut field.value,
-                                has_user_strings,
-                                month_constants_shadowed,
-                                &mut expanded_variables,
-                                &mut expansion_stack,
-                            )?;
-                        }
-                        db.entries.push(entry);
-                    }
-                    crate::parser::ParsedItem::Preamble(value) => pending_preambles.push(value),
-                    crate::parser::ParsedItem::String(name, value) => {
-                        db.strings.insert(Cow::Borrowed(name), value);
-                    }
-                    crate::parser::ParsedItem::Comment(text) => {
-                        db.comments.push(Cow::Borrowed(text));
-                    }
-                }
-                Ok(())
-            })?;
+    fn parse_without_string_definitions(&mut self, input: &'a str) -> Result<()> {
+        let has_user_strings = false;
+        let month_constants_shadowed = false;
+        let mut expansion_state = ExpansionState::new(&self.strings);
 
-            let has_user_strings = !db.strings.is_empty();
-            let month_constants_shadowed =
-                has_user_strings && user_strings_shadow_month_constants(&db.strings);
-            for value in pending_preambles {
-                let mut expanded = value;
-                db.expand_value_for_parse(
-                    &mut expanded,
+        crate::parser::parse_bibtex_stream(input, |item| match item {
+            crate::parser::ParsedItem::Entry(mut entry) => {
+                self.expand_entry_for_parse(
+                    &mut entry,
                     has_user_strings,
                     month_constants_shadowed,
-                    &mut expanded_variables,
-                    &mut expansion_stack,
+                    &mut expansion_state,
                 )?;
-                db.preambles.push(expanded);
+                self.entries.push(entry);
+                Ok(())
             }
+            crate::parser::ParsedItem::Preamble(value) => self.push_expanded_preamble(
+                value,
+                has_user_strings,
+                month_constants_shadowed,
+                &mut expansion_state,
+            ),
+            crate::parser::ParsedItem::Comment(text) => {
+                self.comments.push(Cow::Borrowed(text));
+                Ok(())
+            }
+            crate::parser::ParsedItem::String(name, value) => {
+                // Defensive fallback for scanner false negatives.
+                self.strings.insert(Cow::Borrowed(name), value);
+                Ok(())
+            }
+        })
+    }
 
-            return Ok(db);
+    fn parse_with_early_string_definitions(&mut self, input: &'a str) -> Result<()> {
+        let mut pending_preambles = Vec::new();
+        let mut expansion_state = ExpansionState::new(&self.strings);
+        let mut month_constants_shadowed = None;
+
+        crate::parser::parse_bibtex_stream(input, |item| match item {
+            crate::parser::ParsedItem::Entry(mut entry) => {
+                let has_user_strings = !self.strings.is_empty();
+                if has_user_strings {
+                    expansion_state.ensure_configured(&self.strings);
+                }
+                let month_constants_shadowed = *month_constants_shadowed.get_or_insert_with(|| {
+                    has_user_strings && user_strings_shadow_month_constants(&self.strings)
+                });
+                self.expand_entry_for_parse(
+                    &mut entry,
+                    has_user_strings,
+                    month_constants_shadowed,
+                    &mut expansion_state,
+                )?;
+                self.entries.push(entry);
+                Ok(())
+            }
+            crate::parser::ParsedItem::Preamble(value) => {
+                pending_preambles.push(value);
+                Ok(())
+            }
+            crate::parser::ParsedItem::String(name, value) => {
+                self.strings.insert(Cow::Borrowed(name), value);
+                Ok(())
+            }
+            crate::parser::ParsedItem::Comment(text) => {
+                self.comments.push(Cow::Borrowed(text));
+                Ok(())
+            }
+        })?;
+
+        let has_user_strings = !self.strings.is_empty();
+        let month_constants_shadowed =
+            has_user_strings && user_strings_shadow_month_constants(&self.strings);
+        if has_user_strings {
+            expansion_state.ensure_configured(&self.strings);
         }
 
+        for value in pending_preambles {
+            self.push_expanded_preamble(
+                value,
+                has_user_strings,
+                month_constants_shadowed,
+                &mut expansion_state,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    fn parse_with_late_string_definitions(&mut self, input: &'a str) -> Result<()> {
         let mut pending_entries = Vec::new();
         let mut pending_preambles = Vec::new();
 
@@ -464,51 +551,84 @@ impl<'a> Database<'a> {
                 crate::parser::ParsedItem::Entry(entry) => pending_entries.push(entry),
                 crate::parser::ParsedItem::Preamble(value) => pending_preambles.push(value),
                 crate::parser::ParsedItem::String(name, value) => {
-                    db.strings.insert(Cow::Borrowed(name), value);
+                    self.strings.insert(Cow::Borrowed(name), value);
                 }
                 crate::parser::ParsedItem::Comment(text) => {
-                    db.comments.push(Cow::Borrowed(text));
+                    self.comments.push(Cow::Borrowed(text));
                 }
             }
             Ok(())
         })?;
 
-        db.entries.reserve_exact(pending_entries.len());
-        db.preambles.reserve_exact(pending_preambles.len());
+        self.entries.reserve_exact(pending_entries.len());
+        self.preambles.reserve_exact(pending_preambles.len());
 
         // Expand after parsing so all @string definitions are available globally.
-        let has_user_strings = !db.strings.is_empty();
+        let has_user_strings = !self.strings.is_empty();
         let month_constants_shadowed =
-            has_user_strings && user_strings_shadow_month_constants(&db.strings);
-        let mut expanded_variables = AHashMap::with_capacity(db.strings.len());
-        let mut expansion_stack = Vec::new();
+            has_user_strings && user_strings_shadow_month_constants(&self.strings);
+        let mut expansion_state = ExpansionState::new(&self.strings);
+        if has_user_strings {
+            expansion_state.ensure_configured(&self.strings);
+        }
 
         for mut entry in pending_entries {
-            for field in &mut entry.fields {
-                db.expand_value_for_parse(
-                    &mut field.value,
-                    has_user_strings,
-                    month_constants_shadowed,
-                    &mut expanded_variables,
-                    &mut expansion_stack,
-                )?;
-            }
-            db.entries.push(entry);
+            self.expand_entry_for_parse(
+                &mut entry,
+                has_user_strings,
+                month_constants_shadowed,
+                &mut expansion_state,
+            )?;
+            self.entries.push(entry);
         }
 
         for value in pending_preambles {
-            let mut expanded = value;
-            db.expand_value_for_parse(
-                &mut expanded,
+            self.push_expanded_preamble(
+                value,
                 has_user_strings,
                 month_constants_shadowed,
-                &mut expanded_variables,
-                &mut expansion_stack,
+                &mut expansion_state,
             )?;
-            db.preambles.push(expanded);
         }
 
-        Ok(db)
+        Ok(())
+    }
+
+    fn expand_entry_for_parse(
+        &self,
+        entry: &mut Entry<'a>,
+        has_user_strings: bool,
+        month_constants_shadowed: bool,
+        expansion_state: &mut ExpansionState<'a>,
+    ) -> Result<()> {
+        for field in &mut entry.fields {
+            self.expand_value_for_parse(
+                &mut field.value,
+                has_user_strings,
+                month_constants_shadowed,
+                expansion_state,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    fn push_expanded_preamble(
+        &mut self,
+        value: Value<'a>,
+        has_user_strings: bool,
+        month_constants_shadowed: bool,
+        expansion_state: &mut ExpansionState<'a>,
+    ) -> Result<()> {
+        let mut expanded = value;
+        self.expand_value_for_parse(
+            &mut expanded,
+            has_user_strings,
+            month_constants_shadowed,
+            expansion_state,
+        )?;
+        self.preambles.push(expanded);
+        Ok(())
     }
 
     /// Merge another database into this one
@@ -644,8 +764,7 @@ impl<'a> Database<'a> {
     fn smart_expand_value_cached(
         &self,
         value: Value<'a>,
-        expanded_variables: &mut AHashMap<String, Value<'a>>,
-        expansion_stack: &mut Vec<String>,
+        expansion_state: &mut ExpansionState<'a>,
     ) -> Result<Value<'a>> {
         match value {
             // Simple literals and numbers stay as-is (zero-copy!)
@@ -653,17 +772,42 @@ impl<'a> Database<'a> {
 
             // Variables need to be resolved
             Value::Variable(name) => {
-                if let Some(expanded) = expanded_variables.get(name.as_ref()) {
+                if let Some(slots) = expansion_state.small_slots.as_ref() {
+                    if let Some(index) = slots
+                        .iter()
+                        .position(|slot| slot.name.as_ref() == name.as_ref())
+                    {
+                        if let Some(expanded) = slots[index].expanded.as_ref() {
+                            return Ok(expanded.clone());
+                        }
+
+                        if expansion_state.contains_in_stack(name.as_ref()) {
+                            return Err(Error::CircularReference(
+                                expansion_state.cycle_message(name.as_ref()),
+                            ));
+                        }
+
+                        let variable_name = slots[index].name.clone();
+                        let raw_value = slots[index].raw.clone();
+                        expansion_state.expansion_stack.push(variable_name);
+                        let expanded = self.smart_expand_value_cached(raw_value, expansion_state);
+                        expansion_state.expansion_stack.pop();
+
+                        let expanded = expanded?;
+                        if let Some(slots) = expansion_state.small_slots.as_mut() {
+                            slots[index].expanded = Some(expanded.clone());
+                        }
+                        return Ok(expanded);
+                    }
+                } else if let Some(expanded) = expansion_state.expanded_variables.get(name.as_ref())
+                {
                     return Ok(expanded.clone());
                 }
 
-                if expansion_stack.iter().any(|v| v == name.as_ref()) {
-                    let mut cycle = expansion_stack.join(" -> ");
-                    if !cycle.is_empty() {
-                        cycle.push_str(" -> ");
-                    }
-                    cycle.push_str(name.as_ref());
-                    return Err(Error::CircularReference(cycle));
+                if expansion_state.contains_in_stack(name.as_ref()) {
+                    return Err(Error::CircularReference(
+                        expansion_state.cycle_message(name.as_ref()),
+                    ));
                 }
 
                 // First check user-defined strings
@@ -680,26 +824,23 @@ impl<'a> Database<'a> {
                     },
                     |user_value| {
                         // Recursively expand the variable's value and cache the result
-                        let variable_name = name.as_ref().to_string();
-                        expansion_stack.push(variable_name.clone());
-                        let expanded = self.smart_expand_value_cached(
-                            user_value.clone(),
-                            expanded_variables,
-                            expansion_stack,
-                        );
-                        expansion_stack.pop();
+                        let variable_name = name.clone();
+                        expansion_state.expansion_stack.push(variable_name.clone());
+                        let expanded =
+                            self.smart_expand_value_cached(user_value.clone(), expansion_state);
+                        expansion_state.expansion_stack.pop();
 
                         let expanded = expanded?;
-                        expanded_variables.insert(variable_name, expanded.clone());
+                        expansion_state
+                            .expanded_variables
+                            .insert(variable_name, expanded.clone());
                         Ok(expanded)
                     },
                 )
             }
 
             // Concatenations need special handling
-            Value::Concat(parts) => {
-                self.expand_concatenation_cached(*parts, expanded_variables, expansion_stack)
-            }
+            Value::Concat(parts) => self.expand_concatenation_cached(*parts, expansion_state),
         }
     }
 
@@ -737,24 +878,25 @@ impl<'a> Database<'a> {
 
     /// Expand a concatenation, only converting to owned when necessary
     fn expand_concatenation(&self, parts: Vec<Value<'a>>) -> Result<Value<'a>> {
-        let mut expanded_variables = AHashMap::new();
-        let mut expansion_stack = Vec::new();
-        self.expand_concatenation_cached(parts, &mut expanded_variables, &mut expansion_stack)
+        let mut expansion_state = ExpansionState::new(&self.strings);
+        self.expand_concatenation_cached(parts, &mut expansion_state)
     }
 
     /// Cached concatenation expansion used by hot parsing paths.
     fn expand_concatenation_cached(
         &self,
         parts: Vec<Value<'a>>,
-        expanded_variables: &mut AHashMap<String, Value<'a>>,
-        expansion_stack: &mut Vec<String>,
+        expansion_state: &mut ExpansionState<'a>,
     ) -> Result<Value<'a>> {
+        if let Some(combined) = try_concatenate_cached_simple_parts(&parts, expansion_state) {
+            return Ok(Value::Literal(Cow::Owned(combined)));
+        }
+
         let mut expanded_parts = Vec::with_capacity(parts.len());
 
         // First, expand all parts
         for part in parts {
-            let expanded =
-                self.smart_expand_value_cached(part, expanded_variables, expansion_stack)?;
+            let expanded = self.smart_expand_value_cached(part, expansion_state)?;
             expanded_parts.push(expanded);
         }
 
@@ -1002,7 +1144,7 @@ pub struct IssueSummary {
 }
 
 /// Concatenate simple values (literals and numbers) into a single string
-fn concatenate_simple_values(values: &[Value]) -> String {
+fn concatenate_simple_values(values: &[Value<'_>]) -> String {
     let mut result = String::new();
 
     // Pre-calculate capacity for efficiency
@@ -1026,6 +1168,60 @@ fn concatenate_simple_values(values: &[Value]) -> String {
     }
 
     result
+}
+
+#[inline]
+fn simple_value_len(value: &Value<'_>) -> Option<usize> {
+    match value {
+        Value::Literal(text) => Some(text.len()),
+        Value::Number(number) => Some(number.to_string().len()),
+        _ => None,
+    }
+}
+
+#[inline]
+fn append_simple_value(output: &mut String, value: &Value<'_>) -> bool {
+    match value {
+        Value::Literal(text) => {
+            output.push_str(text);
+            true
+        }
+        Value::Number(number) => {
+            output.push_str(&number.to_string());
+            true
+        }
+        _ => false,
+    }
+}
+
+fn try_concatenate_cached_simple_parts<'a>(
+    parts: &[Value<'a>],
+    expansion_state: &ExpansionState<'a>,
+) -> Option<String> {
+    let mut capacity = 0;
+
+    for part in parts {
+        let value = match part {
+            Value::Literal(_) | Value::Number(_) => part,
+            Value::Variable(name) => expansion_state.cached_value(name.as_ref())?,
+            Value::Concat(_) => return None,
+        };
+        capacity += simple_value_len(value)?;
+    }
+
+    let mut combined = String::with_capacity(capacity);
+    for part in parts {
+        let value = match part {
+            Value::Literal(_) | Value::Number(_) => part,
+            Value::Variable(name) => expansion_state.cached_value(name.as_ref())?,
+            Value::Concat(_) => return None,
+        };
+        if !append_simple_value(&mut combined, value) {
+            return None;
+        }
+    }
+
+    Some(combined)
 }
 
 /// Builder for creating databases programmatically
