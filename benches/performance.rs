@@ -4,6 +4,10 @@
 #![allow(clippy::too_many_lines)]
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+#[cfg(target_os = "linux")]
+use std::collections::BTreeSet;
+#[cfg(target_os = "linux")]
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 // Cache input files to avoid I/O variance
@@ -12,14 +16,7 @@ static TUGBOAT_BIB: &str = include_str!("../tests/fixtures/tugboat.bib");
 /// Keep the benchmark thread on a single core when running on Linux.
 #[cfg(target_os = "linux")]
 fn pin_benchmark_thread() {
-    let cpu = benchmark_cpu();
-
-    unsafe {
-        let mut cpu_set: libc::cpu_set_t = std::mem::zeroed();
-        libc::CPU_ZERO(&mut cpu_set);
-        libc::CPU_SET(cpu, &mut cpu_set);
-        let _ = libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &cpu_set);
-    }
+    set_thread_affinity(benchmark_cpu());
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -27,14 +24,54 @@ fn pin_benchmark_thread() {}
 
 #[cfg(target_os = "linux")]
 fn benchmark_cpu() -> usize {
+    static BENCHMARK_CPU: OnceLock<usize> = OnceLock::new();
+    *BENCHMARK_CPU.get_or_init(detect_benchmark_cpu)
+}
+
+#[cfg(target_os = "linux")]
+fn detect_benchmark_cpu() -> usize {
+    use bibtex_parser::Database;
+
     if let Ok(cpu) = std::env::var("BIBTEX_BENCH_CPU") {
         if let Ok(cpu) = cpu.parse::<usize>() {
             return cpu;
         }
     }
 
-    let mut best_cpu = 0usize;
-    let mut best_freq = 0u64;
+    let candidate_cpus = collect_candidate_cpus();
+    let Some(&first_cpu) = candidate_cpus.first() else {
+        return 0;
+    };
+
+    let mut best_cpu = first_cpu;
+    let mut best_elapsed = Duration::MAX;
+
+    for cpu in candidate_cpus {
+        set_thread_affinity(cpu);
+
+        // A short empirical probe is more reliable on DVFS-heavy systems than
+        // a single frequency snapshot from sysfs.
+        let mut fastest_probe = Duration::MAX;
+        for _ in 0..3 {
+            let start = Instant::now();
+            let db = Database::parser().parse(black_box(TUGBOAT_BIB)).unwrap();
+            black_box(&db);
+            fastest_probe = fastest_probe.min(start.elapsed());
+        }
+
+        if fastest_probe < best_elapsed {
+            best_elapsed = fastest_probe;
+            best_cpu = cpu;
+        }
+    }
+
+    best_cpu
+}
+
+#[cfg(target_os = "linux")]
+fn collect_candidate_cpus() -> Vec<usize> {
+    let mut candidates = Vec::new();
+    let mut seen_siblings = BTreeSet::new();
 
     if let Ok(entries) = std::fs::read_dir("/sys/devices/system/cpu") {
         for entry in entries.flatten() {
@@ -47,27 +84,34 @@ fn benchmark_cpu() -> usize {
                 continue;
             };
 
-            // Prefer one hardware thread per core.
-            if cpu_id % 2 != 0 {
+            let siblings_path = entry.path().join("topology/thread_siblings_list");
+            let Ok(siblings) = std::fs::read_to_string(siblings_path) else {
+                continue;
+            };
+            let siblings = siblings.trim().to_string();
+
+            // Keep one representative per physical core and let the empirical
+            // probe decide which core is actually fastest.
+            if !seen_siblings.insert(siblings) {
                 continue;
             }
 
-            let freq_path = entry.path().join("cpufreq/scaling_cur_freq");
-            let Ok(freq) = std::fs::read_to_string(freq_path) else {
-                continue;
-            };
-            let Ok(freq) = freq.trim().parse::<u64>() else {
-                continue;
-            };
-
-            if freq > best_freq {
-                best_freq = freq;
-                best_cpu = cpu_id;
-            }
+            candidates.push(cpu_id);
         }
     }
 
-    best_cpu
+    candidates.sort_unstable();
+    candidates
+}
+
+#[cfg(target_os = "linux")]
+fn set_thread_affinity(cpu: usize) {
+    unsafe {
+        let mut cpu_set: libc::cpu_set_t = std::mem::zeroed();
+        libc::CPU_ZERO(&mut cpu_set);
+        libc::CPU_SET(cpu, &mut cpu_set);
+        let _ = libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &cpu_set);
+    }
 }
 
 /// Actively warm the parser so the benchmark starts at steady-state frequency.
