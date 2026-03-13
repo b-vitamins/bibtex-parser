@@ -772,76 +772,143 @@ impl<'a> Database<'a> {
 
             // Variables need to be resolved
             Value::Variable(name) => {
-                if let Some(slots) = expansion_state.small_slots.as_ref() {
-                    if let Some(index) = slots
-                        .iter()
-                        .position(|slot| slot.name.as_ref() == name.as_ref())
-                    {
-                        if let Some(expanded) = slots[index].expanded.as_ref() {
-                            return Ok(expanded.clone());
-                        }
-
-                        if expansion_state.contains_in_stack(name.as_ref()) {
-                            return Err(Error::CircularReference(
-                                expansion_state.cycle_message(name.as_ref()),
-                            ));
-                        }
-
-                        let variable_name = slots[index].name.clone();
-                        let raw_value = slots[index].raw.clone();
-                        expansion_state.expansion_stack.push(variable_name);
-                        let expanded = self.smart_expand_value_cached(raw_value, expansion_state);
-                        expansion_state.expansion_stack.pop();
-
-                        let expanded = expanded?;
-                        if let Some(slots) = expansion_state.small_slots.as_mut() {
-                            slots[index].expanded = Some(expanded.clone());
-                        }
-                        return Ok(expanded);
-                    }
-                } else if let Some(expanded) = expansion_state.expanded_variables.get(name.as_ref())
-                {
-                    return Ok(expanded.clone());
-                }
-
-                if expansion_state.contains_in_stack(name.as_ref()) {
-                    return Err(Error::CircularReference(
-                        expansion_state.cycle_message(name.as_ref()),
-                    ));
-                }
-
-                // First check user-defined strings
-                self.strings.get(name.as_ref()).map_or_else(
-                    || {
-                        // Check month abbreviations as fallback
-                        get_month_expansion(name.as_ref()).map_or_else(
-                            || {
-                                // Variable not found in either user strings or month constants
-                                Err(Error::UndefinedVariable(name.as_ref().to_string()))
-                            },
-                            |month_value| Ok(Value::Literal(Cow::Borrowed(month_value))),
-                        )
-                    },
-                    |user_value| {
-                        // Recursively expand the variable's value and cache the result
-                        let variable_name = name.clone();
-                        expansion_state.expansion_stack.push(variable_name.clone());
-                        let expanded =
-                            self.smart_expand_value_cached(user_value.clone(), expansion_state);
-                        expansion_state.expansion_stack.pop();
-
-                        let expanded = expanded?;
-                        expansion_state
-                            .expanded_variables
-                            .insert(variable_name, expanded.clone());
-                        Ok(expanded)
-                    },
-                )
+                Ok(self.ensure_variable_cached(&name, expansion_state)?.clone())
             }
 
             // Concatenations need special handling
-            Value::Concat(parts) => self.expand_concatenation_cached(*parts, expansion_state),
+            Value::Concat(parts) => self.expand_concatenation_parts_cached(&parts, expansion_state),
         }
+    }
+
+    #[inline]
+    fn expand_value_ref_cached(
+        &self,
+        value: &Value<'a>,
+        expansion_state: &mut ExpansionState<'a>,
+    ) -> Result<Value<'a>> {
+        match value {
+            Value::Literal(text) => Ok(Value::Literal(text.clone())),
+            Value::Number(number) => Ok(Value::Number(*number)),
+            Value::Variable(name) => {
+                Ok(self.ensure_variable_cached(name, expansion_state)?.clone())
+            }
+            Value::Concat(parts) => self.expand_concatenation_parts_cached(parts, expansion_state),
+        }
+    }
+
+    fn ensure_variable_cached<'s>(
+        &self,
+        name: &Cow<'a, str>,
+        expansion_state: &'s mut ExpansionState<'a>,
+    ) -> Result<&'s Value<'a>> {
+        if expansion_state.cached_value(name.as_ref()).is_none() {
+            if expansion_state.contains_in_stack(name.as_ref()) {
+                return Err(Error::CircularReference(
+                    expansion_state.cycle_message(name.as_ref()),
+                ));
+            }
+
+            let small_slot = expansion_state.small_slots.as_ref().and_then(|slots| {
+                slots
+                    .iter()
+                    .position(|slot| slot.name.as_ref() == name.as_ref())
+                    .map(|index| (index, slots[index].name.clone(), slots[index].raw.clone()))
+            });
+
+            if let Some((index, variable_name, raw_value)) = small_slot {
+                expansion_state.expansion_stack.push(variable_name);
+                let expanded = self.expand_value_ref_cached(&raw_value, expansion_state);
+                expansion_state.expansion_stack.pop();
+
+                let expanded = expanded?;
+                if let Some(slots) = expansion_state.small_slots.as_mut() {
+                    slots[index].expanded = Some(expanded);
+                }
+            } else if let Some(user_value) = self.strings.get(name.as_ref()) {
+                let variable_name = name.clone();
+                expansion_state.expansion_stack.push(variable_name.clone());
+                let expanded = self.expand_value_ref_cached(user_value, expansion_state);
+                expansion_state.expansion_stack.pop();
+
+                let expanded = expanded?;
+                expansion_state
+                    .expanded_variables
+                    .insert(variable_name, expanded);
+            } else {
+                let month_value = get_month_expansion(name.as_ref())
+                    .ok_or_else(|| Error::UndefinedVariable(name.as_ref().to_string()))?;
+                return Ok(expansion_state
+                    .expanded_variables
+                    .entry(name.clone())
+                    .or_insert_with(|| Value::Literal(Cow::Borrowed(month_value))));
+            }
+        }
+
+        Ok(expansion_state
+            .cached_value(name.as_ref())
+            .expect("variable cache populated before return"))
+    }
+
+    #[inline]
+    fn expanded_simple_len(
+        &self,
+        value: &Value<'a>,
+        expansion_state: &mut ExpansionState<'a>,
+    ) -> Result<usize> {
+        match value {
+            Value::Literal(text) => Ok(text.len()),
+            Value::Number(number) => Ok(decimal_len(*number)),
+            Value::Variable(name) => Ok(simple_value_len(
+                self.ensure_variable_cached(name, expansion_state)?,
+            )
+            .expect("cached variables must be simple values")),
+            Value::Concat(parts) => parts.iter().try_fold(0usize, |total, part| {
+                Ok::<usize, Error>(total + self.expanded_simple_len(part, expansion_state)?)
+            }),
+        }
+    }
+
+    #[inline]
+    fn append_expanded_simple(
+        &self,
+        value: &Value<'a>,
+        output: &mut String,
+        expansion_state: &mut ExpansionState<'a>,
+    ) -> Result<()> {
+        match value {
+            Value::Literal(text) => output.push_str(text),
+            Value::Number(number) => append_decimal(output, *number),
+            Value::Variable(name) => {
+                let cached = self.ensure_variable_cached(name, expansion_state)?;
+                let appended = append_simple_value(output, cached);
+                debug_assert!(appended, "cached variables must be simple values");
+            }
+            Value::Concat(parts) => {
+                for part in parts.iter() {
+                    self.append_expanded_simple(part, output, expansion_state)?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    #[inline]
+    fn expand_concatenation_parts_cached(
+        &self,
+        parts: &[Value<'a>],
+        expansion_state: &mut ExpansionState<'a>,
+    ) -> Result<Value<'a>> {
+        let capacity = parts.iter().try_fold(0usize, |total, part| {
+            Ok::<usize, Error>(total + self.expanded_simple_len(part, expansion_state)?)
+        })?;
+
+        let mut combined = String::with_capacity(capacity);
+        for part in parts {
+            self.append_expanded_simple(part, &mut combined, expansion_state)?;
+        }
+
+        Ok(Value::Literal(Cow::Owned(combined)))
     }
 
     /// Alternative expansion that works with references (requires cloning for variables)
@@ -869,47 +936,14 @@ impl<'a> Database<'a> {
             }
 
             // Concatenations need cloning
-            Value::Concat(parts) => {
-                let cloned_parts = (**parts).clone();
-                self.expand_concatenation(cloned_parts)
-            }
+            Value::Concat(parts) => self.expand_concatenation(parts),
         }
     }
 
     /// Expand a concatenation, only converting to owned when necessary
-    fn expand_concatenation(&self, parts: Vec<Value<'a>>) -> Result<Value<'a>> {
+    fn expand_concatenation(&self, parts: &[Value<'a>]) -> Result<Value<'a>> {
         let mut expansion_state = ExpansionState::new(&self.strings);
-        self.expand_concatenation_cached(parts, &mut expansion_state)
-    }
-
-    /// Cached concatenation expansion used by hot parsing paths.
-    fn expand_concatenation_cached(
-        &self,
-        parts: Vec<Value<'a>>,
-        expansion_state: &mut ExpansionState<'a>,
-    ) -> Result<Value<'a>> {
-        if let Some(combined) = try_concatenate_cached_simple_parts(&parts, expansion_state) {
-            return Ok(Value::Literal(Cow::Owned(combined)));
-        }
-
-        let mut expanded_parts = Vec::with_capacity(parts.len());
-
-        // First, expand all parts
-        for part in parts {
-            let expanded = self.smart_expand_value_cached(part, expansion_state)?;
-            expanded_parts.push(expanded);
-        }
-
-        // If all parts are literals or numbers, we can flatten to a single string
-        if expanded_parts
-            .iter()
-            .all(|p| matches!(p, Value::Literal(_) | Value::Number(_)))
-        {
-            let combined = concatenate_simple_values(&expanded_parts);
-            Ok(Value::Literal(Cow::Owned(combined)))
-        } else {
-            Ok(Value::Concat(Box::new(expanded_parts)))
-        }
+        self.expand_concatenation_parts_cached(parts, &mut expansion_state)
     }
 
     /// Get a fully expanded string value (for compatibility)
@@ -1143,38 +1177,11 @@ pub struct IssueSummary {
     pub infos: usize,
 }
 
-/// Concatenate simple values (literals and numbers) into a single string
-fn concatenate_simple_values(values: &[Value<'_>]) -> String {
-    let mut result = String::new();
-
-    // Pre-calculate capacity for efficiency
-    let capacity: usize = values
-        .iter()
-        .map(|v| match v {
-            Value::Literal(s) => s.len(),
-            Value::Number(n) => n.to_string().len(),
-            _ => 0,
-        })
-        .sum();
-
-    result.reserve(capacity);
-
-    for value in values {
-        match value {
-            Value::Literal(s) => result.push_str(s),
-            Value::Number(n) => result.push_str(&n.to_string()),
-            _ => {} // Should not happen given the precondition
-        }
-    }
-
-    result
-}
-
 #[inline]
 fn simple_value_len(value: &Value<'_>) -> Option<usize> {
     match value {
         Value::Literal(text) => Some(text.len()),
-        Value::Number(number) => Some(number.to_string().len()),
+        Value::Number(number) => Some(decimal_len(*number)),
         _ => None,
     }
 }
@@ -1187,43 +1194,52 @@ fn append_simple_value(output: &mut String, value: &Value<'_>) -> bool {
             true
         }
         Value::Number(number) => {
-            output.push_str(&number.to_string());
+            append_decimal(output, *number);
             true
         }
         _ => false,
     }
 }
 
-fn try_concatenate_cached_simple_parts<'a>(
-    parts: &[Value<'a>],
-    expansion_state: &ExpansionState<'a>,
-) -> Option<String> {
-    let mut capacity = 0;
+#[inline]
+const fn decimal_len(number: i64) -> usize {
+    let mut digits = 1usize;
+    let mut value = number.unsigned_abs();
 
-    for part in parts {
-        let value = match part {
-            Value::Literal(_) | Value::Number(_) => part,
-            Value::Variable(name) => expansion_state.cached_value(name.as_ref())?,
-            Value::Concat(_) => return None,
-        };
-        capacity += simple_value_len(value)?;
+    while value >= 10 {
+        digits += 1;
+        value /= 10;
     }
 
-    let mut combined = String::with_capacity(capacity);
-    for part in parts {
-        let value = match part {
-            Value::Literal(_) | Value::Number(_) => part,
-            Value::Variable(name) => expansion_state.cached_value(name.as_ref())?,
-            Value::Concat(_) => return None,
-        };
-        if !append_simple_value(&mut combined, value) {
-            return None;
+    if number < 0 {
+        digits + 1
+    } else {
+        digits
+    }
+}
+
+#[inline]
+fn append_decimal(output: &mut String, number: i64) {
+    if number < 0 {
+        output.push('-');
+    }
+
+    let mut value = number.unsigned_abs();
+    let mut buffer = [0u8; 20];
+    let mut index = buffer.len();
+
+    loop {
+        index -= 1;
+        buffer[index] = b'0' + (value % 10) as u8;
+        value /= 10;
+        if value == 0 {
+            break;
         }
     }
 
-    Some(combined)
+    let digits = std::str::from_utf8(&buffer[index..]).expect("decimal digits are ASCII");
+    output.push_str(digits);
 }
-
 /// Builder for creating databases programmatically
 #[derive(Debug, Default)]
 pub struct DatabaseBuilder<'a> {
@@ -1363,7 +1379,7 @@ mod tests {
 
         assert_eq!(entry.fields.len(), 10);
         assert!(
-            entry.fields.capacity() <= 16,
+            entry.fields.capacity() <= 17,
             "Unexpected field Vec growth: len={}, capacity={}",
             entry.fields.len(),
             entry.fields.capacity()

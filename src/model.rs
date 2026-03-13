@@ -556,18 +556,18 @@ impl<'a> EntryType<'a> {
             return Self::Custom(Cow::Borrowed(s));
         }
 
-        match ascii_lower(bytes[0]) {
-            b'a' if s.eq_ignore_ascii_case("article") => Self::Article,
-            b'b' if s.eq_ignore_ascii_case("book") => Self::Book,
-            b'c' if s.eq_ignore_ascii_case("conference") => Self::InProceedings,
-            b'i' if s.eq_ignore_ascii_case("inbook") => Self::InBook,
-            b'i' if s.eq_ignore_ascii_case("inproceedings") => Self::InProceedings,
-            b'm' if s.eq_ignore_ascii_case("mastersthesis") => Self::MastersThesis,
-            b'm' if s.eq_ignore_ascii_case("misc") => Self::Misc,
-            b'p' if s.eq_ignore_ascii_case("phdthesis") => Self::PhdThesis,
-            b'p' if s.eq_ignore_ascii_case("proceedings") => Self::Proceedings,
-            b't' if s.eq_ignore_ascii_case("techreport") => Self::TechReport,
-            b'u' if s.eq_ignore_ascii_case("unpublished") => Self::Unpublished,
+        match (bytes.len(), ascii_lower(bytes[0])) {
+            (4, b'b') if eq_ascii_lower(bytes, b"book") => Self::Book,
+            (4, b'm') if eq_ascii_lower(bytes, b"misc") => Self::Misc,
+            (6, b'i') if eq_ascii_lower(bytes, b"inbook") => Self::InBook,
+            (7, b'a') if eq_ascii_lower(bytes, b"article") => Self::Article,
+            (9, b'p') if eq_ascii_lower(bytes, b"phdthesis") => Self::PhdThesis,
+            (10, b'c') if eq_ascii_lower(bytes, b"conference") => Self::InProceedings,
+            (10, b't') if eq_ascii_lower(bytes, b"techreport") => Self::TechReport,
+            (11, b'p') if eq_ascii_lower(bytes, b"proceedings") => Self::Proceedings,
+            (11, b'u') if eq_ascii_lower(bytes, b"unpublished") => Self::Unpublished,
+            (13, b'i') if eq_ascii_lower(bytes, b"inproceedings") => Self::InProceedings,
+            (13, b'm') if eq_ascii_lower(bytes, b"mastersthesis") => Self::MastersThesis,
             _ => Self::Custom(Cow::Borrowed(s)),
         }
     }
@@ -614,6 +614,23 @@ const fn ascii_lower(byte: u8) -> u8 {
     } else {
         byte
     }
+}
+
+#[inline]
+fn eq_ascii_lower(input: &[u8], expected: &[u8]) -> bool {
+    if input.len() != expected.len() {
+        return false;
+    }
+
+    let mut index = 0usize;
+    while index < input.len() {
+        if ascii_lower(input[index]) != expected[index] {
+            return false;
+        }
+        index += 1;
+    }
+
+    true
 }
 
 impl fmt::Display for EntryType<'_> {

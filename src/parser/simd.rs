@@ -68,29 +68,30 @@ pub fn find_balanced_quotes(input: &[u8]) -> Option<usize> {
 
     let mut pos = 1;
 
-    // Use SIMD to find next delimiter: " or \
+    // Most BibTeX quoted strings have no escapes, so search for the next quote
+    // first and only fall back to counting preceding backslashes when needed.
     while pos < input.len() {
-        // Find next interesting character using SIMD
-        if let Some(offset) = memchr::memchr2(b'"', b'\\', &input[pos..]) {
+        if let Some(offset) = memchr::memchr(b'"', &input[pos..]) {
             let idx = pos + offset;
 
-            match input[idx] {
-                b'"' => {
-                    return Some(idx + 1); // Return position after closing quote
-                }
-                b'\\' => {
-                    // Skip escaped character
-                    pos = idx + 2; // Skip backslash and next char
-                }
-                _ => unreachable!(),
+            let mut backslash_count = 0usize;
+            let mut probe = idx;
+            while probe > 0 && input[probe - 1] == b'\\' {
+                backslash_count += 1;
+                probe -= 1;
             }
+
+            if backslash_count % 2 == 0 {
+                return Some(idx + 1);
+            }
+
+            pos = idx + 1;
         } else {
-            // No closing quote found
             return None;
         }
     }
 
-    None // Unclosed quote
+    None
 }
 
 /// Find balanced parentheses using SIMD acceleration

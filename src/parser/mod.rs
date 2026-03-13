@@ -60,40 +60,52 @@ pub type PResult<'a, O> = winnow::PResult<O, winnow::error::ContextError>;
 ///
 /// Keeping a byte index lets the top-level parser avoid repeatedly rebuilding
 /// `&str` state for every item and makes manual special-form parsing cheap.
-struct Cursor<'a> {
+pub(super) struct Cursor<'a> {
     input: &'a str,
     pos: usize,
 }
 
 impl<'a> Cursor<'a> {
     #[inline]
-    const fn new(input: &'a str) -> Self {
+    pub(super) const fn new(input: &'a str) -> Self {
         Self { input, pos: 0 }
     }
 
     #[inline]
-    fn remaining(&self) -> &'a str {
+    pub(super) fn remaining(&self) -> &'a str {
         &self.input[self.pos..]
     }
 
     #[inline]
-    fn remaining_bytes(&self) -> &'a [u8] {
+    pub(super) fn remaining_bytes(&self) -> &'a [u8] {
         &self.input.as_bytes()[self.pos..]
     }
 
     #[inline]
-    fn skip_whitespace(&mut self) {
+    pub(super) fn skip_whitespace(&mut self) {
         self.pos += simd::scan_whitespace(self.remaining_bytes());
     }
 
     #[inline]
-    const fn is_empty(&self) -> bool {
+    pub(super) const fn is_empty(&self) -> bool {
         self.pos >= self.input.len()
     }
 
     #[inline]
-    fn bump(&mut self, len: usize) {
+    pub(super) fn bump(&mut self, len: usize) {
         self.pos += len;
+    }
+
+    #[inline]
+    pub(super) fn take_identifier(&mut self) -> Option<&'a str> {
+        let len = simd::scan_identifier(self.remaining_bytes());
+        if len == 0 {
+            return None;
+        }
+
+        let ident = &self.remaining()[..len];
+        self.bump(len);
+        Some(ident)
     }
 
     #[inline]
@@ -113,18 +125,6 @@ fn backtrack<'a, O>() -> PResult<'a, O> {
     Err(winnow::error::ErrMode::Backtrack(
         winnow::error::ContextError::default(),
     ))
-}
-
-#[inline]
-fn parse_from_remaining<'a, O, F>(cursor: &mut Cursor<'a>, parser: F) -> PResult<'a, O>
-where
-    F: FnOnce(&mut &'a str) -> PResult<'a, O>,
-{
-    let start = cursor.remaining();
-    let mut remaining = start;
-    let output = parser(&mut remaining)?;
-    cursor.bump(start.len() - remaining.len());
-    Ok(output)
 }
 
 /// Parse a BibTeX file into raw items without expansion or processing
@@ -308,7 +308,7 @@ fn parse_item<'a>(cursor: &mut Cursor<'a>) -> PResult<'a, ParsedItem<'a>> {
         b'c' if starts_with_keyword(bytes, b"comment") => {
             parse_comment(cursor).map(ParsedItem::Comment)
         }
-        _ => parse_from_remaining(cursor, entry::parse_entry_at).map(ParsedItem::Entry),
+        _ => entry::parse_entry_fast(cursor).map(ParsedItem::Entry),
     }
 }
 
