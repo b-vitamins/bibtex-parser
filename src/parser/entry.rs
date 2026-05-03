@@ -172,9 +172,7 @@ fn parse_fields<'a>(input: &mut &'a str, closing_delimiter: u8) -> PResult<'a, V
     let mut fields = Vec::with_capacity(INITIAL_FIELD_CAPACITY);
 
     loop {
-        lexer::skip_whitespace(input);
-
-        let Some(&first) = input.as_bytes().first() else {
+        let Some(first) = lexer::skip_whitespace_peek(input) else {
             break;
         };
         if first == closing_delimiter {

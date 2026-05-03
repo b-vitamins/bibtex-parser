@@ -78,9 +78,8 @@ fn parse_concatenated_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
 #[inline]
 fn parse_concatenated_value_field<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
     let first = parse_single_value(input)?;
-    lexer::skip_whitespace(input);
 
-    if input.as_bytes().first() != Some(&b'#') {
+    if lexer::skip_whitespace_peek(input) != Some(b'#') {
         return Ok(first);
     }
 
@@ -95,9 +94,8 @@ fn parse_concatenated_value_field<'a>(input: &mut &'a str) -> PResult<'a, Value<
 
         let part = parse_single_value(input)?;
         parts.push(part);
-        lexer::skip_whitespace(input);
 
-        if input.as_bytes().first() != Some(&b'#') {
+        if lexer::skip_whitespace_peek(input) != Some(b'#') {
             break;
         }
     }

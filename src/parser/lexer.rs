@@ -157,6 +157,25 @@ pub fn skip_whitespace(input: &mut &str) {
     *input = &input[pos..];
 }
 
+#[inline]
+pub(crate) fn skip_whitespace_peek(input: &mut &str) -> Option<u8> {
+    let bytes = input.as_bytes();
+    let mut pos = 0;
+
+    while let Some(&byte) = bytes.get(pos) {
+        match byte {
+            b' ' | b'\t' | b'\n' | b'\r' => pos += 1,
+            _ => {
+                *input = &input[pos..];
+                return Some(byte);
+            }
+        }
+    }
+
+    *input = "";
+    None
+}
+
 /// Fast scan to next BibTeX delimiter - re-export from delimiter module
 #[must_use]
 pub fn scan_to_bibtex_delimiter(haystack: &[u8], start: usize) -> Option<(usize, u8)> {
