@@ -366,11 +366,6 @@ impl<'a> Database<'a> {
                 }
 
                 if has_user_strings {
-                    if let Some(expanded) = expanded_variables.get_cloned(name.as_ref()) {
-                        *value = expanded;
-                        return Ok(());
-                    }
-
                     let old_value = std::mem::take(value);
                     *value = self.smart_expand_value_cached(old_value, expansion_state)?;
                 }
@@ -378,13 +373,6 @@ impl<'a> Database<'a> {
                 Ok(())
             }
             Value::Concat(parts) => {
-                if has_user_strings {
-                    if let Some(expanded) = concat_cache.get_cloned(parts) {
-                        *value = expanded;
-                        return Ok(());
-                    }
-                }
-
                 let needs_expansion = if has_user_strings {
                     parts.iter().any(contains_variables)
                 } else {
@@ -392,13 +380,6 @@ impl<'a> Database<'a> {
                 };
 
                 if needs_expansion {
-                    if !has_user_strings {
-                        if let Some(expanded) = concat_cache.get_cloned(parts) {
-                            *value = expanded;
-                            return Ok(());
-                        }
-                    }
-
                     let old_value = std::mem::take(value);
                     *value = self.smart_expand_value_cached(old_value, expansion_state)?;
                 }
@@ -419,15 +400,13 @@ impl<'a> Database<'a> {
     ///
     /// # Parallel Processing
     ///
-    /// The `threads` option only affects `parse_files()`. Single file
-    /// parsing with `parse()` is always sequential due to BibTeX's
-    /// structure requiring sequential processing of string definitions.
+    /// The `threads` option only affects `parse_files()`.
     ///
     /// # Example
     ///
     /// ```rust,no_run
     /// use bibtex_parser::Database;
-    /// // This will use parallel processing
+    /// // Parse multiple files in parallel
     /// let db = Database::parser()
     ///     .threads(4)
     ///     .parse_files(&["file1.bib", "file2.bib"]).unwrap();
@@ -1101,6 +1080,38 @@ impl<'a> Database<'a> {
         }
 
         duplicates.into_iter().collect()
+    }
+
+    /// Check for duplicate citation keys, ignoring ASCII case.
+    #[must_use]
+    pub fn find_duplicate_keys_ignore_case(&self) -> Vec<String> {
+        let mut seen = std::collections::HashSet::new();
+        let mut duplicates = std::collections::HashSet::new();
+
+        for entry in &self.entries {
+            let normalized_key = entry.key().to_ascii_lowercase();
+            if !seen.insert(normalized_key.clone()) {
+                duplicates.insert(normalized_key);
+            }
+        }
+
+        duplicates.into_iter().collect()
+    }
+
+    /// Find duplicate DOI groups using normalized DOI values.
+    #[must_use]
+    pub fn find_duplicate_dois(&self) -> Vec<(String, Vec<&Entry<'a>>)> {
+        let mut groups: AHashMap<String, Vec<&Entry<'a>>> = AHashMap::new();
+        for entry in &self.entries {
+            if let Some(doi) = entry.doi() {
+                groups.entry(doi).or_default().push(entry);
+            }
+        }
+
+        groups
+            .into_iter()
+            .filter(|(_, entries)| entries.len() > 1)
+            .collect()
     }
 
     /// Validate all entries and return a comprehensive validation report

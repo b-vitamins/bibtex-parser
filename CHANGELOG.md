@@ -98,7 +98,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Near-linear scaling to N cores
 
 ### Changed
-- **BREAKING: Value::Concat now contains Box<Vec<Value>>** instead of Vec<Value>
+- **BREAKING: Value::Concat now contains Box<[Value]>** instead of Vec<Value>
   - Reduces Value enum size from 32 to 24 bytes (25% reduction)
   - Saves 8 bytes per field value
 - **Entry struct fixed from 456 → 64 bytes** (86% reduction)
