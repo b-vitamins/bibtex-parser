@@ -45,7 +45,7 @@ pub(crate) fn parse_value_field_cursor<'a>(cursor: &mut Cursor<'a>) -> PResult<'
         }
     }
 
-    Ok(Value::Concat(Box::new(parts)))
+    Ok(Value::Concat(parts.into_boxed_slice()))
 }
 
 /// Parse a concatenated value (value # value # ...)
@@ -59,7 +59,7 @@ fn parse_concatenated_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
     }
 
     // Slow path: parse one or more `# value` segments.
-    let mut parts = Vec::with_capacity(4);
+    let mut parts = Vec::with_capacity(3);
     parts.push(first);
 
     loop {
@@ -71,7 +71,7 @@ fn parse_concatenated_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
         }
     }
 
-    Ok(Value::Concat(Box::new(parts)))
+    Ok(Value::Concat(parts.into_boxed_slice()))
 }
 
 /// Parse a concatenated value and consume trailing ASCII whitespace.
@@ -85,7 +85,7 @@ fn parse_concatenated_value_field<'a>(input: &mut &'a str) -> PResult<'a, Value<
     }
 
     // Slow path: parse one or more `# value` segments.
-    let mut parts = Vec::with_capacity(4);
+    let mut parts = Vec::with_capacity(3);
     parts.push(first);
 
     loop {
@@ -102,7 +102,7 @@ fn parse_concatenated_value_field<'a>(input: &mut &'a str) -> PResult<'a, Value<
         }
     }
 
-    Ok(Value::Concat(Box::new(parts)))
+    Ok(Value::Concat(parts.into_boxed_slice()))
 }
 
 /// Consume optional whitespace + `#` + optional whitespace.

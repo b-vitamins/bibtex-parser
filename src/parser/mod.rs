@@ -290,6 +290,7 @@ pub enum ParsedItem<'a> {
 }
 
 /// Parse a single item (entry, string, preamble, or comment) with optimized delimiter search
+#[inline]
 fn parse_item<'a>(cursor: &mut Cursor<'a>) -> PResult<'a, ParsedItem<'a>> {
     let bytes = cursor.remaining_bytes();
 

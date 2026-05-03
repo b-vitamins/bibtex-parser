@@ -3,7 +3,7 @@
 //! This module provides SIMD-optimized functions for common parsing operations
 //! like brace balancing and quote scanning, achieving 30-50% performance gains.
 
-use memchr::memchr3;
+use memchr::{memchr, memchr2};
 
 /// Find balanced braces using SIMD acceleration
 ///
@@ -21,11 +21,15 @@ pub fn find_balanced_braces(input: &[u8]) -> Option<usize> {
     let mut depth = 1;
     let mut pos = 1;
 
-    // Use SIMD to find next delimiter: {, }, or \
+    // Find braces directly and only inspect backslashes when a brace may close
+    // or change nesting.
     while pos < input.len() {
-        // Find next interesting character using SIMD
-        if let Some(offset) = memchr3(b'{', b'}', b'\\', &input[pos..]) {
+        if let Some(offset) = memchr2(b'{', b'}', &input[pos..]) {
             let idx = pos + offset;
+            if is_escaped_delimiter(input, idx) {
+                pos = idx + 1;
+                continue;
+            }
 
             match input[idx] {
                 b'{' => {
@@ -38,10 +42,6 @@ pub fn find_balanced_braces(input: &[u8]) -> Option<usize> {
                         return Some(idx + 1); // Return position after closing brace
                     }
                     pos = idx + 1;
-                }
-                b'\\' => {
-                    // Skip escaped character
-                    pos = idx + 2; // Skip backslash and next char
                 }
                 _ => unreachable!(),
             }
@@ -68,30 +68,19 @@ pub fn find_balanced_quotes(input: &[u8]) -> Option<usize> {
 
     let mut pos = 1;
 
-    // Most BibTeX quoted strings have no escapes, so search for the next quote
-    // first and only fall back to counting preceding backslashes when needed.
+    // Find quotes directly and only check the backslash run immediately before
+    // each quote. This avoids visiting every LaTeX command backslash.
     while pos < input.len() {
-        if let Some(offset) = memchr::memchr(b'"', &input[pos..]) {
-            let idx = pos + offset;
-
-            let mut backslash_count = 0usize;
-            let mut probe = idx;
-            while probe > 0 && input[probe - 1] == b'\\' {
-                backslash_count += 1;
-                probe -= 1;
-            }
-
-            if backslash_count % 2 == 0 {
-                return Some(idx + 1);
-            }
-
+        let offset = memchr(b'"', &input[pos..])?;
+        let idx = pos + offset;
+        if is_escaped_delimiter(input, idx) {
             pos = idx + 1;
-        } else {
-            return None;
+            continue;
         }
+        return Some(idx + 1); // Return position after closing quote
     }
 
-    None
+    None // Unclosed quote
 }
 
 /// Find balanced parentheses using SIMD acceleration
@@ -132,6 +121,19 @@ pub fn find_balanced_parentheses(input: &[u8]) -> Option<usize> {
     }
 
     None // Unbalanced
+}
+
+#[inline]
+fn is_escaped_delimiter(input: &[u8], delimiter: usize) -> bool {
+    let mut slash_count = 0usize;
+    let mut pos = delimiter;
+
+    while pos > 0 && input[pos - 1] == b'\\' {
+        slash_count += 1;
+        pos -= 1;
+    }
+
+    slash_count % 2 == 1
 }
 
 /// Fast scan to find entry start (@)

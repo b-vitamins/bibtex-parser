@@ -26,8 +26,9 @@ pub fn identifier<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
 }
 
 /// Parse a field name (same as identifier but typically lowercase)
+#[inline]
 pub fn field_name<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
-    identifier.parse_next(input)
+    identifier(input)
 }
 
 /// Parse balanced braces { ... } with SIMD acceleration
@@ -156,6 +157,7 @@ pub fn balanced_parentheses<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
 }
 
 /// Fast whitespace skipping (optimal for short runs per profiling)
+#[inline]
 pub fn skip_whitespace(input: &mut &str) {
     let bytes = input.as_bytes();
     let mut pos = 0;

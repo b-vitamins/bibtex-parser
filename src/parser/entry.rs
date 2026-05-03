@@ -59,6 +59,7 @@ pub(crate) fn parse_entry_fast<'a>(cursor: &mut Cursor<'a>) -> PResult<'a, Entry
     parse_entry_content_cursor(cursor)
 }
 
+#[inline]
 fn parse_entry_content<'a>(input: &mut &'a str) -> PResult<'a, Entry<'a>> {
     let entry_type_str = lexer::identifier(input)?;
     let entry_type = EntryType::parse(entry_type_str);
@@ -79,6 +80,7 @@ fn parse_entry_content<'a>(input: &mut &'a str) -> PResult<'a, Entry<'a>> {
     parse_entry_body(input, entry_type, closing_delimiter)
 }
 
+#[inline]
 fn parse_entry_content_cursor<'a>(cursor: &mut Cursor<'a>) -> PResult<'a, Entry<'a>> {
     let entry_type_str = cursor
         .take_identifier()

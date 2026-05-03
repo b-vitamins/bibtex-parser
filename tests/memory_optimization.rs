@@ -27,13 +27,12 @@ mod tests {
         // Verify that boxing helped
         assert_eq!(mem::size_of::<Vec<Value>>(), 24, "Vec<Value> is 24 bytes");
         assert_eq!(
-            mem::size_of::<Box<Vec<Value>>>(),
-            8,
-            "Box<Vec<Value>> is only 8 bytes!"
+            mem::size_of::<Box<[Value]>>(),
+            16,
+            "Box<[Value]> is a fat pointer"
         );
 
-        // Field is name (16) + Value (24) = 40 bytes!
-        // This is even better than the 48 bytes we saw before optimization
+        // Field size stays bounded while concat parts are stored out of line.
     }
 
     #[test]

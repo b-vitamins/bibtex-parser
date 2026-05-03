@@ -1015,28 +1015,16 @@ impl<'a> Field<'a> {
 /// A value in a BibTeX field
 ///
 /// # Memory Optimization
-/// This enum is optimized to be 24 bytes instead of 32 bytes by boxing the Vec in Concat.
-///
-/// ## Why was it 32 bytes?
-/// - Largest variant was `Concat(Vec<Value>)` at 24 bytes
-/// - Add 8 bytes for discriminant = 32 bytes total
-/// - Rust doesn't pack discriminant into padding
-///
-/// ## Why is it now 24 bytes?
-/// - Largest variant is now `Literal(Cow<str>)` at 24 bytes  
-/// - `Concat(Box<Vec<Value>>)` is only 8 bytes
-/// - Total enum size matches largest variant: 24 bytes
-///
-/// This saves 8 bytes per field value, which adds up to significant savings.
-/// For example, with 10,000 fields, this saves 80 KB of memory.
+/// Concatenation parts are stored out of line so the common literal, number,
+/// and variable variants stay compact.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value<'a> {
     /// String literal
     Literal(Cow<'a, str>),
     /// Number literal
     Number(i64),
-    /// Concatenated values (boxed to reduce enum size from 32 to 24 bytes)
-    Concat(Box<Vec<Self>>),
+    /// Concatenated values (boxed to reduce enum size)
+    Concat(Box<[Self]>),
     /// Variable reference
     Variable(Cow<'a, str>),
 }
@@ -1077,9 +1065,14 @@ impl Value<'_> {
             Self::Literal(s) => Value::Literal(Cow::Owned(s.into_owned())),
             Self::Number(n) => Value::Number(n),
             Self::Variable(s) => Value::Variable(Cow::Owned(s.into_owned())),
-            Self::Concat(parts) => {
-                Value::Concat(Box::new(parts.into_iter().map(Value::into_owned).collect()))
-            }
+            Self::Concat(parts) => Value::Concat(
+                parts
+                    .into_vec()
+                    .into_iter()
+                    .map(Value::into_owned)
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            ),
         }
     }
 }
