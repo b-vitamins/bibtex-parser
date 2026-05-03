@@ -678,6 +678,7 @@ pub enum EntryType<'a> {
 impl<'a> EntryType<'a> {
     /// Parse from string (case-insensitive)
     #[must_use]
+    #[inline(never)]
     pub fn parse(s: &'a str) -> Self {
         let bytes = s.as_bytes();
         if bytes.is_empty() {
