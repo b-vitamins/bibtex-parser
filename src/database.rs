@@ -48,6 +48,7 @@ fn user_strings_shadow_month_constants(strings: &AHashMap<Cow<'_, str>, Value<'_
 }
 
 /// Check if a value contains any variables
+#[inline]
 fn contains_variables(value: &Value) -> bool {
     match value {
         Value::Variable(_) => true,
@@ -57,6 +58,7 @@ fn contains_variables(value: &Value) -> bool {
 }
 
 /// Check if a value contains variables that might be month constants
+#[inline]
 fn contains_potential_month_variables(value: &Value) -> bool {
     match value {
         Value::Variable(name) => get_month_expansion(name).is_some(),
@@ -364,6 +366,11 @@ impl<'a> Database<'a> {
                 }
 
                 if has_user_strings {
+                    if let Some(expanded) = expanded_variables.get_cloned(name.as_ref()) {
+                        *value = expanded;
+                        return Ok(());
+                    }
+
                     let old_value = std::mem::take(value);
                     *value = self.smart_expand_value_cached(old_value, expansion_state)?;
                 }
@@ -371,6 +378,13 @@ impl<'a> Database<'a> {
                 Ok(())
             }
             Value::Concat(parts) => {
+                if has_user_strings {
+                    if let Some(expanded) = concat_cache.get_cloned(parts) {
+                        *value = expanded;
+                        return Ok(());
+                    }
+                }
+
                 let needs_expansion = if has_user_strings {
                     parts.iter().any(contains_variables)
                 } else {
@@ -378,6 +392,13 @@ impl<'a> Database<'a> {
                 };
 
                 if needs_expansion {
+                    if !has_user_strings {
+                        if let Some(expanded) = concat_cache.get_cloned(parts) {
+                            *value = expanded;
+                            return Ok(());
+                        }
+                    }
+
                     let old_value = std::mem::take(value);
                     *value = self.smart_expand_value_cached(old_value, expansion_state)?;
                 }
@@ -389,6 +410,7 @@ impl<'a> Database<'a> {
 
     /// Create a new empty database
     #[must_use]
+    #[inline]
     pub fn new() -> Self {
         Self::default()
     }
