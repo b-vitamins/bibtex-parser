@@ -320,7 +320,7 @@ fn parse_item<'a>(cursor: &mut Cursor<'a>) -> PResult<'a, ParsedItem<'a>> {
     }
 }
 
-#[inline]
+#[inline(never)]
 fn starts_with_keyword(input: &[u8], keyword: &[u8]) -> bool {
     if input.first() != Some(&b'@') || input.len() < keyword.len() + 1 {
         return false;
