@@ -197,11 +197,32 @@ pub fn scan_identifier(input: &[u8]) -> usize {
 
 #[inline]
 const fn is_identifier_byte(byte: u8) -> bool {
-    matches!(
-        byte,
-        b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z' | b'_' | b'-' | b':' | b'.'
-    )
+    IDENT_TABLE[byte as usize] == 1
 }
+
+const IDENT_TABLE: [u8; 256] = {
+    let mut table = [0u8; 256];
+    let mut byte = b'0';
+    while byte <= b'9' {
+        table[byte as usize] = 1;
+        byte += 1;
+    }
+    byte = b'A';
+    while byte <= b'Z' {
+        table[byte as usize] = 1;
+        byte += 1;
+    }
+    byte = b'a';
+    while byte <= b'z' {
+        table[byte as usize] = 1;
+        byte += 1;
+    }
+    table[b'_' as usize] = 1;
+    table[b'-' as usize] = 1;
+    table[b':' as usize] = 1;
+    table[b'.' as usize] = 1;
+    table
+};
 
 /// Lookup table for whitespace characters
 const WS_TABLE: [u8; 256] = {
