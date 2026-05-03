@@ -1,6 +1,6 @@
 //! BibTeX database representation
 
-use crate::{Entry, Error, Result, ValidationError, ValidationLevel, Value};
+use crate::{normalize_doi, Entry, Error, Result, ValidationError, ValidationLevel, Value};
 use ahash::AHashMap;
 use memchr::memchr;
 use std::borrow::Cow;
@@ -738,12 +738,26 @@ impl<'a> Database<'a> {
         self.entries.iter().find(|e| e.key == key)
     }
 
+    /// Find entries by key, ignoring ASCII case.
+    #[must_use]
+    pub fn find_by_key_ignore_case(&self, key: &str) -> Option<&Entry<'a>> {
+        self.entries
+            .iter()
+            .find(|entry| entry.key.eq_ignore_ascii_case(key))
+    }
+
+    /// Return `true` when the database contains `key`.
+    #[must_use]
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.find_by_key(key).is_some()
+    }
+
     /// Find entries by type
     #[must_use]
     pub fn find_by_type(&self, ty: &str) -> Vec<&Entry<'a>> {
         self.entries
             .iter()
-            .filter(|e| e.ty.to_string().eq_ignore_ascii_case(ty))
+            .filter(|e| e.ty.canonical_name().eq_ignore_ascii_case(ty))
             .collect()
     }
 
@@ -757,6 +771,33 @@ impl<'a> Database<'a> {
                     .as_ref()
                     .is_some_and(|v| v.contains(value))
             })
+            .collect()
+    }
+
+    /// Find entries by field value, ignoring ASCII case for the field name and value.
+    #[must_use]
+    pub fn find_by_field_ignore_case(&self, field: &str, value: &str) -> Vec<&Entry<'a>> {
+        self.entries
+            .iter()
+            .filter(|entry| {
+                entry
+                    .get_as_string_ignore_case(field)
+                    .as_ref()
+                    .is_some_and(|field_value| contains_case_insensitive(field_value, value))
+            })
+            .collect()
+    }
+
+    /// Find entries whose normalized DOI matches `doi`.
+    #[must_use]
+    pub fn find_by_doi(&self, doi: &str) -> Vec<&Entry<'a>> {
+        let Some(needle) = normalize_doi(doi) else {
+            return Vec::new();
+        };
+
+        self.entries
+            .iter()
+            .filter(|entry| entry.doi().as_ref().is_some_and(|value| value == &needle))
             .collect()
     }
 
@@ -1239,6 +1280,14 @@ fn append_decimal(output: &mut String, number: i64) {
 
     let digits = std::str::from_utf8(&buffer[index..]).expect("decimal digits are ASCII");
     output.push_str(digits);
+}
+
+fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+
+    haystack.to_lowercase().contains(&needle.to_lowercase())
 }
 /// Builder for creating databases programmatically
 #[derive(Debug, Default)]

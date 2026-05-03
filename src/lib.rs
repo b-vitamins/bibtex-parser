@@ -1,3 +1,4 @@
+#![deny(clippy::all)]
 //! # bibtex-parser
 //!
 //! A fast, modern BibTeX parser with excellent error handling and zero-copy parsing.
@@ -63,7 +64,8 @@ mod writer;
 pub use database::{Database, DatabaseBuilder, IssueSummary, ParseOptions, ValidationReport};
 pub use error::{Error, Result};
 pub use model::{
-    Entry, EntryType, Field, ValidationError, ValidationLevel, ValidationSeverity, Value,
+    normalize_doi, parse_names, Entry, EntryType, Field, PersonName, ValidationError,
+    ValidationLevel, ValidationSeverity, Value,
 };
 pub use parser::{parse_bibtex, ParsedItem};
 pub use writer::{to_file, to_string, Writer};
@@ -71,9 +73,9 @@ pub use writer::{to_file, to_string, Writer};
 /// Re-export of common parser functions
 pub mod prelude {
     pub use crate::{
-        parse_bibtex, Database, DatabaseBuilder, Entry, EntryType, Error, IssueSummary,
-        ParseOptions, ParsedItem, Result, ValidationError, ValidationLevel, ValidationReport,
-        ValidationSeverity, Value,
+        normalize_doi, parse_bibtex, parse_names, Database, DatabaseBuilder, Entry, EntryType,
+        Error, Field, IssueSummary, ParseOptions, ParsedItem, PersonName, Result, ValidationError,
+        ValidationLevel, ValidationReport, ValidationSeverity, Value,
     };
 }
 

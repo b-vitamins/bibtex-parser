@@ -22,7 +22,8 @@ fn main() -> Result<()> {
             author = "Stephen Hawking",
             title = "A Brief History of Time",
             publisher = "Bantam Books",
-            year = 1988
+            year = 1988,
+            doi = "https://doi.org/10.5555/example"
         }
         
         @inproceedings{turing1950,
@@ -65,6 +66,18 @@ fn main() -> Result<()> {
         );
     }
 
+    // Case-insensitive field search
+    println!("\nCase-insensitive author search:");
+    for entry in db.find_by_field_ignore_case("AUTHOR", "einstein") {
+        println!("  - {}", entry.key());
+    }
+
+    // DOI lookup accepts common DOI URL/prefix forms
+    println!("\nDOI lookup:");
+    for entry in db.find_by_doi("doi:10.5555/example") {
+        println!("  - {}", entry.key());
+    }
+
     // Find specific entry by key
     if let Some(entry) = db.find_by_key("hawking1988") {
         println!("\nFound Hawking's book:");
@@ -75,6 +88,9 @@ fn main() -> Result<()> {
             "  Publisher: {}",
             entry.get("publisher").unwrap_or("Unknown")
         );
+        for author in entry.authors() {
+            println!("  Parsed author: {}", author.display_name());
+        }
     }
 
     Ok(())

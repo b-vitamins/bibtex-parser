@@ -155,68 +155,46 @@ pub fn find_field_end(input: &[u8]) -> Option<usize> {
     memchr::memchr3(b',', b'}', b')', input)
 }
 
-/// Lookup table for identifier characters (256 bytes, one per ASCII value)
-/// 1 = valid identifier char, 0 = not valid
-const IDENT_TABLE: [u8; 256] = {
-    let mut table = [0u8; 256];
-    // 0-9
-    let mut i = b'0' as usize;
-    while i <= b'9' as usize {
-        table[i] = 1;
-        i += 1;
-    }
-    // A-Z
-    let mut i = b'A' as usize;
-    while i <= b'Z' as usize {
-        table[i] = 1;
-        i += 1;
-    }
-    // a-z
-    let mut i = b'a' as usize;
-    while i <= b'z' as usize {
-        table[i] = 1;
-        i += 1;
-    }
-    // Special chars: _ - : .
-    table[b'_' as usize] = 1;
-    table[b'-' as usize] = 1;
-    table[b':' as usize] = 1;
-    table[b'.' as usize] = 1;
-    table
-};
-
 /// SIMD-accelerated identifier scanning using lookup table
 /// Returns the length of the identifier (alphanumeric, _, -, :, .)
 #[inline]
 #[must_use]
-pub const fn scan_identifier(input: &[u8]) -> usize {
+pub fn scan_identifier(input: &[u8]) -> usize {
     let mut pos = 0;
     let len = input.len();
 
     // Unroll by 4 for better performance
     while pos + 4 <= len {
         // Check 4 bytes at once
-        if IDENT_TABLE[input[pos] as usize] == 0 {
+        if !is_identifier_byte(input[pos]) {
             return pos;
         }
-        if IDENT_TABLE[input[pos + 1] as usize] == 0 {
+        if !is_identifier_byte(input[pos + 1]) {
             return pos + 1;
         }
-        if IDENT_TABLE[input[pos + 2] as usize] == 0 {
+        if !is_identifier_byte(input[pos + 2]) {
             return pos + 2;
         }
-        if IDENT_TABLE[input[pos + 3] as usize] == 0 {
+        if !is_identifier_byte(input[pos + 3]) {
             return pos + 3;
         }
         pos += 4;
     }
 
     // Handle remaining bytes
-    while pos < len && IDENT_TABLE[input[pos] as usize] == 1 {
+    while pos < len && is_identifier_byte(input[pos]) {
         pos += 1;
     }
 
     pos
+}
+
+#[inline]
+const fn is_identifier_byte(byte: u8) -> bool {
+    matches!(
+        byte,
+        b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z' | b'_' | b'-' | b':' | b'.'
+    )
 }
 
 /// Lookup table for whitespace characters

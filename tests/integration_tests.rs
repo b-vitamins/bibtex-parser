@@ -1,6 +1,6 @@
 use bibtex_parser::{
-    parse_bibtex, Database, EntryType, ParsedItem, ValidationError, ValidationLevel,
-    ValidationSeverity, Value,
+    normalize_doi, parse_bibtex, parse_names, Database, EntryType, ParsedItem, ValidationError,
+    ValidationLevel, ValidationSeverity, Value,
 };
 use pretty_assertions::assert_eq;
 use std::borrow::Cow;
@@ -143,6 +143,148 @@ fn test_find_by_field() {
     let papers_1905 = db.find_by_field("year", "1905");
     assert_eq!(papers_1905.len(), 1);
     assert_eq!(papers_1905[0].key(), "einstein1905");
+}
+
+#[test]
+fn test_extended_biblatex_entry_types_and_validation_aliases() {
+    let input = r#"
+        @online{rust2024,
+            title = "Rust",
+            url = "https://www.rust-lang.org",
+            date = 2024
+        }
+        @software{parser2026,
+            author = "Ada Lovelace",
+            title = "Parser Toolkit",
+            version = "1.0.0"
+        }
+        @incollection{chapter2020,
+            author = "Grace Hopper",
+            title = "Compiler Notes",
+            booktitle = "Programming History",
+            publisher = "ACM",
+            date = 2020
+        }
+        @article{journal_alias,
+            author = "Donald Knuth",
+            title = "Literate Programming",
+            journaltitle = "The Computer Journal",
+            date = 1984
+        }
+    "#;
+
+    let db = Database::parser().parse(input).unwrap();
+
+    assert_eq!(db.entries()[0].entry_type(), &EntryType::Online);
+    assert_eq!(db.entries()[1].entry_type(), &EntryType::Software);
+    assert_eq!(db.entries()[2].entry_type(), &EntryType::InCollection);
+    assert!(db.entries()[0].entry_type().is_extended());
+    assert!(EntryType::Article.is_classic_bibtex());
+
+    for entry in db.entries() {
+        assert!(
+            entry.validate(ValidationLevel::Minimal).is_ok(),
+            "{} should validate with aliases",
+            entry.key()
+        );
+    }
+
+    assert_eq!(
+        EntryType::parse("conference"),
+        EntryType::InProceedings,
+        "classic alias should canonicalize"
+    );
+}
+
+#[test]
+fn test_entry_field_doi_and_name_helpers() {
+    let input = r#"
+        @article{people2024,
+            Author = "John von Neumann and {The Unicode Consortium} and Knuth, Donald E.",
+            title = "Names and Identifiers",
+            doi = "https://doi.org/10.1000/XYZ.",
+            year = 2024
+        }
+    "#;
+
+    let db = Database::parser().parse(input).unwrap();
+    let entry = &db.entries()[0];
+
+    assert!(entry.field_ignore_case("author").is_some());
+    assert_eq!(
+        entry.get_any_ignore_case(&["shorttitle", "title"]),
+        Some("Names and Identifiers")
+    );
+    assert_eq!(entry.doi(), Some("10.1000/xyz".to_string()));
+    assert_eq!(
+        normalize_doi("doi:10.1000/XYZ"),
+        Some("10.1000/xyz".to_string())
+    );
+
+    let authors = entry.authors();
+    assert_eq!(authors.len(), 3);
+    assert_eq!(authors[0].first, "John");
+    assert_eq!(authors[0].von, "von");
+    assert_eq!(authors[0].last, "Neumann");
+    assert_eq!(authors[1].last, "The Unicode Consortium");
+    assert_eq!(authors[2].first, "Donald E.");
+    assert_eq!(authors[2].last, "Knuth");
+    assert_eq!(authors[2].display_name(), "Donald E. Knuth");
+}
+
+#[test]
+fn test_database_case_insensitive_and_doi_search_helpers() {
+    let input = r#"
+        @article{Smith2024,
+            author = "Jane Smith",
+            title = "Fast Parsing",
+            doi = "10.5555/ABC",
+            year = 2024
+        }
+        @article{smith2024,
+            author = "JANE SMITH",
+            title = "Fast Parsing Extended",
+            doi = "https://doi.org/10.5555/abc",
+            year = 2024
+        }
+        @article{other2024,
+            author = "Other Author",
+            title = "Other Work",
+            year = 2024
+        }
+    "#;
+
+    let db = Database::parser().parse(input).unwrap();
+
+    assert!(db.contains_key("Smith2024"));
+    assert_eq!(
+        db.find_by_key_ignore_case("SMITH2024").unwrap().key(),
+        "Smith2024"
+    );
+    assert_eq!(
+        db.find_by_field_ignore_case("AUTHOR", "jane smith").len(),
+        2
+    );
+    assert_eq!(db.find_by_doi("doi:10.5555/ABC").len(), 2);
+
+    let duplicate_keys = db.find_duplicate_keys_ignore_case();
+    assert_eq!(duplicate_keys, vec!["smith2024".to_string()]);
+
+    let duplicate_dois = db.find_duplicate_dois();
+    assert_eq!(duplicate_dois.len(), 1);
+    assert_eq!(duplicate_dois[0].0, "10.5555/abc");
+    assert_eq!(duplicate_dois[0].1.len(), 2);
+}
+
+#[test]
+fn test_parse_names_respects_braced_and_literals() {
+    let names = parse_names("Ludwig van Beethoven and {The Research and Development Group}");
+
+    assert_eq!(names.len(), 2);
+    assert_eq!(names[0].first, "Ludwig");
+    assert_eq!(names[0].von, "van");
+    assert_eq!(names[0].last, "Beethoven");
+    assert_eq!(names[1].last, "The Research and Development Group");
 }
 
 #[test]

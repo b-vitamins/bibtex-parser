@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Improved development tool documentation for better Claude Code integration
 
 ### Added
+- Expanded completeness APIs for bibliography curation
+  - Added common BibLaTeX/repository entry types including `online`, `software`, `dataset`, `collection`, `incollection`, `report`, `thesis`, `patent`, and related multi-volume/supplement variants
+  - Added validation alias groups such as `date`/`year`, `journaltitle`/`journal`, and author/editor alternatives
+  - Added structured BibTeX name parsing through `parse_names()`, `Entry::authors()`, and `Entry::editors()`
+  - Added DOI normalization plus `Entry::doi()`, `Database::find_by_doi()`, and duplicate DOI detection
+  - Added case-insensitive key and field search helpers
 - **Phase 1.5 Complete** - True Parallel Single-File Parsing (2025-06-20)
   - Implemented chunk-based parallel parsing by splitting input at valid BibTeX entry boundaries
   - SIMD-optimized chunk boundary detection using existing delimiter finding infrastructure

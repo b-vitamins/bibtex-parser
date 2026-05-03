@@ -7,7 +7,9 @@ Yet another BibTeX parser written in Rust.
 - Zero-copy parsing using winnow
 - Support for string concatenation and variable expansion
 - Error messages with line/column information
-- Handles standard entry types, preambles, comments, and string variables
+- Handles standard BibTeX plus common BibLaTeX entry types, preambles, comments, and string variables
+- Structured author/editor name parsing
+- DOI normalization, duplicate detection, and case-insensitive lookup helpers
 - Writer functionality for generating BibTeX files
 
 ## Installation
@@ -58,24 +60,10 @@ bibtex-parser = { version = "0.1", features = ["parallel"] }
 Then use the builder API for multiple files:
 
 ```rust
-// Parse multiple files in parallel - FAST!
+// Parse multiple files in parallel
 let db = Database::parser()
     .threads(8)  // Use 8 threads
     .parse_files(&["file1.bib", "file2.bib", "file3.bib"])?;
-
-// Single file parsing is always sequential
-// (threads option is ignored for single files)
-let db = Database::parser()
-    .threads(8)
-    .parse(input)?;  // Still sequential
-```
-
-**Note**: Single-file parsing cannot be parallelized effectively due to BibTeX's structure requiring sequential processing of string definitions. Use `parse_files()` when processing multiple bibliography files for maximum performance.
-
-To run the included parallel benchmarks, ensure the `parallel` feature is enabled:
-
-```bash
-cargo bench --features parallel --bench parallel
 ```
 
 ## Examples
@@ -89,11 +77,32 @@ let articles = db.find_by_type("article");
 // Find entries by field value
 let einstein_papers = db.find_by_field("author", "Einstein");
 
+// Case-insensitive lookup helpers
+let smith_papers = db.find_by_field_ignore_case("AUTHOR", "smith");
+
+// DOI lookup normalizes values like "doi:10.x/..." and "https://doi.org/10.x/..."
+let matches = db.find_by_doi("https://doi.org/10.1000/example");
+
 // Get specific entry
 if let Some(entry) = db.find_by_key("einstein1905") {
     println!("Title: {}", entry.get("title").unwrap());
 }
+
+// Parse BibTeX names into structured components
+if let Some(entry) = db.find_by_key("einstein1905") {
+    for author in entry.authors() {
+        println!("{} {}", author.first, author.last);
+    }
+}
 ```
+
+### Extended Entry Types
+
+The parser recognizes classic BibTeX entry types and common BibLaTeX/repository
+exports including `online`, `software`, `dataset`, `incollection`, `collection`,
+`report`, `thesis`, `patent`, `periodical`, `mvbook`, and related variants.
+Validation accepts common aliases such as `date` for `year` and `journaltitle`
+for `journal`.
 
 ### String Variables
 
