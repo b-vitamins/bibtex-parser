@@ -9,10 +9,110 @@ use std::path::Path;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
+const SMALL_EXPANSION_CACHE_LIMIT: usize = 16;
+const SMALL_STRING_LOOKUP_LIMIT: usize = 16;
+const CONCAT_CACHE_LIMIT: usize = 16;
+
+enum ExpansionCache<'a> {
+    Small(Vec<(Cow<'a, str>, Value<'a>)>),
+    Large(AHashMap<Cow<'a, str>, Value<'a>>),
+}
+
+impl<'a> ExpansionCache<'a> {
+    fn with_capacity(capacity: usize) -> Self {
+        if capacity <= SMALL_EXPANSION_CACHE_LIMIT {
+            Self::Small(Vec::with_capacity(capacity))
+        } else {
+            Self::Large(AHashMap::with_capacity(capacity))
+        }
+    }
+
+    fn get_cloned(&mut self, name: &str) -> Option<Value<'a>> {
+        match self {
+            Self::Small(entries) => {
+                let index = entries.iter().position(|(key, _)| key.as_ref() == name)?;
+                if index != 0 {
+                    entries.swap(0, index);
+                }
+                Some(entries[0].1.clone())
+            }
+            Self::Large(entries) => entries.get(name).cloned(),
+        }
+    }
+
+    fn insert(&mut self, name: Cow<'a, str>, value: Value<'a>) {
+        match self {
+            Self::Small(entries) => {
+                if entries.len() < SMALL_EXPANSION_CACHE_LIMIT {
+                    entries.push((name, value));
+                } else {
+                    let mut large = AHashMap::with_capacity(entries.len() + 1);
+                    for (key, value) in entries.drain(..) {
+                        large.insert(key, value);
+                    }
+                    large.insert(name, value);
+                    *self = Self::Large(large);
+                }
+            }
+            Self::Large(entries) => {
+                entries.insert(name, value);
+            }
+        }
+    }
+}
+
+struct ConcatCache<'a> {
+    entries: Vec<(Box<[Value<'a>]>, Value<'a>)>,
+}
+
+impl<'a> ConcatCache<'a> {
+    const fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+
+    fn get_cloned(&mut self, parts: &[Value<'a>]) -> Option<Value<'a>> {
+        let index = self
+            .entries
+            .iter()
+            .position(|(cached_parts, _)| concat_parts_equal(cached_parts, parts))?;
+        if index != 0 {
+            self.entries.swap(0, index);
+        }
+        Some(self.entries[0].1.clone())
+    }
+
+    fn insert(&mut self, parts: Box<[Value<'a>]>, value: Value<'a>) {
+        if self.entries.len() < CONCAT_CACHE_LIMIT {
+            self.entries.push((parts, value));
+        }
+    }
+}
+
+fn concat_parts_equal(left: &[Value<'_>], right: &[Value<'_>]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(left, right)| cache_values_equal(left, right))
+}
+
+fn cache_values_equal(left: &Value<'_>, right: &Value<'_>) -> bool {
+    match (left, right) {
+        (Value::Literal(left), Value::Literal(right))
+        | (Value::Variable(left), Value::Variable(right)) => left.as_ref() == right.as_ref(),
+        (Value::Number(left), Value::Number(right)) => left == right,
+        (Value::Concat(left), Value::Concat(right)) => concat_parts_equal(left, right),
+        _ => false,
+    }
+}
+
 /// Get month expansion for a given abbreviation (case-insensitive)
 ///
 /// Returns None if the name is not a recognized month abbreviation.
 /// This is used as a fallback when user-defined string variables are not found.
+#[inline]
 fn get_month_expansion(name: &str) -> Option<&'static str> {
     let bytes = name.as_bytes();
     if bytes.len() != 3 {
@@ -37,6 +137,20 @@ fn get_month_expansion(name: &str) -> Option<&'static str> {
         0x6e_6f_76 => Some("November"),
         0x64_65_63 => Some("December"),
         _ => None,
+    }
+}
+
+#[inline]
+fn get_string_value<'map, 'a>(
+    strings: &'map AHashMap<Cow<'a, str>, Value<'a>>,
+    name: &str,
+) -> Option<&'map Value<'a>> {
+    if strings.len() <= SMALL_STRING_LOOKUP_LIMIT {
+        strings
+            .iter()
+            .find_map(|(key, value)| (key.as_ref() == name).then_some(value))
+    } else {
+        strings.get(name)
     }
 }
 
@@ -240,99 +354,6 @@ impl ParseOptions {
     }
 }
 
-const SMALL_STRING_CACHE_LIMIT: usize = 16;
-
-#[derive(Debug, Clone)]
-struct SmallExpansionSlot<'a> {
-    name: Cow<'a, str>,
-    raw: Value<'a>,
-    expanded: Option<Value<'a>>,
-}
-
-#[derive(Debug)]
-struct ExpansionState<'a> {
-    configured_for_user_strings: bool,
-    small_slots: Option<Vec<SmallExpansionSlot<'a>>>,
-    expanded_variables: AHashMap<Cow<'a, str>, Value<'a>>,
-    expansion_stack: Vec<Cow<'a, str>>,
-}
-
-impl<'a> ExpansionState<'a> {
-    #[inline]
-    fn new(strings: &AHashMap<Cow<'a, str>, Value<'a>>) -> Self {
-        let small_slots = if !strings.is_empty() && strings.len() <= SMALL_STRING_CACHE_LIMIT {
-            let mut slots = Vec::with_capacity(strings.len());
-            for (name, value) in strings {
-                slots.push(SmallExpansionSlot {
-                    name: name.clone(),
-                    raw: value.clone(),
-                    expanded: None,
-                });
-            }
-            Some(slots)
-        } else {
-            None
-        };
-
-        let expanded_variables = if small_slots.is_some() {
-            AHashMap::new()
-        } else {
-            AHashMap::with_capacity(strings.len())
-        };
-
-        Self {
-            configured_for_user_strings: !strings.is_empty(),
-            small_slots,
-            expanded_variables,
-            expansion_stack: Vec::with_capacity(strings.len().min(SMALL_STRING_CACHE_LIMIT)),
-        }
-    }
-
-    #[inline]
-    fn ensure_configured(&mut self, strings: &AHashMap<Cow<'a, str>, Value<'a>>) {
-        if !self.configured_for_user_strings && !strings.is_empty() {
-            *self = Self::new(strings);
-        }
-    }
-
-    #[inline]
-    fn contains_in_stack(&self, name: &str) -> bool {
-        self.expansion_stack
-            .iter()
-            .any(|variable| variable.as_ref() == name)
-    }
-
-    #[inline]
-    fn cached_value(&self, name: &str) -> Option<&Value<'a>> {
-        self.small_slots.as_ref().map_or_else(
-            || self.expanded_variables.get(name),
-            |slots| {
-                slots
-                    .iter()
-                    .find(|slot| slot.name.as_ref() == name)
-                    .and_then(|slot| slot.expanded.as_ref())
-            },
-        )
-    }
-
-    fn cycle_message(&self, name: &str) -> String {
-        let mut cycle = String::new();
-
-        for variable in &self.expansion_stack {
-            if !cycle.is_empty() {
-                cycle.push_str(" -> ");
-            }
-            cycle.push_str(variable.as_ref());
-        }
-
-        if !cycle.is_empty() {
-            cycle.push_str(" -> ");
-        }
-        cycle.push_str(name);
-        cycle
-    }
-}
-
 /// A parsed BibTeX database
 #[derive(Debug, Clone, Default)]
 pub struct Database<'a> {
@@ -353,7 +374,9 @@ impl<'a> Database<'a> {
         value: &mut Value<'a>,
         has_user_strings: bool,
         month_constants_shadowed: bool,
-        expansion_state: &mut ExpansionState<'a>,
+        expanded_variables: &mut ExpansionCache<'a>,
+        expansion_stack: &mut Vec<Cow<'a, str>>,
+        concat_cache: &mut ConcatCache<'a>,
     ) -> Result<()> {
         match value {
             Value::Literal(_) | Value::Number(_) => Ok(()),
@@ -366,13 +389,30 @@ impl<'a> Database<'a> {
                 }
 
                 if has_user_strings {
+                    if let Some(expanded) = expanded_variables.get_cloned(name.as_ref()) {
+                        *value = expanded;
+                        return Ok(());
+                    }
+
                     let old_value = std::mem::take(value);
-                    *value = self.smart_expand_value_cached(old_value, expansion_state)?;
+                    *value = self.smart_expand_value_cached(
+                        old_value,
+                        expanded_variables,
+                        expansion_stack,
+                        concat_cache,
+                    )?;
                 }
 
                 Ok(())
             }
             Value::Concat(parts) => {
+                if has_user_strings {
+                    if let Some(expanded) = concat_cache.get_cloned(parts) {
+                        *value = expanded;
+                        return Ok(());
+                    }
+                }
+
                 let needs_expansion = if has_user_strings {
                     parts.iter().any(contains_variables)
                 } else {
@@ -380,8 +420,20 @@ impl<'a> Database<'a> {
                 };
 
                 if needs_expansion {
+                    if !has_user_strings {
+                        if let Some(expanded) = concat_cache.get_cloned(parts) {
+                            *value = expanded;
+                            return Ok(());
+                        }
+                    }
+
                     let old_value = std::mem::take(value);
-                    *value = self.smart_expand_value_cached(old_value, expansion_state)?;
+                    *value = self.smart_expand_value_cached(
+                        old_value,
+                        expanded_variables,
+                        expansion_stack,
+                        concat_cache,
+                    )?;
                 }
 
                 Ok(())
@@ -400,7 +452,8 @@ impl<'a> Database<'a> {
     ///
     /// # Parallel Processing
     ///
-    /// The `threads` option only affects `parse_files()`.
+    /// The `threads` option only affects `parse_files()`. Single file
+    /// parsing with `parse()` is sequential.
     ///
     /// # Example
     ///
@@ -424,116 +477,120 @@ impl<'a> Database<'a> {
     }
 
     /// Parse a BibTeX database from a string (single-threaded implementation)
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_sequential(input: &'a str) -> Result<Self> {
         let mut db = Self::new();
 
         // Fast path for common corpora (like tugboat) with no user-defined strings.
         // This avoids buffering all entries before expansion.
         if !input_may_contain_string_definition(input) {
-            db.parse_without_string_definitions(input)?;
-        } else if !input_may_have_late_string_definition(input) {
-            // Single-pass path when all @string definitions appear before regular
-            // entries. This keeps correctness while avoiding buffering entries and
-            // a full second pass over them.
-            db.parse_with_early_string_definitions(input)?;
-        } else {
-            db.parse_with_late_string_definitions(input)?;
-        }
+            let has_user_strings = false;
+            let month_constants_shadowed = false;
+            let mut expanded_variables = ExpansionCache::with_capacity(0);
+            let mut expansion_stack = Vec::new();
+            let mut concat_cache = ConcatCache::new();
 
-        Ok(db)
-    }
-
-    fn parse_without_string_definitions(&mut self, input: &'a str) -> Result<()> {
-        let has_user_strings = false;
-        let month_constants_shadowed = false;
-        let mut expansion_state = ExpansionState::new(&self.strings);
-
-        crate::parser::parse_bibtex_stream(input, |item| match item {
-            crate::parser::ParsedItem::Entry(mut entry) => {
-                self.expand_entry_for_parse(
-                    &mut entry,
-                    has_user_strings,
-                    month_constants_shadowed,
-                    &mut expansion_state,
-                )?;
-                self.entries.push(entry);
-                Ok(())
-            }
-            crate::parser::ParsedItem::Preamble(value) => self.push_expanded_preamble(
-                value,
-                has_user_strings,
-                month_constants_shadowed,
-                &mut expansion_state,
-            ),
-            crate::parser::ParsedItem::Comment(text) => {
-                self.comments.push(Cow::Borrowed(text));
-                Ok(())
-            }
-            crate::parser::ParsedItem::String(name, value) => {
-                // Defensive fallback for scanner false negatives.
-                self.strings.insert(Cow::Borrowed(name), value);
-                Ok(())
-            }
-        })
-    }
-
-    fn parse_with_early_string_definitions(&mut self, input: &'a str) -> Result<()> {
-        let mut pending_preambles = Vec::new();
-        let mut expansion_state = ExpansionState::new(&self.strings);
-        let mut month_constants_shadowed = None;
-
-        crate::parser::parse_bibtex_stream(input, |item| match item {
-            crate::parser::ParsedItem::Entry(mut entry) => {
-                let has_user_strings = !self.strings.is_empty();
-                if has_user_strings {
-                    expansion_state.ensure_configured(&self.strings);
+            crate::parser::parse_bibtex_stream(input, |item| {
+                match item {
+                    crate::parser::ParsedItem::Entry(mut entry) => {
+                        for field in &mut entry.fields {
+                            db.expand_value_for_parse(
+                                &mut field.value,
+                                has_user_strings,
+                                month_constants_shadowed,
+                                &mut expanded_variables,
+                                &mut expansion_stack,
+                                &mut concat_cache,
+                            )?;
+                        }
+                        db.entries.push(entry);
+                    }
+                    crate::parser::ParsedItem::Preamble(value) => {
+                        let mut expanded = value;
+                        db.expand_value_for_parse(
+                            &mut expanded,
+                            has_user_strings,
+                            month_constants_shadowed,
+                            &mut expanded_variables,
+                            &mut expansion_stack,
+                            &mut concat_cache,
+                        )?;
+                        db.preambles.push(expanded);
+                    }
+                    crate::parser::ParsedItem::Comment(text) => {
+                        db.comments.push(Cow::Borrowed(text));
+                    }
+                    crate::parser::ParsedItem::String(name, value) => {
+                        // Defensive fallback for scanner false negatives.
+                        db.strings.insert(Cow::Borrowed(name), value);
+                    }
                 }
-                let month_constants_shadowed = *month_constants_shadowed.get_or_insert_with(|| {
-                    has_user_strings && user_strings_shadow_month_constants(&self.strings)
-                });
-                self.expand_entry_for_parse(
-                    &mut entry,
+                Ok(())
+            })?;
+
+            return Ok(db);
+        }
+
+        // Single-pass path when all @string definitions appear before regular
+        // entries. This keeps correctness while avoiding buffering entries and
+        // a full second pass over them.
+        if !input_may_have_late_string_definition(input) {
+            let mut pending_preambles = Vec::new();
+            let mut expanded_variables = ExpansionCache::with_capacity(0);
+            let mut expansion_stack = Vec::new();
+            let mut concat_cache = ConcatCache::new();
+            let mut month_constants_shadowed = None;
+
+            crate::parser::parse_bibtex_stream(input, |item| {
+                match item {
+                    crate::parser::ParsedItem::Entry(mut entry) => {
+                        let has_user_strings = !db.strings.is_empty();
+                        let month_constants_shadowed = *month_constants_shadowed
+                            .get_or_insert_with(|| {
+                                has_user_strings && user_strings_shadow_month_constants(&db.strings)
+                            });
+                        for field in &mut entry.fields {
+                            db.expand_value_for_parse(
+                                &mut field.value,
+                                has_user_strings,
+                                month_constants_shadowed,
+                                &mut expanded_variables,
+                                &mut expansion_stack,
+                                &mut concat_cache,
+                            )?;
+                        }
+                        db.entries.push(entry);
+                    }
+                    crate::parser::ParsedItem::Preamble(value) => pending_preambles.push(value),
+                    crate::parser::ParsedItem::String(name, value) => {
+                        db.strings.insert(Cow::Borrowed(name), value);
+                    }
+                    crate::parser::ParsedItem::Comment(text) => {
+                        db.comments.push(Cow::Borrowed(text));
+                    }
+                }
+                Ok(())
+            })?;
+
+            let has_user_strings = !db.strings.is_empty();
+            let month_constants_shadowed =
+                has_user_strings && user_strings_shadow_month_constants(&db.strings);
+            for value in pending_preambles {
+                let mut expanded = value;
+                db.expand_value_for_parse(
+                    &mut expanded,
                     has_user_strings,
                     month_constants_shadowed,
-                    &mut expansion_state,
+                    &mut expanded_variables,
+                    &mut expansion_stack,
+                    &mut concat_cache,
                 )?;
-                self.entries.push(entry);
-                Ok(())
+                db.preambles.push(expanded);
             }
-            crate::parser::ParsedItem::Preamble(value) => {
-                pending_preambles.push(value);
-                Ok(())
-            }
-            crate::parser::ParsedItem::String(name, value) => {
-                self.strings.insert(Cow::Borrowed(name), value);
-                Ok(())
-            }
-            crate::parser::ParsedItem::Comment(text) => {
-                self.comments.push(Cow::Borrowed(text));
-                Ok(())
-            }
-        })?;
 
-        let has_user_strings = !self.strings.is_empty();
-        let month_constants_shadowed =
-            has_user_strings && user_strings_shadow_month_constants(&self.strings);
-        if has_user_strings {
-            expansion_state.ensure_configured(&self.strings);
+            return Ok(db);
         }
 
-        for value in pending_preambles {
-            self.push_expanded_preamble(
-                value,
-                has_user_strings,
-                month_constants_shadowed,
-                &mut expansion_state,
-            )?;
-        }
-
-        Ok(())
-    }
-
-    fn parse_with_late_string_definitions(&mut self, input: &'a str) -> Result<()> {
         let mut pending_entries = Vec::new();
         let mut pending_preambles = Vec::new();
 
@@ -542,84 +599,54 @@ impl<'a> Database<'a> {
                 crate::parser::ParsedItem::Entry(entry) => pending_entries.push(entry),
                 crate::parser::ParsedItem::Preamble(value) => pending_preambles.push(value),
                 crate::parser::ParsedItem::String(name, value) => {
-                    self.strings.insert(Cow::Borrowed(name), value);
+                    db.strings.insert(Cow::Borrowed(name), value);
                 }
                 crate::parser::ParsedItem::Comment(text) => {
-                    self.comments.push(Cow::Borrowed(text));
+                    db.comments.push(Cow::Borrowed(text));
                 }
             }
             Ok(())
         })?;
 
-        self.entries.reserve_exact(pending_entries.len());
-        self.preambles.reserve_exact(pending_preambles.len());
+        db.entries.reserve_exact(pending_entries.len());
+        db.preambles.reserve_exact(pending_preambles.len());
 
         // Expand after parsing so all @string definitions are available globally.
-        let has_user_strings = !self.strings.is_empty();
+        let has_user_strings = !db.strings.is_empty();
         let month_constants_shadowed =
-            has_user_strings && user_strings_shadow_month_constants(&self.strings);
-        let mut expansion_state = ExpansionState::new(&self.strings);
-        if has_user_strings {
-            expansion_state.ensure_configured(&self.strings);
-        }
+            has_user_strings && user_strings_shadow_month_constants(&db.strings);
+        let mut expanded_variables = ExpansionCache::with_capacity(db.strings.len());
+        let mut expansion_stack = Vec::new();
+        let mut concat_cache = ConcatCache::new();
 
         for mut entry in pending_entries {
-            self.expand_entry_for_parse(
-                &mut entry,
-                has_user_strings,
-                month_constants_shadowed,
-                &mut expansion_state,
-            )?;
-            self.entries.push(entry);
+            for field in &mut entry.fields {
+                db.expand_value_for_parse(
+                    &mut field.value,
+                    has_user_strings,
+                    month_constants_shadowed,
+                    &mut expanded_variables,
+                    &mut expansion_stack,
+                    &mut concat_cache,
+                )?;
+            }
+            db.entries.push(entry);
         }
 
         for value in pending_preambles {
-            self.push_expanded_preamble(
-                value,
+            let mut expanded = value;
+            db.expand_value_for_parse(
+                &mut expanded,
                 has_user_strings,
                 month_constants_shadowed,
-                &mut expansion_state,
+                &mut expanded_variables,
+                &mut expansion_stack,
+                &mut concat_cache,
             )?;
+            db.preambles.push(expanded);
         }
 
-        Ok(())
-    }
-
-    fn expand_entry_for_parse(
-        &self,
-        entry: &mut Entry<'a>,
-        has_user_strings: bool,
-        month_constants_shadowed: bool,
-        expansion_state: &mut ExpansionState<'a>,
-    ) -> Result<()> {
-        for field in &mut entry.fields {
-            self.expand_value_for_parse(
-                &mut field.value,
-                has_user_strings,
-                month_constants_shadowed,
-                expansion_state,
-            )?;
-        }
-
-        Ok(())
-    }
-
-    fn push_expanded_preamble(
-        &mut self,
-        value: Value<'a>,
-        has_user_strings: bool,
-        month_constants_shadowed: bool,
-        expansion_state: &mut ExpansionState<'a>,
-    ) -> Result<()> {
-        let mut expanded = value;
-        self.expand_value_for_parse(
-            &mut expanded,
-            has_user_strings,
-            month_constants_shadowed,
-            expansion_state,
-        )?;
-        self.preambles.push(expanded);
-        Ok(())
+        Ok(db)
     }
 
     /// Merge another database into this one
@@ -796,7 +823,9 @@ impl<'a> Database<'a> {
     fn smart_expand_value_cached(
         &self,
         value: Value<'a>,
-        expansion_state: &mut ExpansionState<'a>,
+        expanded_variables: &mut ExpansionCache<'a>,
+        expansion_stack: &mut Vec<Cow<'a, str>>,
+        concat_cache: &mut ConcatCache<'a>,
     ) -> Result<Value<'a>> {
         match value {
             // Simple literals and numbers stay as-is (zero-copy!)
@@ -804,143 +833,67 @@ impl<'a> Database<'a> {
 
             // Variables need to be resolved
             Value::Variable(name) => {
-                Ok(self.ensure_variable_cached(&name, expansion_state)?.clone())
+                let name_text = name.as_ref();
+                if let Some(expanded) = expanded_variables.get_cloned(name_text) {
+                    return Ok(expanded);
+                }
+
+                if expansion_stack.iter().any(|v| v.as_ref() == name_text) {
+                    let mut cycle = expansion_stack
+                        .iter()
+                        .map(std::convert::AsRef::as_ref)
+                        .collect::<Vec<_>>()
+                        .join(" -> ");
+                    if !cycle.is_empty() {
+                        cycle.push_str(" -> ");
+                    }
+                    cycle.push_str(name_text);
+                    return Err(Error::CircularReference(cycle));
+                }
+
+                if let Some(user_value) = get_string_value(&self.strings, name_text) {
+                    // Recursively expand the variable's value and cache the result.
+                    expansion_stack.push(name.clone());
+                    let expanded = self.smart_expand_value_cached(
+                        user_value.clone(),
+                        expanded_variables,
+                        expansion_stack,
+                        concat_cache,
+                    );
+                    expansion_stack.pop();
+
+                    let expanded = expanded?;
+                    expanded_variables.insert(name, expanded.clone());
+                    Ok(expanded)
+                } else {
+                    // Check month abbreviations as fallback
+                    get_month_expansion(name_text).map_or_else(
+                        || {
+                            // Variable not found in either user strings or month constants
+                            Err(Error::UndefinedVariable(name_text.to_string()))
+                        },
+                        |month_value| Ok(Value::Literal(Cow::Borrowed(month_value))),
+                    )
+                }
             }
 
             // Concatenations need special handling
-            Value::Concat(parts) => self.expand_concatenation_parts_cached(&parts, expansion_state),
-        }
-    }
-
-    #[inline]
-    fn expand_value_ref_cached(
-        &self,
-        value: &Value<'a>,
-        expansion_state: &mut ExpansionState<'a>,
-    ) -> Result<Value<'a>> {
-        match value {
-            Value::Literal(text) => Ok(Value::Literal(text.clone())),
-            Value::Number(number) => Ok(Value::Number(*number)),
-            Value::Variable(name) => {
-                Ok(self.ensure_variable_cached(name, expansion_state)?.clone())
-            }
-            Value::Concat(parts) => self.expand_concatenation_parts_cached(parts, expansion_state),
-        }
-    }
-
-    fn ensure_variable_cached<'s>(
-        &self,
-        name: &Cow<'a, str>,
-        expansion_state: &'s mut ExpansionState<'a>,
-    ) -> Result<&'s Value<'a>> {
-        if expansion_state.cached_value(name.as_ref()).is_none() {
-            if expansion_state.contains_in_stack(name.as_ref()) {
-                return Err(Error::CircularReference(
-                    expansion_state.cycle_message(name.as_ref()),
-                ));
-            }
-
-            let small_slot = expansion_state.small_slots.as_ref().and_then(|slots| {
-                slots
-                    .iter()
-                    .position(|slot| slot.name.as_ref() == name.as_ref())
-                    .map(|index| (index, slots[index].name.clone(), slots[index].raw.clone()))
-            });
-
-            if let Some((index, variable_name, raw_value)) = small_slot {
-                expansion_state.expansion_stack.push(variable_name);
-                let expanded = self.expand_value_ref_cached(&raw_value, expansion_state);
-                expansion_state.expansion_stack.pop();
-
-                let expanded = expanded?;
-                if let Some(slots) = expansion_state.small_slots.as_mut() {
-                    slots[index].expanded = Some(expanded);
-                }
-            } else if let Some(user_value) = self.strings.get(name.as_ref()) {
-                let variable_name = name.clone();
-                expansion_state.expansion_stack.push(variable_name.clone());
-                let expanded = self.expand_value_ref_cached(user_value, expansion_state);
-                expansion_state.expansion_stack.pop();
-
-                let expanded = expanded?;
-                expansion_state
-                    .expanded_variables
-                    .insert(variable_name, expanded);
-            } else {
-                let month_value = get_month_expansion(name.as_ref())
-                    .ok_or_else(|| Error::UndefinedVariable(name.as_ref().to_string()))?;
-                return Ok(expansion_state
-                    .expanded_variables
-                    .entry(name.clone())
-                    .or_insert_with(|| Value::Literal(Cow::Borrowed(month_value))));
-            }
-        }
-
-        Ok(expansion_state
-            .cached_value(name.as_ref())
-            .expect("variable cache populated before return"))
-    }
-
-    #[inline]
-    fn expanded_simple_len(
-        &self,
-        value: &Value<'a>,
-        expansion_state: &mut ExpansionState<'a>,
-    ) -> Result<usize> {
-        match value {
-            Value::Literal(text) => Ok(text.len()),
-            Value::Number(number) => Ok(decimal_len(*number)),
-            Value::Variable(name) => Ok(simple_value_len(
-                self.ensure_variable_cached(name, expansion_state)?,
-            )
-            .expect("cached variables must be simple values")),
-            Value::Concat(parts) => parts.iter().try_fold(0usize, |total, part| {
-                Ok::<usize, Error>(total + self.expanded_simple_len(part, expansion_state)?)
-            }),
-        }
-    }
-
-    #[inline]
-    fn append_expanded_simple(
-        &self,
-        value: &Value<'a>,
-        output: &mut String,
-        expansion_state: &mut ExpansionState<'a>,
-    ) -> Result<()> {
-        match value {
-            Value::Literal(text) => output.push_str(text),
-            Value::Number(number) => append_decimal(output, *number),
-            Value::Variable(name) => {
-                let cached = self.ensure_variable_cached(name, expansion_state)?;
-                let appended = append_simple_value(output, cached);
-                debug_assert!(appended, "cached variables must be simple values");
-            }
             Value::Concat(parts) => {
-                for part in parts.iter() {
-                    self.append_expanded_simple(part, output, expansion_state)?;
+                if let Some(expanded) = concat_cache.get_cloned(&parts) {
+                    return Ok(expanded);
                 }
+
+                let cache_key = parts.clone();
+                let expanded = self.expand_concatenation_cached(
+                    parts.into_vec(),
+                    expanded_variables,
+                    expansion_stack,
+                    concat_cache,
+                )?;
+                concat_cache.insert(cache_key, expanded.clone());
+                Ok(expanded)
             }
         }
-
-        Ok(())
-    }
-
-    #[inline]
-    fn expand_concatenation_parts_cached(
-        &self,
-        parts: &[Value<'a>],
-        expansion_state: &mut ExpansionState<'a>,
-    ) -> Result<Value<'a>> {
-        let capacity = parts.iter().try_fold(0usize, |total, part| {
-            Ok::<usize, Error>(total + self.expanded_simple_len(part, expansion_state)?)
-        })?;
-
-        let mut combined = String::with_capacity(capacity);
-        for part in parts {
-            self.append_expanded_simple(part, &mut combined, expansion_state)?;
-        }
-
-        Ok(Value::Literal(Cow::Owned(combined)))
     }
 
     /// Alternative expansion that works with references (requires cloning for variables)
@@ -968,14 +921,57 @@ impl<'a> Database<'a> {
             }
 
             // Concatenations need cloning
-            Value::Concat(parts) => self.expand_concatenation(parts),
+            Value::Concat(parts) => {
+                let cloned_parts = parts.to_vec();
+                self.expand_concatenation(cloned_parts)
+            }
         }
     }
 
     /// Expand a concatenation, only converting to owned when necessary
-    fn expand_concatenation(&self, parts: &[Value<'a>]) -> Result<Value<'a>> {
-        let mut expansion_state = ExpansionState::new(&self.strings);
-        self.expand_concatenation_parts_cached(parts, &mut expansion_state)
+    fn expand_concatenation(&self, parts: Vec<Value<'a>>) -> Result<Value<'a>> {
+        let mut expanded_variables = ExpansionCache::with_capacity(0);
+        let mut expansion_stack = Vec::new();
+        let mut concat_cache = ConcatCache::new();
+        self.expand_concatenation_cached(
+            parts,
+            &mut expanded_variables,
+            &mut expansion_stack,
+            &mut concat_cache,
+        )
+    }
+
+    /// Cached concatenation expansion used by hot parsing paths.
+    fn expand_concatenation_cached(
+        &self,
+        parts: Vec<Value<'a>>,
+        expanded_variables: &mut ExpansionCache<'a>,
+        expansion_stack: &mut Vec<Cow<'a, str>>,
+        concat_cache: &mut ConcatCache<'a>,
+    ) -> Result<Value<'a>> {
+        let mut expanded_parts = Vec::with_capacity(parts.len());
+
+        // First, expand all parts
+        for part in parts {
+            let expanded = self.smart_expand_value_cached(
+                part,
+                expanded_variables,
+                expansion_stack,
+                concat_cache,
+            )?;
+            expanded_parts.push(expanded);
+        }
+
+        // If all parts are literals or numbers, we can flatten to a single string
+        if expanded_parts
+            .iter()
+            .all(|p| matches!(p, Value::Literal(_) | Value::Number(_)))
+        {
+            let combined = concatenate_simple_values(&expanded_parts);
+            Ok(Value::Literal(Cow::Owned(combined)))
+        } else {
+            Ok(Value::Concat(expanded_parts.into_boxed_slice()))
+        }
     }
 
     /// Get a fully expanded string value (for compatibility)
@@ -1241,68 +1237,31 @@ pub struct IssueSummary {
     pub infos: usize,
 }
 
-#[inline]
-fn simple_value_len(value: &Value<'_>) -> Option<usize> {
-    match value {
-        Value::Literal(text) => Some(text.len()),
-        Value::Number(number) => Some(decimal_len(*number)),
-        _ => None,
-    }
-}
+/// Concatenate simple values (literals and numbers) into a single string
+fn concatenate_simple_values(values: &[Value]) -> String {
+    let mut result = String::new();
 
-#[inline]
-fn append_simple_value(output: &mut String, value: &Value<'_>) -> bool {
-    match value {
-        Value::Literal(text) => {
-            output.push_str(text);
-            true
-        }
-        Value::Number(number) => {
-            append_decimal(output, *number);
-            true
-        }
-        _ => false,
-    }
-}
+    // Pre-calculate capacity for efficiency
+    let capacity: usize = values
+        .iter()
+        .map(|v| match v {
+            Value::Literal(s) => s.len(),
+            Value::Number(n) => n.to_string().len(),
+            _ => 0,
+        })
+        .sum();
 
-#[inline]
-const fn decimal_len(number: i64) -> usize {
-    let mut digits = 1usize;
-    let mut value = number.unsigned_abs();
+    result.reserve(capacity);
 
-    while value >= 10 {
-        digits += 1;
-        value /= 10;
-    }
-
-    if number < 0 {
-        digits + 1
-    } else {
-        digits
-    }
-}
-
-#[inline]
-fn append_decimal(output: &mut String, number: i64) {
-    if number < 0 {
-        output.push('-');
-    }
-
-    let mut value = number.unsigned_abs();
-    let mut buffer = [0u8; 20];
-    let mut index = buffer.len();
-
-    loop {
-        index -= 1;
-        buffer[index] = b'0' + (value % 10) as u8;
-        value /= 10;
-        if value == 0 {
-            break;
+    for value in values {
+        match value {
+            Value::Literal(s) => result.push_str(s),
+            Value::Number(n) => result.push_str(&n.to_string()),
+            _ => {} // Should not happen given the precondition
         }
     }
 
-    let digits = std::str::from_utf8(&buffer[index..]).expect("decimal digits are ASCII");
-    output.push_str(digits);
+    result
 }
 
 fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
@@ -1312,6 +1271,7 @@ fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
 
     haystack.to_lowercase().contains(&needle.to_lowercase())
 }
+
 /// Builder for creating databases programmatically
 #[derive(Debug, Default)]
 pub struct DatabaseBuilder<'a> {

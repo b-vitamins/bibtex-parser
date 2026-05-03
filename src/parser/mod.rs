@@ -50,75 +50,13 @@ pub mod utils;
 pub mod value;
 
 use crate::{Error, Result};
+use winnow::ascii::multispace0;
+use winnow::prelude::*;
 
 pub use entry::parse_entry;
 
 /// Internal parser result type
 pub type PResult<'a, O> = winnow::PResult<O, winnow::error::ContextError>;
-
-/// Cursor over the original input used by the streaming parser.
-///
-/// Keeping a byte index lets the top-level parser avoid repeatedly rebuilding
-/// `&str` state for every item and makes manual special-form parsing cheap.
-pub(super) struct Cursor<'a> {
-    input: &'a str,
-    pos: usize,
-}
-
-impl<'a> Cursor<'a> {
-    #[inline]
-    pub(super) const fn new(input: &'a str) -> Self {
-        Self { input, pos: 0 }
-    }
-
-    #[inline]
-    pub(super) fn remaining(&self) -> &'a str {
-        &self.input[self.pos..]
-    }
-
-    #[inline]
-    pub(super) fn remaining_bytes(&self) -> &'a [u8] {
-        &self.input.as_bytes()[self.pos..]
-    }
-
-    #[inline]
-    pub(super) fn skip_whitespace(&mut self) {
-        self.pos += simd::scan_whitespace(self.remaining_bytes());
-    }
-
-    #[inline]
-    pub(super) const fn is_empty(&self) -> bool {
-        self.pos >= self.input.len()
-    }
-
-    #[inline]
-    pub(super) fn bump(&mut self, len: usize) {
-        self.pos += len;
-    }
-
-    #[inline]
-    pub(super) fn take_identifier(&mut self) -> Option<&'a str> {
-        let len = simd::scan_identifier(self.remaining_bytes());
-        if len == 0 {
-            return None;
-        }
-
-        let ident = &self.remaining()[..len];
-        self.bump(len);
-        Some(ident)
-    }
-
-    #[inline]
-    fn take_comment_until_at(&mut self) -> &'a str {
-        let start = self.pos;
-        if let Some(offset) = delimiter::find_byte(self.remaining_bytes(), b'@', 0) {
-            self.pos += offset;
-        } else {
-            self.pos = self.input.len();
-        }
-        &self.input[start..self.pos]
-    }
-}
 
 #[cold]
 #[inline(never)]
@@ -128,7 +66,7 @@ pub(crate) fn backtrack_err() -> winnow::error::ErrMode<winnow::error::ContextEr
 
 #[cold]
 #[inline(never)]
-pub(crate) fn backtrack<'a, O>() -> PResult<'a, O> {
+pub(crate) fn backtrack<O>() -> PResult<'static, O> {
     Err(backtrack_err())
 }
 
@@ -146,9 +84,8 @@ pub(crate) fn backtrack<'a, O>() -> PResult<'a, O> {
 ///
 /// # Performance
 ///
-/// This function maintains the same high performance as the high-level API
-/// (650-700 MB/s) since it's the same underlying parser with no additional
-/// processing overhead.
+/// This function uses the same zero-copy value parser as the high-level API,
+/// but returns raw items without string expansion or database indexing.
 ///
 /// # Example
 ///
@@ -207,25 +144,28 @@ pub(crate) fn parse_bibtex_stream<'a, F>(input: &'a str, mut on_item: F) -> Resu
 where
     F: FnMut(ParsedItem<'a>) -> Result<()>,
 {
-    let mut cursor = Cursor::new(input);
+    let mut remaining = input;
 
     loop {
-        cursor.skip_whitespace();
-        if cursor.is_empty() {
+        // Skip ASCII whitespace without Unicode trimming overhead.
+        lexer::skip_whitespace(&mut remaining);
+        if remaining.is_empty() {
             break;
         }
 
         // Try to parse an item (including comments)
-        match parse_item(&mut cursor) {
+        match parse_item(&mut remaining) {
             Ok(item) => on_item(item)?,
             Err(e) => {
-                let (line, column) = calculate_position(input, cursor.pos);
+                // Calculate line/column for error
+                let consumed = input.len() - remaining.len();
+                let (line, column) = calculate_position(input, consumed);
 
                 return Err(Error::ParseError {
                     line,
                     column,
                     message: format!("Failed to parse entry: {e}"),
-                    snippet: Some(get_snippet(cursor.remaining(), 40)),
+                    snippet: Some(get_snippet(remaining, 40)),
                 });
             }
         }
@@ -298,25 +238,38 @@ pub enum ParsedItem<'a> {
 
 /// Parse a single item (entry, string, preamble, or comment) with optimized delimiter search
 #[inline]
-fn parse_item<'a>(cursor: &mut Cursor<'a>) -> PResult<'a, ParsedItem<'a>> {
-    let bytes = cursor.remaining_bytes();
+pub(crate) fn parse_item<'a>(input: &mut &'a str) -> PResult<'a, ParsedItem<'a>> {
+    // Use optimized delimiter search to find @ or handle as comment
+    let bytes = input.as_bytes();
 
-    if bytes.first() != Some(&b'@') {
-        return Ok(ParsedItem::Comment(cursor.take_comment_until_at()));
+    // Fast path: if we don't start with @, check if this is a comment
+    if !bytes.is_empty() && bytes[0] != b'@' {
+        // Look for the next @ to treat everything before it as a comment
+        if let Some(at_pos) = delimiter::find_byte(bytes, b'@', 0) {
+            let comment = &input[..at_pos];
+            *input = &input[at_pos..];
+            return Ok(ParsedItem::Comment(comment));
+        }
+        // No @ found, entire remaining input is a comment
+        let comment = *input;
+        *input = "";
+        return Ok(ParsedItem::Comment(comment));
     }
 
+    // We have an @ at the start. For regular entries, avoid checking all
+    // special keywords and dispatch directly based on the first letter.
     let second = bytes.get(1).copied().unwrap_or_default();
     match second | 0x20 {
         b's' if starts_with_keyword(bytes, b"string") => {
-            parse_string(cursor).map(|(k, v)| ParsedItem::String(k, v))
+            parse_string(input).map(|(k, v)| ParsedItem::String(k, v))
         }
         b'p' if starts_with_keyword(bytes, b"preamble") => {
-            parse_preamble(cursor).map(ParsedItem::Preamble)
+            parse_preamble(input).map(ParsedItem::Preamble)
         }
         b'c' if starts_with_keyword(bytes, b"comment") => {
-            parse_comment(cursor).map(ParsedItem::Comment)
+            parse_comment(input).map(ParsedItem::Comment)
         }
-        _ => entry::parse_entry_fast(cursor).map(ParsedItem::Entry),
+        _ => entry::parse_entry_at(input).map(ParsedItem::Entry),
     }
 }
 
@@ -347,96 +300,77 @@ const fn is_identifier_char(byte: u8) -> bool {
     )
 }
 
-/// Parse a `@string` definition.
-fn parse_string<'a>(cursor: &mut Cursor<'a>) -> PResult<'a, (&'a str, crate::Value<'a>)> {
-    cursor.bump(1 + "string".len());
-    cursor.skip_whitespace();
+/// Parse a @string definition
+fn parse_string<'a>(input: &mut &'a str) -> PResult<'a, (&'a str, crate::Value<'a>)> {
+    use winnow::combinator::{alt, delimited, preceded};
 
-    let closing = match cursor.remaining_bytes().first() {
-        Some(b'{') => b'}',
-        Some(b'(') => b')',
-        _ => return backtrack(),
-    };
-    cursor.bump(1);
-
-    let start = cursor.remaining();
-    let mut remaining = start;
-    lexer::skip_whitespace(&mut remaining);
-    let name = lexer::identifier(&mut remaining)?;
-    lexer::skip_whitespace(&mut remaining);
-
-    match remaining.as_bytes().first() {
-        Some(b'=') => remaining = &remaining[1..],
-        _ => return backtrack(),
-    }
-
-    lexer::skip_whitespace(&mut remaining);
-    let value = value::parse_value(&mut remaining)?;
-    lexer::skip_whitespace(&mut remaining);
-
-    match remaining.as_bytes().first() {
-        Some(&byte) if byte == closing => remaining = &remaining[1..],
-        _ => return backtrack(),
-    }
-
-    cursor.bump(start.len() - remaining.len());
-    Ok((name, value))
+    preceded(
+        (multispace0, '@', utils::tag_no_case("string"), multispace0),
+        alt((
+            delimited('{', parse_string_content, '}'),
+            delimited('(', parse_string_content, ')'),
+        )),
+    )
+    .parse_next(input)
 }
 
-/// Parse a `@preamble`.
-fn parse_preamble<'a>(cursor: &mut Cursor<'a>) -> PResult<'a, crate::Value<'a>> {
-    cursor.bump(1 + "preamble".len());
-    cursor.skip_whitespace();
+/// Parse the content of a @string definition
+fn parse_string_content<'a>(input: &mut &'a str) -> PResult<'a, (&'a str, crate::Value<'a>)> {
+    use winnow::combinator::separated_pair;
 
-    let closing = match cursor.remaining_bytes().first() {
-        Some(b'{') => b'}',
-        Some(b'(') => b')',
-        _ => return backtrack(),
-    };
-    cursor.bump(1);
-
-    let start = cursor.remaining();
-    let mut remaining = start;
-    lexer::skip_whitespace(&mut remaining);
-    let value = value::parse_value(&mut remaining)?;
-    lexer::skip_whitespace(&mut remaining);
-
-    match remaining.as_bytes().first() {
-        Some(&byte) if byte == closing => remaining = &remaining[1..],
-        _ => return backtrack(),
-    }
-
-    cursor.bump(start.len() - remaining.len());
-    Ok(value)
+    separated_pair(
+        utils::ws(lexer::identifier),
+        utils::ws('='),
+        utils::ws(value::parse_value),
+    )
+    .parse_next(input)
 }
 
-/// Parse an `@comment{...}` or `@comment(...)`.
-fn parse_comment<'a>(cursor: &mut Cursor<'a>) -> PResult<'a, &'a str> {
-    cursor.bump(1 + "comment".len());
-    cursor.skip_whitespace();
+/// Parse a @preamble
+fn parse_preamble<'a>(input: &mut &'a str) -> PResult<'a, crate::Value<'a>> {
+    use winnow::combinator::{alt, delimited, preceded};
 
-    let closing = match cursor.remaining_bytes().first() {
-        Some(b'{') => b'}',
-        Some(b'(') => b')',
-        _ => return backtrack(),
-    };
-    cursor.bump(1);
+    preceded(
+        (
+            multispace0,
+            '@',
+            utils::tag_no_case("preamble"),
+            multispace0,
+        ),
+        alt((
+            delimited('{', parse_preamble_value, '}'),
+            delimited('(', parse_preamble_value, ')'),
+        )),
+    )
+    .parse_next(input)
+}
 
-    let start = cursor.remaining();
-    let mut remaining = start;
-    let text = match closing {
-        b'}' => lexer::balanced_braces(&mut remaining)?,
-        b')' => lexer::balanced_parentheses(&mut remaining)?,
-        _ => unreachable!(),
-    };
+/// Helper function to parse preamble value
+fn parse_preamble_value<'a>(input: &mut &'a str) -> PResult<'a, crate::Value<'a>> {
+    utils::ws(value::parse_value).parse_next(input)
+}
 
-    match remaining.as_bytes().first() {
-        Some(&byte) if byte == closing => remaining = &remaining[1..],
-        _ => return backtrack(),
-    }
+/// Parse a comment (different formats)
+fn parse_comment<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
+    use winnow::ascii::till_line_ending;
+    use winnow::combinator::{alt, delimited, preceded};
+    use winnow::token::take_until;
 
-    cursor.bump(start.len() - remaining.len());
-    Ok(text)
+    alt((
+        // @comment{...}
+        preceded(
+            (multispace0, '@', utils::tag_no_case("comment"), multispace0),
+            alt((
+                delimited('{', lexer::balanced_braces, '}'),
+                delimited('(', lexer::balanced_parentheses, ')'),
+            )),
+        ),
+        // % line comment
+        preceded('%', till_line_ending),
+        // Any text before @ is considered a comment
+        take_until(1.., "@").verify(|s: &str| !s.trim().is_empty()),
+    ))
+    .parse_next(input)
 }
 
 /// Calculate line and column from position

@@ -1,27 +1,10 @@
 //! Entry parsing for BibTeX
 
-use super::{lexer, value, Cursor, PResult};
+use super::{lexer, value, PResult};
 use crate::model::{Entry, EntryType, Field};
 use std::borrow::Cow;
 
-const INITIAL_FIELD_CAPACITY: usize = 17;
-const TARGET_FIELD_CAPACITY: usize = 17;
-const SMALL_FIELD_CAPACITY: usize = 8;
-
-#[inline]
-fn reserve_field_slot(fields: &mut Vec<Field<'_>>) {
-    if fields.len() == fields.capacity() && fields.capacity() < TARGET_FIELD_CAPACITY {
-        fields.reserve_exact(TARGET_FIELD_CAPACITY - fields.capacity());
-    }
-}
-
-#[inline]
-fn shrink_small_field_vec(fields: &mut Vec<Field<'_>>) {
-    let max_reasonable_capacity = (fields.len() * 2).max(SMALL_FIELD_CAPACITY);
-    if fields.capacity() > max_reasonable_capacity {
-        fields.shrink_to(max_reasonable_capacity);
-    }
-}
+const DEFAULT_FIELD_CAPACITY: usize = 17;
 
 /// Parse a bibliography entry
 #[inline]
@@ -42,21 +25,6 @@ pub fn parse_entry_at<'a>(input: &mut &'a str) -> PResult<'a, Entry<'a>> {
     }
 }
 
-/// Parse an entry directly from the streaming parser cursor.
-#[inline]
-pub(crate) fn parse_entry_fast<'a>(cursor: &mut Cursor<'a>) -> PResult<'a, Entry<'a>> {
-    match cursor.remaining_bytes().first() {
-        Some(b'@') => cursor.bump(1),
-        _ => {
-            return Err(winnow::error::ErrMode::Backtrack(
-                winnow::error::ContextError::default(),
-            ))
-        }
-    }
-
-    parse_entry_content_cursor(cursor)
-}
-
 #[inline]
 fn parse_entry_content<'a>(input: &mut &'a str) -> PResult<'a, Entry<'a>> {
     let entry_type_str = lexer::identifier(input)?;
@@ -72,29 +40,6 @@ fn parse_entry_content<'a>(input: &mut &'a str) -> PResult<'a, Entry<'a>> {
     *input = &input[1..];
 
     parse_entry_body(input, entry_type, closing_delimiter)
-}
-
-#[inline]
-fn parse_entry_content_cursor<'a>(cursor: &mut Cursor<'a>) -> PResult<'a, Entry<'a>> {
-    let entry_type_str = cursor
-        .take_identifier()
-        .ok_or_else(|| winnow::error::ErrMode::Backtrack(winnow::error::ContextError::default()))?;
-    let entry_type = EntryType::parse(entry_type_str);
-
-    cursor.skip_whitespace();
-
-    let closing_delimiter = match cursor.remaining_bytes().first() {
-        Some(b'{') => b'}',
-        Some(b'(') => b')',
-        _ => {
-            return Err(winnow::error::ErrMode::Backtrack(
-                winnow::error::ContextError::default(),
-            ))
-        }
-    };
-    cursor.bump(1);
-
-    parse_entry_body_cursor(cursor, entry_type, closing_delimiter)
 }
 
 /// Parse the body of an entry (key and fields)
@@ -121,29 +66,6 @@ fn parse_entry_body<'a>(
 }
 
 #[inline]
-fn parse_entry_body_cursor<'a>(
-    cursor: &mut Cursor<'a>,
-    entry_type: EntryType<'a>,
-    closing_delimiter: u8,
-) -> PResult<'a, Entry<'a>> {
-    cursor.skip_whitespace();
-    let key = cursor
-        .take_identifier()
-        .ok_or_else(|| winnow::error::ErrMode::Backtrack(winnow::error::ContextError::default()))?;
-
-    cursor.skip_whitespace();
-    expect_byte_cursor(cursor, b',')?;
-
-    let fields = parse_fields_cursor(cursor, closing_delimiter)?;
-
-    Ok(Entry {
-        ty: entry_type,
-        key: Cow::Borrowed(key),
-        fields,
-    })
-}
-
-#[inline]
 fn expect_byte<'a>(input: &mut &'a str, byte: u8) -> PResult<'a, ()> {
     match input.as_bytes().first() {
         Some(&b) if b == byte => {
@@ -154,22 +76,10 @@ fn expect_byte<'a>(input: &mut &'a str, byte: u8) -> PResult<'a, ()> {
     }
 }
 
-#[inline]
-fn expect_byte_cursor<'a>(cursor: &mut Cursor<'a>, byte: u8) -> PResult<'a, ()> {
-    match cursor.remaining_bytes().first() {
-        Some(&b) if b == byte => {
-            cursor.bump(1);
-            Ok(())
-        }
-        _ => Err(winnow::error::ErrMode::Backtrack(
-            winnow::error::ContextError::default(),
-        )),
-    }
-}
-
 /// Parse all fields in an entry.
+#[inline]
 fn parse_fields<'a>(input: &mut &'a str, closing_delimiter: u8) -> PResult<'a, Vec<Field<'a>>> {
-    let mut fields = Vec::with_capacity(INITIAL_FIELD_CAPACITY);
+    let mut fields = Vec::with_capacity(DEFAULT_FIELD_CAPACITY);
 
     loop {
         let Some(first) = lexer::skip_whitespace_peek(input) else {
@@ -185,7 +95,6 @@ fn parse_fields<'a>(input: &mut &'a str, closing_delimiter: u8) -> PResult<'a, V
         lexer::skip_whitespace(input);
         let value = value::parse_value_field(input)?;
 
-        reserve_field_slot(&mut fields);
         fields.push(Field {
             name: Cow::Borrowed(name),
             value,
@@ -200,61 +109,11 @@ fn parse_fields<'a>(input: &mut &'a str, closing_delimiter: u8) -> PResult<'a, V
         }
     }
 
-    shrink_small_field_vec(&mut fields);
-    Ok(fields)
-}
-
-fn parse_fields_cursor<'a>(
-    cursor: &mut Cursor<'a>,
-    closing_delimiter: u8,
-) -> PResult<'a, Vec<Field<'a>>> {
-    let mut fields = Vec::with_capacity(INITIAL_FIELD_CAPACITY);
-
-    loop {
-        cursor.skip_whitespace();
-
-        let Some(&first) = cursor.remaining_bytes().first() else {
-            return Err(winnow::error::ErrMode::Backtrack(
-                winnow::error::ContextError::default(),
-            ));
-        };
-
-        if first == closing_delimiter {
-            cursor.bump(1);
-            break;
-        }
-
-        let name = cursor.take_identifier().ok_or_else(|| {
-            winnow::error::ErrMode::Backtrack(winnow::error::ContextError::default())
-        })?;
-        cursor.skip_whitespace();
-        expect_byte_cursor(cursor, b'=')?;
-        cursor.skip_whitespace();
-        let value = value::parse_value_field_cursor(cursor)?;
-
-        reserve_field_slot(&mut fields);
-        fields.push(Field {
-            name: Cow::Borrowed(name),
-            value,
-        });
-
-        match cursor.remaining_bytes().first() {
-            Some(b',') => {
-                cursor.bump(1);
-            }
-            Some(&b) if b == closing_delimiter => {
-                cursor.bump(1);
-                break;
-            }
-            _ => {
-                return Err(winnow::error::ErrMode::Backtrack(
-                    winnow::error::ContextError::default(),
-                ))
-            }
-        }
+    let max_reasonable_capacity = (fields.len() * 2).max(8);
+    if fields.capacity() > max_reasonable_capacity {
+        fields.shrink_to_fit();
     }
 
-    shrink_small_field_vec(&mut fields);
     Ok(fields)
 }
 

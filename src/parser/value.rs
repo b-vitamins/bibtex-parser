@@ -1,6 +1,6 @@
 //! Value parsing for BibTeX fields
 
-use super::{lexer, Cursor, PResult};
+use super::{lexer, PResult};
 use crate::model::Value;
 use std::borrow::Cow;
 
@@ -17,35 +17,6 @@ pub fn parse_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
 #[inline]
 pub(crate) fn parse_value_field<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
     parse_concatenated_value_field(input)
-}
-
-/// Parse a field value directly from the streaming parser cursor.
-#[inline]
-pub(crate) fn parse_value_field_cursor<'a>(cursor: &mut Cursor<'a>) -> PResult<'a, Value<'a>> {
-    let first = parse_single_value_cursor(cursor)?;
-    cursor.skip_whitespace();
-
-    if cursor.remaining_bytes().first() != Some(&b'#') {
-        return Ok(first);
-    }
-
-    let mut parts = Vec::with_capacity(4);
-    parts.push(first);
-
-    loop {
-        cursor.bump(1);
-        cursor.skip_whitespace();
-
-        let part = parse_single_value_cursor(cursor)?;
-        parts.push(part);
-        cursor.skip_whitespace();
-
-        if cursor.remaining_bytes().first() != Some(&b'#') {
-            break;
-        }
-    }
-
-    Ok(Value::Concat(parts.into_boxed_slice()))
 }
 
 /// Parse a concatenated value (value # value # ...)
@@ -128,88 +99,26 @@ fn parse_single_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
     let bytes = input.as_bytes();
     if let Some(&first) = bytes.first() {
         match first {
-            b'"' => parse_quoted_value(input),
-            b'{' => parse_braced_value(input),
+            b'"' => {
+                super::simd::find_balanced_quotes(bytes).map_or_else(super::backtrack, |end_pos| {
+                    let content = &input[1..end_pos - 1];
+                    *input = &input[end_pos..];
+                    Ok(Value::Literal(Cow::Borrowed(content)))
+                })
+            }
+            b'{' => {
+                super::simd::find_balanced_braces(bytes).map_or_else(super::backtrack, |end_pos| {
+                    let content = &input[1..end_pos - 1];
+                    *input = &input[end_pos..];
+                    Ok(Value::Literal(Cow::Borrowed(content)))
+                })
+            }
             b'0'..=b'9' | b'+' | b'-' => parse_number_or_digit_string(input),
             _ => parse_variable_value(input),
         }
     } else {
         super::backtrack()
     }
-}
-
-#[inline]
-fn parse_single_value_cursor<'a>(cursor: &mut Cursor<'a>) -> PResult<'a, Value<'a>> {
-    let bytes = cursor.remaining_bytes();
-    if let Some(&first) = bytes.first() {
-        match first {
-            b'"' => parse_quoted_value_cursor(cursor),
-            b'{' => parse_braced_value_cursor(cursor),
-            b'0'..=b'9' | b'+' | b'-' => parse_number_or_digit_string_cursor(cursor),
-            _ => parse_variable_value_cursor(cursor),
-        }
-    } else {
-        super::backtrack()
-    }
-}
-
-/// Parse a quoted string value
-#[inline]
-fn parse_quoted_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
-    // Quick check using byte access
-    if input.as_bytes().first() != Some(&b'"') {
-        return super::backtrack();
-    }
-
-    // Use the lexer to parse the quoted string (it handles the quotes)
-    let s = lexer::quoted_string(input)?;
-    Ok(Value::Literal(Cow::Borrowed(s)))
-}
-
-#[inline]
-fn parse_quoted_value_cursor<'a>(cursor: &mut Cursor<'a>) -> PResult<'a, Value<'a>> {
-    let bytes = cursor.remaining_bytes();
-    if bytes.first() != Some(&b'"') {
-        return super::backtrack();
-    }
-
-    super::simd::find_balanced_quotes(bytes).map_or_else(super::backtrack, |end_pos| {
-        let content = &cursor.remaining()[1..end_pos - 1];
-        cursor.bump(end_pos);
-        Ok(Value::Literal(Cow::Borrowed(content)))
-    })
-}
-
-/// Parse a braced string value
-#[inline]
-fn parse_braced_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
-    // Quick check using byte access
-    let bytes = input.as_bytes();
-    if bytes.first() != Some(&b'{') {
-        return super::backtrack();
-    }
-
-    // Use SIMD-accelerated balanced brace finding
-    super::simd::find_balanced_braces(bytes).map_or_else(super::backtrack, |end_pos| {
-        // Extract content (skip opening and closing braces)
-        let content = &input[1..end_pos - 1];
-        *input = &input[end_pos..];
-        Ok(Value::Literal(Cow::Borrowed(content)))
-    })
-}
-
-#[inline]
-fn parse_braced_value_cursor<'a>(cursor: &mut Cursor<'a>) -> PResult<'a, Value<'a>> {
-    let bytes = cursor.remaining_bytes();
-    if bytes.first() != Some(&b'{') {
-        return super::backtrack();
-    }
-
-    super::simd::find_balanced_braces(bytes).map_or_else(super::backtrack, |end_pos| {
-        let content = &cursor.remaining()[1..end_pos - 1];
-        cursor.bump(end_pos);
-        Ok(Value::Literal(Cow::Borrowed(content)))
-    })
 }
 
 /// Parse either a number or a string that starts with digits
@@ -256,42 +165,6 @@ fn parse_number_or_digit_string<'a>(input: &mut &'a str) -> PResult<'a, Value<'a
 }
 
 #[inline]
-fn parse_number_or_digit_string_cursor<'a>(cursor: &mut Cursor<'a>) -> PResult<'a, Value<'a>> {
-    let bytes = cursor.remaining_bytes();
-    let Some(&first) = bytes.first() else {
-        return super::backtrack();
-    };
-
-    let len = super::simd::scan_identifier(bytes);
-    if len == 0 {
-        return super::backtrack();
-    }
-
-    let token = &cursor.remaining()[..len];
-    let token_bytes = token.as_bytes();
-
-    if first == b'+' || first == b'-' {
-        if token_bytes.len() <= 1 || !token_bytes[1..].iter().all(u8::is_ascii_digit) {
-            return super::backtrack();
-        }
-        let number = parse_i64_ascii(token)?;
-        cursor.bump(len);
-        return Ok(Value::Number(number));
-    }
-
-    if !first.is_ascii_digit() {
-        return super::backtrack();
-    }
-
-    cursor.bump(len);
-    if token_bytes.iter().all(u8::is_ascii_digit) {
-        Ok(Value::Number(parse_i64_ascii(token)?))
-    } else {
-        Ok(Value::Literal(Cow::Borrowed(token)))
-    }
-}
-
-#[inline]
 fn parse_i64_ascii(token: &str) -> PResult<'_, i64> {
     let bytes = token.as_bytes();
     let (negative, start) = match bytes.first() {
@@ -332,12 +205,6 @@ fn parse_i64_ascii(token: &str) -> PResult<'_, i64> {
 fn parse_variable_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
     // Parse as identifier - digit-starting values are handled by parse_number_or_digit_string
     let ident = lexer::identifier(input)?;
-    Ok(Value::Variable(Cow::Borrowed(ident)))
-}
-
-#[inline]
-fn parse_variable_value_cursor<'a>(cursor: &mut Cursor<'a>) -> PResult<'a, Value<'a>> {
-    let ident = cursor.take_identifier().ok_or_else(super::backtrack_err)?;
     Ok(Value::Variable(Cow::Borrowed(ident)))
 }
 
