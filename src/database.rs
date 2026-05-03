@@ -9,15 +9,6 @@ use std::path::Path;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
-#[inline]
-const fn to_ascii_lower(byte: u8) -> u8 {
-    if b'A' <= byte && byte <= b'Z' {
-        byte + (b'a' - b'A')
-    } else {
-        byte
-    }
-}
-
 /// Get month expansion for a given abbreviation (case-insensitive)
 ///
 /// Returns None if the name is not a recognized month abbreviation.
@@ -28,25 +19,23 @@ fn get_month_expansion(name: &str) -> Option<&'static str> {
         return None;
     }
 
-    let key = (
-        to_ascii_lower(bytes[0]),
-        to_ascii_lower(bytes[1]),
-        to_ascii_lower(bytes[2]),
-    );
+    let key = (u32::from(bytes[0] | 0x20) << 16)
+        | (u32::from(bytes[1] | 0x20) << 8)
+        | u32::from(bytes[2] | 0x20);
 
     match key {
-        (b'j', b'a', b'n') => Some("January"),
-        (b'f', b'e', b'b') => Some("February"),
-        (b'm', b'a', b'r') => Some("March"),
-        (b'a', b'p', b'r') => Some("April"),
-        (b'm', b'a', b'y') => Some("May"),
-        (b'j', b'u', b'n') => Some("June"),
-        (b'j', b'u', b'l') => Some("July"),
-        (b'a', b'u', b'g') => Some("August"),
-        (b's', b'e', b'p') => Some("September"),
-        (b'o', b'c', b't') => Some("October"),
-        (b'n', b'o', b'v') => Some("November"),
-        (b'd', b'e', b'c') => Some("December"),
+        0x6a_61_6e => Some("January"),
+        0x66_65_62 => Some("February"),
+        0x6d_61_72 => Some("March"),
+        0x61_70_72 => Some("April"),
+        0x6d_61_79 => Some("May"),
+        0x6a_75_6e => Some("June"),
+        0x6a_75_6c => Some("July"),
+        0x61_75_67 => Some("August"),
+        0x73_65_70 => Some("September"),
+        0x6f_63_74 => Some("October"),
+        0x6e_6f_76 => Some("November"),
+        0x64_65_63 => Some("December"),
         _ => None,
     }
 }
@@ -91,7 +80,7 @@ fn starts_with_at_keyword(input: &[u8], keyword: &[u8]) -> bool {
     }
 
     for (offset, &expected) in keyword.iter().enumerate() {
-        if to_ascii_lower(input[offset + 1]) != expected {
+        if (input[offset + 1] | 0x20) != expected {
             return false;
         }
     }
@@ -144,7 +133,8 @@ fn input_may_have_late_string_definition(input: &str) -> bool {
                 if saw_regular_entry {
                     return true;
                 }
-            } else if !starts_with_at_keyword(tail, b"preamble")
+            } else if !saw_regular_entry
+                && !starts_with_at_keyword(tail, b"preamble")
                 && !starts_with_at_keyword(tail, b"comment")
             {
                 // Anything else that looks like `@<identifier>` is treated as a regular entry.
@@ -169,23 +159,22 @@ pub struct ParseOptions {
 impl ParseOptions {
     /// Create new parse options
     #[must_use]
+    #[inline]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Set number of threads (None = use all available)
     #[must_use]
+    #[inline]
     pub fn threads(mut self, threads: impl Into<Option<usize>>) -> Self {
         self.threads = threads.into();
         self
     }
 
-    /// Parse a single input string (always sequential for optimal performance)
-    ///
-    /// Note: Single-file parallel parsing is disabled because it performs worse
-    /// than sequential parsing due to overhead. Use `parse_files()` for parallel processing.
+    /// Parse a single input string.
+    #[inline]
     pub fn parse<'a>(&self, input: &'a str) -> Result<Database<'a>> {
-        // Always use sequential parsing for single files - parallel is counterproductive
         Database::parse_sequential(input)
     }
 
@@ -421,13 +410,14 @@ impl<'a> Database<'a> {
     ///     .threads(4)
     ///     .parse_files(&["file1.bib", "file2.bib"]).unwrap();
     ///
-    /// // This is always sequential (threads ignored)
+    /// // Single-file parsing stays sequential
     /// let content = "@article{demo, title=\"Demo\"}";
     /// let db = Database::parser()
     ///     .threads(4)
     ///     .parse(content).unwrap();
     /// ```
     #[must_use]
+    #[inline]
     pub fn parser() -> ParseOptions {
         ParseOptions::new()
     }

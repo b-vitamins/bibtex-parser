@@ -38,9 +38,7 @@ pub fn parse_entry_at<'a>(input: &mut &'a str) -> PResult<'a, Entry<'a>> {
             *input = &input[1..];
             parse_entry_content(input)
         }
-        _ => Err(winnow::error::ErrMode::Backtrack(
-            winnow::error::ContextError::default(),
-        )),
+        _ => super::backtrack(),
     }
 }
 
@@ -69,11 +67,7 @@ fn parse_entry_content<'a>(input: &mut &'a str) -> PResult<'a, Entry<'a>> {
     let closing_delimiter = match input.as_bytes().first() {
         Some(b'{') => b'}',
         Some(b'(') => b')',
-        _ => {
-            return Err(winnow::error::ErrMode::Backtrack(
-                winnow::error::ContextError::default(),
-            ))
-        }
+        _ => return super::backtrack(),
     };
     *input = &input[1..];
 
@@ -156,9 +150,7 @@ fn expect_byte<'a>(input: &mut &'a str, byte: u8) -> PResult<'a, ()> {
             *input = &input[1..];
             Ok(())
         }
-        _ => Err(winnow::error::ErrMode::Backtrack(
-            winnow::error::ContextError::default(),
-        )),
+        _ => super::backtrack(),
     }
 }
 
@@ -206,11 +198,7 @@ fn parse_fields<'a>(input: &mut &'a str, closing_delimiter: u8) -> PResult<'a, V
                 *input = &input[1..];
             }
             Some(&b) if b == closing_delimiter => {}
-            _ => {
-                return Err(winnow::error::ErrMode::Backtrack(
-                    winnow::error::ContextError::default(),
-                ))
-            }
+            _ => return super::backtrack(),
         }
     }
 

@@ -15,9 +15,7 @@ pub fn identifier<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
     let len = super::simd::scan_identifier(bytes);
 
     if len == 0 {
-        return Err(winnow::error::ErrMode::Backtrack(
-            winnow::error::ContextError::default(),
-        ));
+        return super::backtrack();
     }
 
     let result = &input[..len];
@@ -72,9 +70,7 @@ pub fn balanced_braces<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
         }
     }
 
-    Err(winnow::error::ErrMode::Backtrack(
-        winnow::error::ContextError::default(),
-    ))
+    super::backtrack()
 }
 
 /// Parse a quoted string "..." with SIMD acceleration
@@ -83,19 +79,12 @@ pub fn quoted_string<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
     let bytes = input.as_bytes();
 
     // Use SIMD-accelerated quote scanning
-    super::simd::find_balanced_quotes(bytes).map_or_else(
-        || {
-            Err(winnow::error::ErrMode::Backtrack(
-                winnow::error::ContextError::default(),
-            ))
-        },
-        |end_pos| {
-            // Extract the content (without the quotes)
-            let result = &input[1..end_pos - 1];
-            *input = &input[end_pos..];
-            Ok(result)
-        },
-    )
+    super::simd::find_balanced_quotes(bytes).map_or_else(super::backtrack, |end_pos| {
+        // Extract the content (without the quotes)
+        let result = &input[1..end_pos - 1];
+        *input = &input[end_pos..];
+        Ok(result)
+    })
 }
 
 /// Parse a number (integer)
@@ -104,9 +93,7 @@ pub fn number<'a>(input: &mut &'a str) -> PResult<'a, i64> {
     let sign = opt(alt(('+', '-'))).parse_next(input)?;
     let digits = digit1.parse_next(input)?;
 
-    let mut num = digits
-        .parse::<i64>()
-        .map_err(|_| winnow::error::ErrMode::Backtrack(winnow::error::ContextError::default()))?;
+    let mut num = digits.parse::<i64>().map_err(|_| super::backtrack_err())?;
 
     if sign == Some('-') {
         num = -num;
@@ -151,9 +138,7 @@ pub fn balanced_parentheses<'a>(input: &mut &'a str) -> PResult<'a, &'a str> {
         }
     }
 
-    Err(winnow::error::ErrMode::Backtrack(
-        winnow::error::ContextError::default(),
-    ))
+    super::backtrack()
 }
 
 /// Fast whitespace skipping (optimal for short runs per profiling)

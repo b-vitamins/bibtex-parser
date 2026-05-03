@@ -125,6 +125,10 @@ pub fn find_balanced_parentheses(input: &[u8]) -> Option<usize> {
 
 #[inline]
 fn is_escaped_delimiter(input: &[u8], delimiter: usize) -> bool {
+    if delimiter == 0 || input[delimiter - 1] != b'\\' {
+        return false;
+    }
+
     let mut slash_count = 0usize;
     let mut pos = delimiter;
 

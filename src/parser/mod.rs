@@ -120,11 +120,16 @@ impl<'a> Cursor<'a> {
     }
 }
 
-#[inline]
-fn backtrack<'a, O>() -> PResult<'a, O> {
-    Err(winnow::error::ErrMode::Backtrack(
-        winnow::error::ContextError::default(),
-    ))
+#[cold]
+#[inline(never)]
+pub(crate) fn backtrack_err() -> winnow::error::ErrMode<winnow::error::ContextError> {
+    winnow::error::ErrMode::Backtrack(winnow::error::ContextError::default())
+}
+
+#[cold]
+#[inline(never)]
+pub(crate) fn backtrack<'a, O>() -> PResult<'a, O> {
+    Err(backtrack_err())
 }
 
 /// Parse a BibTeX file into raw items without expansion or processing
@@ -183,6 +188,7 @@ fn backtrack<'a, O>() -> PResult<'a, O> {
 /// }
 /// # Ok::<(), bibtex_parser::Error>(())
 /// ```
+#[inline]
 pub fn parse_bibtex(input: &str) -> Result<Vec<ParsedItem<'_>>> {
     let mut items = Vec::new();
     parse_bibtex_stream(input, |item| {
@@ -196,6 +202,7 @@ pub fn parse_bibtex(input: &str) -> Result<Vec<ParsedItem<'_>>> {
 ///
 /// This avoids allocating an intermediate `Vec<ParsedItem>` when the caller
 /// can process items incrementally.
+#[inline]
 pub(crate) fn parse_bibtex_stream<'a, F>(input: &'a str, mut on_item: F) -> Result<()>
 where
     F: FnMut(ParsedItem<'a>) -> Result<()>,
@@ -299,7 +306,7 @@ fn parse_item<'a>(cursor: &mut Cursor<'a>) -> PResult<'a, ParsedItem<'a>> {
     }
 
     let second = bytes.get(1).copied().unwrap_or_default();
-    match ascii_lower(second) {
+    match second | 0x20 {
         b's' if starts_with_keyword(bytes, b"string") => {
             parse_string(cursor).map(|(k, v)| ParsedItem::String(k, v))
         }
@@ -320,7 +327,7 @@ fn starts_with_keyword(input: &[u8], keyword: &[u8]) -> bool {
     }
 
     for (offset, &expected) in keyword.iter().enumerate() {
-        if ascii_lower(input[offset + 1]) != expected {
+        if (input[offset + 1] | 0x20) != expected {
             return false;
         }
     }
@@ -330,15 +337,6 @@ fn starts_with_keyword(input: &[u8], keyword: &[u8]) -> bool {
     }
 
     !is_identifier_char(input[keyword.len() + 1])
-}
-
-#[inline]
-const fn ascii_lower(byte: u8) -> u8 {
-    if b'A' <= byte && byte <= b'Z' {
-        byte + (b'a' - b'A')
-    } else {
-        byte
-    }
 }
 
 #[inline]

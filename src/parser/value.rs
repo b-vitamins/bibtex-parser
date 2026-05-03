@@ -136,9 +136,7 @@ fn parse_single_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
             _ => parse_variable_value(input),
         }
     } else {
-        Err(winnow::error::ErrMode::Backtrack(
-            winnow::error::ContextError::default(),
-        ))
+        super::backtrack()
     }
 }
 
@@ -153,9 +151,7 @@ fn parse_single_value_cursor<'a>(cursor: &mut Cursor<'a>) -> PResult<'a, Value<'
             _ => parse_variable_value_cursor(cursor),
         }
     } else {
-        Err(winnow::error::ErrMode::Backtrack(
-            winnow::error::ContextError::default(),
-        ))
+        super::backtrack()
     }
 }
 
@@ -164,9 +160,7 @@ fn parse_single_value_cursor<'a>(cursor: &mut Cursor<'a>) -> PResult<'a, Value<'
 fn parse_quoted_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
     // Quick check using byte access
     if input.as_bytes().first() != Some(&b'"') {
-        return Err(winnow::error::ErrMode::Backtrack(
-            winnow::error::ContextError::default(),
-        ));
+        return super::backtrack();
     }
 
     // Use the lexer to parse the quoted string (it handles the quotes)
@@ -178,23 +172,14 @@ fn parse_quoted_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
 fn parse_quoted_value_cursor<'a>(cursor: &mut Cursor<'a>) -> PResult<'a, Value<'a>> {
     let bytes = cursor.remaining_bytes();
     if bytes.first() != Some(&b'"') {
-        return Err(winnow::error::ErrMode::Backtrack(
-            winnow::error::ContextError::default(),
-        ));
+        return super::backtrack();
     }
 
-    super::simd::find_balanced_quotes(bytes).map_or_else(
-        || {
-            Err(winnow::error::ErrMode::Backtrack(
-                winnow::error::ContextError::default(),
-            ))
-        },
-        |end_pos| {
-            let content = &cursor.remaining()[1..end_pos - 1];
-            cursor.bump(end_pos);
-            Ok(Value::Literal(Cow::Borrowed(content)))
-        },
-    )
+    super::simd::find_balanced_quotes(bytes).map_or_else(super::backtrack, |end_pos| {
+        let content = &cursor.remaining()[1..end_pos - 1];
+        cursor.bump(end_pos);
+        Ok(Value::Literal(Cow::Borrowed(content)))
+    })
 }
 
 /// Parse a braced string value
@@ -203,48 +188,30 @@ fn parse_braced_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
     // Quick check using byte access
     let bytes = input.as_bytes();
     if bytes.first() != Some(&b'{') {
-        return Err(winnow::error::ErrMode::Backtrack(
-            winnow::error::ContextError::default(),
-        ));
+        return super::backtrack();
     }
 
     // Use SIMD-accelerated balanced brace finding
-    super::simd::find_balanced_braces(bytes).map_or_else(
-        || {
-            Err(winnow::error::ErrMode::Backtrack(
-                winnow::error::ContextError::default(),
-            ))
-        },
-        |end_pos| {
-            // Extract content (skip opening and closing braces)
-            let content = &input[1..end_pos - 1];
-            *input = &input[end_pos..];
-            Ok(Value::Literal(Cow::Borrowed(content)))
-        },
-    )
+    super::simd::find_balanced_braces(bytes).map_or_else(super::backtrack, |end_pos| {
+        // Extract content (skip opening and closing braces)
+        let content = &input[1..end_pos - 1];
+        *input = &input[end_pos..];
+        Ok(Value::Literal(Cow::Borrowed(content)))
+    })
 }
 
 #[inline]
 fn parse_braced_value_cursor<'a>(cursor: &mut Cursor<'a>) -> PResult<'a, Value<'a>> {
     let bytes = cursor.remaining_bytes();
     if bytes.first() != Some(&b'{') {
-        return Err(winnow::error::ErrMode::Backtrack(
-            winnow::error::ContextError::default(),
-        ));
+        return super::backtrack();
     }
 
-    super::simd::find_balanced_braces(bytes).map_or_else(
-        || {
-            Err(winnow::error::ErrMode::Backtrack(
-                winnow::error::ContextError::default(),
-            ))
-        },
-        |end_pos| {
-            let content = &cursor.remaining()[1..end_pos - 1];
-            cursor.bump(end_pos);
-            Ok(Value::Literal(Cow::Borrowed(content)))
-        },
-    )
+    super::simd::find_balanced_braces(bytes).map_or_else(super::backtrack, |end_pos| {
+        let content = &cursor.remaining()[1..end_pos - 1];
+        cursor.bump(end_pos);
+        Ok(Value::Literal(Cow::Borrowed(content)))
+    })
 }
 
 /// Parse either a number or a string that starts with digits
@@ -253,16 +220,12 @@ fn parse_braced_value_cursor<'a>(cursor: &mut Cursor<'a>) -> PResult<'a, Value<'
 fn parse_number_or_digit_string<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
     let bytes = input.as_bytes();
     let Some(&first) = bytes.first() else {
-        return Err(winnow::error::ErrMode::Backtrack(
-            winnow::error::ContextError::default(),
-        ));
+        return super::backtrack();
     };
 
     let len = super::simd::scan_identifier(bytes);
     if len == 0 {
-        return Err(winnow::error::ErrMode::Backtrack(
-            winnow::error::ContextError::default(),
-        ));
+        return super::backtrack();
     }
 
     let token = &input[..len];
@@ -272,9 +235,7 @@ fn parse_number_or_digit_string<'a>(input: &mut &'a str) -> PResult<'a, Value<'a
     // Non-digit suffixes after a sign are rejected for compatibility.
     if first == b'+' || first == b'-' {
         if token_bytes.len() <= 1 || !token_bytes[1..].iter().all(u8::is_ascii_digit) {
-            return Err(winnow::error::ErrMode::Backtrack(
-                winnow::error::ContextError::default(),
-            ));
+            return super::backtrack();
         }
         let num = parse_i64_ascii(token)?;
         *input = &input[len..];
@@ -284,9 +245,7 @@ fn parse_number_or_digit_string<'a>(input: &mut &'a str) -> PResult<'a, Value<'a
     // Digit-starting tokens parse as numbers when fully numeric,
     // otherwise as literals (e.g. 2024a).
     if !first.is_ascii_digit() {
-        return Err(winnow::error::ErrMode::Backtrack(
-            winnow::error::ContextError::default(),
-        ));
+        return super::backtrack();
     }
 
     *input = &input[len..];
@@ -302,16 +261,12 @@ fn parse_number_or_digit_string<'a>(input: &mut &'a str) -> PResult<'a, Value<'a
 fn parse_number_or_digit_string_cursor<'a>(cursor: &mut Cursor<'a>) -> PResult<'a, Value<'a>> {
     let bytes = cursor.remaining_bytes();
     let Some(&first) = bytes.first() else {
-        return Err(winnow::error::ErrMode::Backtrack(
-            winnow::error::ContextError::default(),
-        ));
+        return super::backtrack();
     };
 
     let len = super::simd::scan_identifier(bytes);
     if len == 0 {
-        return Err(winnow::error::ErrMode::Backtrack(
-            winnow::error::ContextError::default(),
-        ));
+        return super::backtrack();
     }
 
     let token = &cursor.remaining()[..len];
@@ -319,9 +274,7 @@ fn parse_number_or_digit_string_cursor<'a>(cursor: &mut Cursor<'a>) -> PResult<'
 
     if first == b'+' || first == b'-' {
         if token_bytes.len() <= 1 || !token_bytes[1..].iter().all(u8::is_ascii_digit) {
-            return Err(winnow::error::ErrMode::Backtrack(
-                winnow::error::ContextError::default(),
-            ));
+            return super::backtrack();
         }
         let number = parse_i64_ascii(token)?;
         cursor.bump(len);
@@ -329,9 +282,7 @@ fn parse_number_or_digit_string_cursor<'a>(cursor: &mut Cursor<'a>) -> PResult<'
     }
 
     if !first.is_ascii_digit() {
-        return Err(winnow::error::ErrMode::Backtrack(
-            winnow::error::ContextError::default(),
-        ));
+        return super::backtrack();
     }
 
     cursor.bump(len);
@@ -352,17 +303,13 @@ fn parse_i64_ascii(token: &str) -> PResult<'_, i64> {
     };
 
     if start >= bytes.len() {
-        return Err(winnow::error::ErrMode::Backtrack(
-            winnow::error::ContextError::default(),
-        ));
+        return super::backtrack();
     }
 
     let mut value: i64 = 0;
     for &byte in &bytes[start..] {
         if !byte.is_ascii_digit() {
-            return Err(winnow::error::ErrMode::Backtrack(
-                winnow::error::ContextError::default(),
-            ));
+            return super::backtrack();
         }
 
         let digit = i64::from(byte - b'0');
@@ -370,16 +317,12 @@ fn parse_i64_ascii(token: &str) -> PResult<'_, i64> {
             value
                 .checked_mul(10)
                 .and_then(|v| v.checked_sub(digit))
-                .ok_or_else(|| {
-                    winnow::error::ErrMode::Backtrack(winnow::error::ContextError::default())
-                })?
+                .ok_or_else(super::backtrack_err)?
         } else {
             value
                 .checked_mul(10)
                 .and_then(|v| v.checked_add(digit))
-                .ok_or_else(|| {
-                    winnow::error::ErrMode::Backtrack(winnow::error::ContextError::default())
-                })?
+                .ok_or_else(super::backtrack_err)?
         };
     }
 
@@ -396,9 +339,7 @@ fn parse_variable_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
 
 #[inline]
 fn parse_variable_value_cursor<'a>(cursor: &mut Cursor<'a>) -> PResult<'a, Value<'a>> {
-    let ident = cursor
-        .take_identifier()
-        .ok_or_else(|| winnow::error::ErrMode::Backtrack(winnow::error::ContextError::default()))?;
+    let ident = cursor.take_identifier().ok_or_else(super::backtrack_err)?;
     Ok(Value::Variable(Cow::Borrowed(ident)))
 }
 

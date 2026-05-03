@@ -33,9 +33,7 @@ pub fn tag_no_case<'a>(
     move |input: &mut &'a str| {
         let tag_len = tag.len();
         if input.len() < tag_len {
-            return Err(winnow::error::ErrMode::Backtrack(
-                winnow::error::ContextError::default(),
-            ));
+            return super::backtrack();
         }
 
         let input_start = &input[..tag_len];
@@ -44,9 +42,7 @@ pub fn tag_no_case<'a>(
             *input = &input[tag_len..];
             Ok(result)
         } else {
-            Err(winnow::error::ErrMode::Backtrack(
-                winnow::error::ContextError::default(),
-            ))
+            super::backtrack()
         }
     }
 }
@@ -60,9 +56,7 @@ pub fn balanced_delimited<'a>(
 ) -> impl Parser<&'a str, &'a str, winnow::error::ContextError> {
     move |input: &mut &'a str| {
         if !input.starts_with(open) {
-            return Err(winnow::error::ErrMode::Backtrack(
-                winnow::error::ContextError::default(),
-            ));
+            return super::backtrack();
         }
 
         let mut depth = 0;
@@ -92,9 +86,7 @@ pub fn balanced_delimited<'a>(
             *input = &input[pos..];
             Ok(result)
         } else {
-            Err(winnow::error::ErrMode::Backtrack(
-                winnow::error::ContextError::default(),
-            ))
+            super::backtrack()
         }
     }
 }
