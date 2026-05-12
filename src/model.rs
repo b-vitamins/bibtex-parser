@@ -1150,6 +1150,53 @@ impl Value<'_> {
         }
     }
 
+    /// Project this value to ordinary text without adding unresolved-variable markers.
+    ///
+    /// Literals and numbers become their text form, variables become their
+    /// variable name, and concatenations are joined recursively. This allocates
+    /// when the value is not already a simple borrowed literal.
+    #[must_use]
+    pub fn to_plain_string(&self) -> String {
+        value_to_plain_string(self)
+    }
+
+    /// Project this value to display text, marking unresolved variables as `{name}`.
+    #[must_use]
+    pub fn to_lossy_string(&self) -> String {
+        value_to_lossy_string(self)
+    }
+
+    /// Create a literal value from ordinary text.
+    #[must_use]
+    pub fn from_plain_string<'a>(text: impl Into<Cow<'a, str>>) -> Value<'a> {
+        Value::Literal(text.into())
+    }
+
+    /// Serialize this value as a BibTeX value fragment.
+    ///
+    /// This is a normalized source projection. Use source-preserving parsing
+    /// when callers need the exact original spelling or delimiters.
+    #[must_use]
+    pub fn to_bibtex_source(&self) -> String {
+        match self {
+            Self::Literal(text) => format!("{{{text}}}"),
+            Self::Number(number) => number.to_string(),
+            Self::Variable(name) => name.to_string(),
+            Self::Concat(parts) => parts
+                .iter()
+                .map(Self::to_bibtex_source)
+                .collect::<Vec<_>>()
+                .join(" # "),
+        }
+    }
+
+    /// Project this value to ordinary text and convert common LaTeX sequences to Unicode.
+    #[cfg(feature = "latex_to_unicode")]
+    #[must_use]
+    pub fn to_unicode_plain_string(&self) -> String {
+        crate::latex_unicode::latex_to_unicode(&self.to_plain_string())
+    }
+
     /// Convert to owned version
     #[must_use]
     pub fn into_owned(self) -> Value<'static> {
@@ -1194,6 +1241,15 @@ fn value_to_lossy_string(value: &Value<'_>) -> String {
         Value::Number(n) => n.to_string(),
         Value::Variable(v) => format!("{{{v}}}"),
         Value::Concat(parts) => parts.iter().map(value_to_lossy_string).collect(),
+    }
+}
+
+fn value_to_plain_string(value: &Value<'_>) -> String {
+    match value {
+        Value::Literal(text) => text.to_string(),
+        Value::Number(number) => number.to_string(),
+        Value::Variable(name) => name.to_string(),
+        Value::Concat(parts) => parts.iter().map(value_to_plain_string).collect(),
     }
 }
 

@@ -320,8 +320,14 @@ fn line_prefix_is_whitespace(bytes: &[u8], pos: usize) -> bool {
 pub struct Parser {
     threads: Option<usize>,
     tolerant: bool,
+    document: DocumentOptions,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct DocumentOptions {
     capture_source: bool,
     preserve_raw: bool,
+    expand_values: bool,
 }
 
 impl Parser {
@@ -352,7 +358,7 @@ impl Parser {
     #[must_use]
     #[inline]
     pub const fn capture_source(mut self) -> Self {
-        self.capture_source = true;
+        self.document.capture_source = true;
         self
     }
 
@@ -360,7 +366,15 @@ impl Parser {
     #[must_use]
     #[inline]
     pub const fn preserve_raw(mut self) -> Self {
-        self.preserve_raw = true;
+        self.document.preserve_raw = true;
+        self
+    }
+
+    /// Populate expanded value text in parsed-document output.
+    #[must_use]
+    #[inline]
+    pub const fn expand_values(mut self) -> Self {
+        self.document.expand_values = true;
         self
     }
 
@@ -368,8 +382,8 @@ impl Parser {
     #[inline]
     pub fn parse<'a>(&self, input: &'a str) -> Result<Library<'a>> {
         if self.tolerant {
-            Library::parse_tolerant(input, self.capture_source)
-        } else if self.capture_source {
+            Library::parse_tolerant(input, self.document.capture_source)
+        } else if self.document.capture_source {
             Library::parse_with_spans(input)
         } else {
             Library::parse_sequential(input)
@@ -424,21 +438,38 @@ impl Parser {
                 }
             }
         };
-        let library = Library::from_raw_items(raw_items.clone())?;
+        let library = match Library::from_raw_items(raw_items.clone()) {
+            Ok(library) => library,
+            Err(Error::UndefinedVariable(_) | Error::CircularReference(_))
+                if !self.document.expand_values =>
+            {
+                Library::from_raw_items_unexpanded(raw_items.clone())
+            }
+            Err(error) => return Err(error),
+        };
         let mut document =
             ParsedDocument::from_library_with_source_map(library, sources, Some(&source_map));
         let mut entry_index = 0;
         for raw_item in &raw_items {
             if let RawBuildItem::Parsed(crate::parser::ParsedItem::Entry(_), _, raw) = raw_item {
-                document.apply_entry_locations(entry_index, raw, &source_map, self.preserve_raw);
+                document.apply_entry_locations(
+                    entry_index,
+                    raw,
+                    &source_map,
+                    self.document.preserve_raw,
+                );
                 entry_index += 1;
             }
         }
-        if self.preserve_raw {
+        document.apply_parsed_values(&raw_items);
+        if self.document.preserve_raw {
             document.apply_raw_items(&raw_items);
         }
         if self.tolerant {
-            document.recover_partial_entries(&source_map, self.preserve_raw);
+            document.recover_partial_entries(&source_map, self.document.preserve_raw);
+        }
+        if self.document.expand_values {
+            document.populate_expanded_values(crate::ExpansionOptions::default())?;
         }
         Ok(document)
     }
@@ -1248,6 +1279,30 @@ impl<'a> Library<'a> {
         }
 
         Ok(library)
+    }
+
+    fn from_raw_items_unexpanded(raw_items: Vec<RawBuildItem<'a>>) -> Self {
+        let mut library = Self::new();
+
+        for raw_item in raw_items {
+            match raw_item {
+                RawBuildItem::Parsed(crate::parser::ParsedItem::Entry(entry), span, _) => {
+                    library.push_entry_with_source(entry, Some(span));
+                }
+                RawBuildItem::Parsed(crate::parser::ParsedItem::String(name, value), span, _) => {
+                    library.push_string_with_source(Cow::Borrowed(name), value, Some(span));
+                }
+                RawBuildItem::Parsed(crate::parser::ParsedItem::Preamble(value), span, _) => {
+                    library.push_preamble_with_source(value, Some(span));
+                }
+                RawBuildItem::Parsed(crate::parser::ParsedItem::Comment(text), span, _) => {
+                    library.push_comment_with_source(Cow::Borrowed(text), Some(span));
+                }
+                RawBuildItem::Failed(failed) => library.push_failed_block(failed),
+            }
+        }
+
+        library
     }
 
     /// Merge another library into this one

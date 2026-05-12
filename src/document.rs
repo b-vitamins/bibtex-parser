@@ -248,6 +248,38 @@ pub enum ValueDelimiter {
     Concatenation,
 }
 
+/// Policy for variables that cannot be resolved during value expansion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnresolvedVariablePolicy {
+    /// Keep the variable name as ordinary text.
+    Preserve,
+    /// Render unresolved variables as `{undefined:name}`.
+    Placeholder,
+    /// Return an error for the first unresolved variable.
+    Error,
+}
+
+/// Options for expanding parsed values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExpansionOptions {
+    /// Expand user `@string` definitions.
+    pub expand_strings: bool,
+    /// Expand standard three-letter BibTeX month variables.
+    pub expand_months: bool,
+    /// Behavior when a variable cannot be resolved.
+    pub unresolved_variables: UnresolvedVariablePolicy,
+}
+
+impl Default for ExpansionOptions {
+    fn default() -> Self {
+        Self {
+            expand_strings: true,
+            expand_months: true,
+            unresolved_variables: UnresolvedVariablePolicy::Error,
+        }
+    }
+}
+
 /// Parsed BibTeX value plus optional source-preserving metadata.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedValue<'a> {
@@ -280,6 +312,43 @@ impl<'a> ParsedValue<'a> {
     #[must_use]
     pub fn into_value(self) -> Value<'a> {
         self.value
+    }
+
+    /// Return the structured parsed value.
+    #[must_use]
+    pub const fn parsed(&self) -> &Value<'a> {
+        &self.value
+    }
+
+    /// Return exact raw value text when raw preservation was requested.
+    #[must_use]
+    pub fn raw_text(&self) -> Option<&str> {
+        self.raw.as_deref()
+    }
+
+    /// Return requested expanded text when the parser populated it.
+    #[must_use]
+    pub fn expanded_text(&self) -> Option<&str> {
+        self.expanded.as_deref()
+    }
+
+    /// Return an ordinary text projection of the parsed value.
+    #[must_use]
+    pub fn plain_text(&self) -> String {
+        self.value.to_plain_string()
+    }
+
+    /// Return a display-oriented projection of the parsed value.
+    #[must_use]
+    pub fn lossy_text(&self) -> String {
+        self.value.to_lossy_string()
+    }
+
+    /// Return a Unicode-normalized plain-text projection.
+    #[cfg(feature = "latex_to_unicode")]
+    #[must_use]
+    pub fn unicode_plain_text(&self) -> String {
+        self.value.to_unicode_plain_string()
     }
 }
 
@@ -687,6 +756,68 @@ impl<'a> ParsedDocument<'a> {
         }
     }
 
+    pub(crate) fn apply_parsed_values(&mut self, raw_items: &[RawBuildItem<'a>]) {
+        let mut entry_index = 0;
+        let mut string_index = 0;
+        let mut preamble_index = 0;
+
+        for raw_item in raw_items {
+            match raw_item {
+                RawBuildItem::Parsed(crate::parser::ParsedItem::Entry(raw_entry), _, _) => {
+                    if let Some(entry) = self.entries.get_mut(entry_index) {
+                        for (field, raw_field) in entry.fields.iter_mut().zip(&raw_entry.fields) {
+                            field.value.value = raw_field.value.clone();
+                            field.value.expanded = None;
+                        }
+                    }
+                    entry_index += 1;
+                }
+                RawBuildItem::Parsed(crate::parser::ParsedItem::String(_, value), _, _) => {
+                    if let Some(parsed) = self.strings.get_mut(string_index) {
+                        parsed.value.value = value.clone();
+                        parsed.value.expanded = None;
+                    }
+                    string_index += 1;
+                }
+                RawBuildItem::Parsed(crate::parser::ParsedItem::Preamble(value), _, _) => {
+                    if let Some(parsed) = self.preambles.get_mut(preamble_index) {
+                        parsed.value.value = value.clone();
+                        parsed.value.expanded = None;
+                    }
+                    preamble_index += 1;
+                }
+                RawBuildItem::Parsed(crate::parser::ParsedItem::Comment(_), _, _)
+                | RawBuildItem::Failed(_) => {}
+            }
+        }
+    }
+
+    pub(crate) fn populate_expanded_values(
+        &mut self,
+        options: ExpansionOptions,
+    ) -> crate::Result<()> {
+        let strings = &self.strings;
+        for entry in &mut self.entries {
+            for field in &mut entry.fields {
+                field.value.expanded = Some(Cow::Owned(expand_value_with_options(
+                    &field.value.value,
+                    strings,
+                    options,
+                    &mut Vec::new(),
+                )?));
+            }
+        }
+        for preamble in &mut self.preambles {
+            preamble.value.expanded = Some(Cow::Owned(expand_value_with_options(
+                &preamble.value.value,
+                strings,
+                options,
+                &mut Vec::new(),
+            )?));
+        }
+        Ok(())
+    }
+
     pub(crate) fn recover_partial_entries(
         &mut self,
         source_map: &SourceMap<'a>,
@@ -907,6 +1038,96 @@ impl<'a> ParsedDocument<'a> {
                 .filter(|entry| entry.status == ParsedEntryStatus::Partial)
                 .count(),
         }
+    }
+
+    /// Expand a parsed value using this document's string definitions.
+    ///
+    /// This allocates the expanded text. The structured value itself remains
+    /// unchanged, and unresolved-variable behavior follows `options`.
+    pub fn expand_value(
+        &self,
+        value: &Value<'a>,
+        options: ExpansionOptions,
+    ) -> crate::Result<String> {
+        expand_value_with_options(value, &self.strings, options, &mut Vec::new())
+    }
+}
+
+fn expand_value_with_options(
+    value: &Value<'_>,
+    strings: &[ParsedString<'_>],
+    options: ExpansionOptions,
+    stack: &mut Vec<String>,
+) -> crate::Result<String> {
+    match value {
+        Value::Literal(text) => Ok(text.to_string()),
+        Value::Number(number) => Ok(number.to_string()),
+        Value::Concat(parts) => {
+            let mut expanded = String::new();
+            for part in parts {
+                expanded.push_str(&expand_value_with_options(part, strings, options, stack)?);
+            }
+            Ok(expanded)
+        }
+        Value::Variable(name) => expand_variable(name, strings, options, stack),
+    }
+}
+
+fn expand_variable(
+    name: &str,
+    strings: &[ParsedString<'_>],
+    options: ExpansionOptions,
+    stack: &mut Vec<String>,
+) -> crate::Result<String> {
+    if options.expand_strings {
+        if let Some(definition) = strings
+            .iter()
+            .rev()
+            .find(|definition| definition.name.as_ref() == name)
+        {
+            if stack.iter().any(|active| active == name) {
+                return Err(crate::Error::CircularReference(name.to_string()));
+            }
+            stack.push(name.to_string());
+            let expanded =
+                expand_value_with_options(&definition.value.value, strings, options, stack);
+            stack.pop();
+            return expanded;
+        }
+    }
+
+    if options.expand_months {
+        if let Some(month) = month_expansion(name) {
+            return Ok(month.to_string());
+        }
+    }
+
+    match options.unresolved_variables {
+        UnresolvedVariablePolicy::Preserve => Ok(name.to_string()),
+        UnresolvedVariablePolicy::Placeholder => Ok(format!("{{undefined:{name}}}")),
+        UnresolvedVariablePolicy::Error => Err(crate::Error::UndefinedVariable(name.to_string())),
+    }
+}
+
+fn month_expansion(name: &str) -> Option<&'static str> {
+    if name.len() != 3 {
+        return None;
+    }
+
+    match name.to_ascii_lowercase().as_str() {
+        "jan" => Some("January"),
+        "feb" => Some("February"),
+        "mar" => Some("March"),
+        "apr" => Some("April"),
+        "may" => Some("May"),
+        "jun" => Some("June"),
+        "jul" => Some("July"),
+        "aug" => Some("August"),
+        "sep" => Some("September"),
+        "oct" => Some("October"),
+        "nov" => Some("November"),
+        "dec" => Some("December"),
+        _ => None,
     }
 }
 
