@@ -321,6 +321,7 @@ pub struct Parser {
     threads: Option<usize>,
     tolerant: bool,
     capture_source: bool,
+    preserve_raw: bool,
 }
 
 impl Parser {
@@ -352,6 +353,14 @@ impl Parser {
     #[inline]
     pub const fn capture_source(mut self) -> Self {
         self.capture_source = true;
+        self
+    }
+
+    /// Preserve exact raw source text in parsed-document output.
+    #[must_use]
+    #[inline]
+    pub const fn preserve_raw(mut self) -> Self {
+        self.preserve_raw = true;
         self
     }
 
@@ -421,12 +430,15 @@ impl Parser {
         let mut entry_index = 0;
         for raw_item in &raw_items {
             if let RawBuildItem::Parsed(crate::parser::ParsedItem::Entry(_), _, raw) = raw_item {
-                document.apply_entry_locations(entry_index, raw, &source_map);
+                document.apply_entry_locations(entry_index, raw, &source_map, self.preserve_raw);
                 entry_index += 1;
             }
         }
+        if self.preserve_raw {
+            document.apply_raw_items(&raw_items);
+        }
         if self.tolerant {
-            document.recover_partial_entries(&source_map);
+            document.recover_partial_entries(&source_map, self.preserve_raw);
         }
         Ok(document)
     }

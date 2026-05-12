@@ -143,9 +143,10 @@ pub use database::{
     ValidationReport,
 };
 pub use document::{
-    Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticTarget, ParseStatus, ParseSummary,
-    ParsedBlock, ParsedComment, ParsedDocument, ParsedEntry, ParsedEntryStatus, ParsedFailedBlock,
-    ParsedField, ParsedPreamble, ParsedSource, ParsedString, ParsedValue,
+    Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticTarget, EntryDelimiter, ParseStatus,
+    ParseSummary, ParsedBlock, ParsedComment, ParsedDocument, ParsedEntry, ParsedEntryStatus,
+    ParsedFailedBlock, ParsedField, ParsedPreamble, ParsedSource, ParsedString, ParsedValue,
+    ValueDelimiter,
 };
 pub use error::{Error, Result, SourceId, SourceSpan};
 pub use model::{
@@ -160,13 +161,14 @@ pub use writer::{to_file, to_string, Writer, WriterConfig};
 pub mod prelude {
     pub use crate::{
         normalize_doi, parse_bibtex, parse_names, Block, Comment, Diagnostic, DiagnosticCode,
-        DiagnosticSeverity, DiagnosticTarget, Entry, EntryType, Error, FailedBlock, Field,
-        FieldNameCase, FieldNormalizeOptions, IssueSummary, Library, LibraryBuilder, LibraryStats,
-        MonthStyle, ParseStatus, ParseSummary, ParsedBlock, ParsedComment, ParsedDocument,
-        ParsedEntry, ParsedEntryStatus, ParsedFailedBlock, ParsedField, ParsedItem, ParsedPreamble,
-        ParsedSource, ParsedString, ParsedValue, Parser, PersonName, Preamble, Result, SortOptions,
-        SourceId, SourceMap, SourceSpan, StringDefinition, ValidationError, ValidationLevel,
-        ValidationReport, ValidationSeverity, Value, Writer, WriterConfig,
+        DiagnosticSeverity, DiagnosticTarget, Entry, EntryDelimiter, EntryType, Error, FailedBlock,
+        Field, FieldNameCase, FieldNormalizeOptions, IssueSummary, Library, LibraryBuilder,
+        LibraryStats, MonthStyle, ParseStatus, ParseSummary, ParsedBlock, ParsedComment,
+        ParsedDocument, ParsedEntry, ParsedEntryStatus, ParsedFailedBlock, ParsedField, ParsedItem,
+        ParsedPreamble, ParsedSource, ParsedString, ParsedValue, Parser, PersonName, Preamble,
+        Result, SortOptions, SourceId, SourceMap, SourceSpan, StringDefinition, ValidationError,
+        ValidationLevel, ValidationReport, ValidationSeverity, Value, ValueDelimiter, Writer,
+        WriterConfig,
     };
 }
 

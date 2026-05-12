@@ -6,6 +6,7 @@
 //! or partial parse results.
 
 use crate::database::BlockKind;
+use crate::database::RawBuildItem;
 use crate::{
     Comment, Entry, EntryType, FailedBlock, Field, Library, Preamble, SourceId, SourceMap,
     SourceSpan, StringDefinition, Value,
@@ -225,6 +226,28 @@ pub enum ParsedEntryStatus {
     Partial,
 }
 
+/// Delimiter used by a BibTeX entry body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryDelimiter {
+    /// Entry used `{ ... }`.
+    Braces,
+    /// Entry used `( ... )`.
+    Parentheses,
+}
+
+/// Delimiter or source shape used by a BibTeX value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueDelimiter {
+    /// Value used `{ ... }`.
+    Braces,
+    /// Value used `" ... "`.
+    Quotes,
+    /// Value was a bare number or identifier.
+    Bare,
+    /// Value used one or more `#` concatenation separators.
+    Concatenation,
+}
+
 /// Parsed BibTeX value plus optional source-preserving metadata.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedValue<'a> {
@@ -236,6 +259,8 @@ pub struct ParsedValue<'a> {
     pub source: Option<SourceSpan>,
     /// Expanded text projection, when a parser mode computes it separately.
     pub expanded: Option<Cow<'a, str>>,
+    /// Original value delimiter or source shape, when retained.
+    pub delimiter: Option<ValueDelimiter>,
 }
 
 impl<'a> ParsedValue<'a> {
@@ -247,6 +272,7 @@ impl<'a> ParsedValue<'a> {
             raw: None,
             source: None,
             expanded: None,
+            delimiter: None,
         }
     }
 
@@ -315,6 +341,8 @@ pub struct ParsedEntry<'a> {
     pub entry_type_source: Option<SourceSpan>,
     /// Source location for the citation key token, when available.
     pub key_source: Option<SourceSpan>,
+    /// Entry body delimiter, when retained.
+    pub delimiter: Option<EntryDelimiter>,
     /// Exact raw entry text, when retained by the parser mode.
     pub raw: Option<Cow<'a, str>>,
     /// Diagnostics attached to this entry.
@@ -337,6 +365,7 @@ impl<'a> ParsedEntry<'a> {
             source,
             entry_type_source: None,
             key_source: None,
+            delimiter: None,
             raw: None,
             diagnostics: Vec::new(),
         }
@@ -579,8 +608,9 @@ impl<'a> ParsedDocument<'a> {
     pub(crate) fn apply_entry_locations(
         &mut self,
         entry_index: usize,
-        raw: &str,
-        source_map: &SourceMap<'_>,
+        raw: &'a str,
+        source_map: &SourceMap<'a>,
+        preserve_raw: bool,
     ) {
         let Some(entry) = self.entries.get_mut(entry_index) else {
             return;
@@ -595,16 +625,73 @@ impl<'a> ParsedDocument<'a> {
         entry.entry_type_source =
             Some(source_map.span(locations.entry_type.0, locations.entry_type.1));
         entry.key_source = Some(source_map.span(locations.key.0, locations.key.1));
+        entry.delimiter = Some(locations.delimiter);
+        if preserve_raw {
+            entry.raw = Some(Cow::Borrowed(raw));
+        }
 
         for (field, location) in entry.fields.iter_mut().zip(locations.fields) {
             field.source = Some(source_map.span(location.whole.0, location.whole.1));
             field.name_source = Some(source_map.span(location.name.0, location.name.1));
             field.value.source = Some(source_map.span(location.value.0, location.value.1));
             field.value_source = field.value.source;
+            field.value.delimiter = Some(location.value_delimiter);
+
+            if preserve_raw {
+                if let Some(source) = field.source.and_then(|span| source_map.slice(span)) {
+                    field.raw = Some(Cow::Borrowed(source));
+                }
+                if let Some(source) = field.value_source.and_then(|span| source_map.slice(span)) {
+                    field.value.raw = Some(Cow::Borrowed(source));
+                }
+            }
         }
     }
 
-    pub(crate) fn recover_partial_entries(&mut self, source_map: &SourceMap<'a>) {
+    pub(crate) fn apply_raw_items(&mut self, raw_items: &[RawBuildItem<'a>]) {
+        let mut string_index = 0;
+        let mut preamble_index = 0;
+        let mut comment_index = 0;
+
+        for raw_item in raw_items {
+            match raw_item {
+                RawBuildItem::Parsed(crate::parser::ParsedItem::String(_, _), _, raw) => {
+                    if let Some(parsed) = self.strings.get_mut(string_index) {
+                        parsed.raw = Some(Cow::Borrowed(raw));
+                        if let Some(value_raw) = locate_definition_value(raw) {
+                            parsed.value.raw = Some(Cow::Borrowed(value_raw));
+                            parsed.value.delimiter = Some(value_delimiter(value_raw));
+                        }
+                    }
+                    string_index += 1;
+                }
+                RawBuildItem::Parsed(crate::parser::ParsedItem::Preamble(_), _, raw) => {
+                    if let Some(parsed) = self.preambles.get_mut(preamble_index) {
+                        parsed.raw = Some(Cow::Borrowed(raw));
+                        if let Some(value_raw) = locate_preamble_value(raw) {
+                            parsed.value.raw = Some(Cow::Borrowed(value_raw));
+                            parsed.value.delimiter = Some(value_delimiter(value_raw));
+                        }
+                    }
+                    preamble_index += 1;
+                }
+                RawBuildItem::Parsed(crate::parser::ParsedItem::Comment(_), _, raw) => {
+                    if let Some(parsed) = self.comments.get_mut(comment_index) {
+                        parsed.raw = Some(Cow::Borrowed(raw));
+                    }
+                    comment_index += 1;
+                }
+                RawBuildItem::Parsed(crate::parser::ParsedItem::Entry(_), _, _)
+                | RawBuildItem::Failed(_) => {}
+            }
+        }
+    }
+
+    pub(crate) fn recover_partial_entries(
+        &mut self,
+        source_map: &SourceMap<'a>,
+        preserve_raw: bool,
+    ) {
         let old_entries = std::mem::take(&mut self.entries);
         let old_failed_blocks = std::mem::take(&mut self.failed_blocks);
         let old_blocks = std::mem::take(&mut self.blocks);
@@ -626,7 +713,9 @@ impl<'a> ParsedDocument<'a> {
                         continue;
                     };
                     let new_index = new_entries.len();
-                    if let Some(partial) = recover_partial_entry(failed, source_map, new_index) {
+                    if let Some(partial) =
+                        recover_partial_entry(failed, source_map, new_index, preserve_raw)
+                    {
                         new_entries.push(partial);
                         new_blocks.push(ParsedBlock::Entry(new_index));
                     } else {
@@ -825,6 +914,7 @@ impl<'a> ParsedDocument<'a> {
 struct EntryLocations {
     entry_type: (usize, usize),
     key: (usize, usize),
+    delimiter: EntryDelimiter,
     fields: Vec<FieldLocations>,
 }
 
@@ -833,6 +923,7 @@ struct FieldLocations {
     whole: (usize, usize),
     name: (usize, usize),
     value: (usize, usize),
+    value_delimiter: ValueDelimiter,
 }
 
 #[derive(Debug, Clone)]
@@ -895,6 +986,7 @@ fn recover_partial_entry<'a>(
     failed: &ParsedFailedBlock<'a>,
     source_map: &SourceMap<'a>,
     entry_index: usize,
+    preserve_raw: bool,
 ) -> Option<ParsedEntry<'a>> {
     let raw: &'a str = match &failed.raw {
         Cow::Borrowed(raw) => raw,
@@ -908,6 +1000,7 @@ fn recover_partial_entry<'a>(
         absolute_start,
         header.field_start,
         header.closing,
+        preserve_raw,
     );
     if fields.is_empty() {
         return None;
@@ -923,7 +1016,8 @@ fn recover_partial_entry<'a>(
         source: failed.source,
         entry_type_source: header.entry_type_source,
         key_source: header.key_source,
-        raw: None,
+        delimiter: Some(header.delimiter),
+        raw: preserve_raw.then(|| failed.raw.clone()),
         diagnostics: vec![diagnostic],
     })
 }
@@ -933,6 +1027,7 @@ struct PartialHeader<'a> {
     key: Cow<'a, str>,
     entry_type_source: Option<SourceSpan>,
     key_source: Option<SourceSpan>,
+    delimiter: EntryDelimiter,
     field_start: usize,
     closing: u8,
 }
@@ -955,9 +1050,9 @@ fn parse_partial_header<'a>(
         Some(source_map.span(absolute_start + entry_type_start, absolute_start + pos));
 
     pos = skip_ascii_whitespace(bytes, pos);
-    let closing = match *bytes.get(pos)? {
-        b'{' => b'}',
-        b'(' => b')',
+    let (delimiter, closing) = match *bytes.get(pos)? {
+        b'{' => (EntryDelimiter::Braces, b'}'),
+        b'(' => (EntryDelimiter::Parentheses, b')'),
         _ => return None,
     };
     pos += 1;
@@ -981,6 +1076,7 @@ fn parse_partial_header<'a>(
         key,
         entry_type_source,
         key_source,
+        delimiter,
         field_start: pos + 1,
         closing,
     })
@@ -992,6 +1088,7 @@ fn recover_partial_fields<'a>(
     absolute_start: usize,
     mut pos: usize,
     closing: u8,
+    preserve_raw: bool,
 ) -> Vec<ParsedField<'a>> {
     let bytes = raw.as_bytes();
     let mut fields = Vec::new();
@@ -1036,24 +1133,25 @@ fn recover_partial_fields<'a>(
             Some(_) | None => boundary,
         };
 
+        let field_source =
+            source_map.span(absolute_start + field_start, absolute_start + field_end);
+        let value_source =
+            source_map.span(absolute_start + value_start, absolute_start + value_end);
         fields.push(ParsedField {
             name,
             value: ParsedValue {
                 value,
-                raw: None,
-                source: Some(
-                    source_map.span(absolute_start + value_start, absolute_start + value_end),
-                ),
+                raw: preserve_raw.then(|| Cow::Borrowed(&raw[value_start..value_end])),
+                source: Some(value_source),
                 expanded: None,
+                delimiter: Some(value_delimiter(&raw[value_start..value_end])),
             },
-            raw: None,
-            source: Some(source_map.span(absolute_start + field_start, absolute_start + field_end)),
+            raw: preserve_raw.then(|| Cow::Borrowed(&raw[field_start..field_end])),
+            source: Some(field_source),
             name_source: Some(
                 source_map.span(absolute_start + name_start, absolute_start + name_end),
             ),
-            value_source: Some(
-                source_map.span(absolute_start + value_start, absolute_start + value_end),
-            ),
+            value_source: Some(value_source),
         });
 
         match bytes.get(boundary) {
@@ -1380,9 +1478,9 @@ fn locate_entry(raw: &str, absolute_start: usize, field_count: usize) -> Option<
 
     pos = skip_ascii_whitespace(bytes, pos);
     let opening = *bytes.get(pos)?;
-    let closing = match opening {
-        b'{' => b'}',
-        b'(' => b')',
+    let (delimiter, closing) = match opening {
+        b'{' => (EntryDelimiter::Braces, b'}'),
+        b'(' => (EntryDelimiter::Parentheses, b')'),
         _ => return None,
     };
     pos += 1;
@@ -1400,6 +1498,7 @@ fn locate_entry(raw: &str, absolute_start: usize, field_count: usize) -> Option<
         return Some(EntryLocations {
             entry_type,
             key,
+            delimiter,
             fields: Vec::new(),
         });
     }
@@ -1441,14 +1540,75 @@ fn locate_entry(raw: &str, absolute_start: usize, field_count: usize) -> Option<
             whole: (absolute_start + field_start, absolute_start + whole_end),
             name: (absolute_start + name_start, absolute_start + name_end),
             value: (absolute_start + value_start, absolute_start + value_end),
+            value_delimiter: value_delimiter(&raw[value_start..value_end]),
         });
     }
 
     Some(EntryLocations {
         entry_type,
         key,
+        delimiter,
         fields,
     })
+}
+
+fn value_delimiter(raw_value: &str) -> ValueDelimiter {
+    let trimmed = raw_value.trim_start();
+    if has_top_level_concat(trimmed.as_bytes()) {
+        return ValueDelimiter::Concatenation;
+    }
+
+    match trimmed.as_bytes().first() {
+        Some(b'{') => ValueDelimiter::Braces,
+        Some(b'"') => ValueDelimiter::Quotes,
+        _ => ValueDelimiter::Bare,
+    }
+}
+
+fn locate_definition_value(raw: &str) -> Option<&str> {
+    let bytes = raw.as_bytes();
+    let equals = bytes.iter().position(|byte| *byte == b'=')?;
+    let value_start = skip_ascii_whitespace(bytes, equals + 1);
+    let closing = enclosing_close_byte(bytes)?;
+    let boundary = find_value_boundary(bytes, value_start, closing);
+    let value_end = trim_ascii_whitespace_end(bytes, value_start, boundary);
+    raw.get(value_start..value_end)
+}
+
+fn locate_preamble_value(raw: &str) -> Option<&str> {
+    let bytes = raw.as_bytes();
+    let opening = bytes.iter().position(|byte| matches!(byte, b'{' | b'('))?;
+    let closing = match bytes[opening] {
+        b'{' => b'}',
+        b'(' => b')',
+        _ => return None,
+    };
+    let value_start = skip_ascii_whitespace(bytes, opening + 1);
+    let boundary = find_value_boundary(bytes, value_start, closing);
+    let value_end = trim_ascii_whitespace_end(bytes, value_start, boundary);
+    raw.get(value_start..value_end)
+}
+
+fn enclosing_close_byte(bytes: &[u8]) -> Option<u8> {
+    let opening = bytes.iter().position(|byte| matches!(byte, b'{' | b'('))?;
+    match bytes[opening] {
+        b'{' => Some(b'}'),
+        b'(' => Some(b')'),
+        _ => None,
+    }
+}
+
+fn has_top_level_concat(bytes: &[u8]) -> bool {
+    let mut pos = 0;
+    while let Some(&byte) = bytes.get(pos) {
+        match byte {
+            b'{' => pos = skip_braced(bytes, pos + 1),
+            b'"' => pos = skip_quoted(bytes, pos + 1),
+            b'#' => return true,
+            _ => pos += 1,
+        }
+    }
+    false
 }
 
 fn skip_ascii_whitespace(bytes: &[u8], mut pos: usize) -> usize {
