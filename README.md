@@ -147,6 +147,20 @@ fn main() -> Result<()> {
 }
 ```
 
+## Python
+
+The Python package is built with PyO3 and maturin and exposes the same native document model as Rust:
+
+```python
+import bibtex_parser
+
+document = bibtex_parser.parse('@article{paper, title = "Fast BibTeX"}')
+document.set_field("paper", "note", "accepted")
+output = document.write()
+```
+
+See [PYTHON.md](PYTHON.md) for build, test, mutation, diagnostics, and benchmark details.
+
 ## Tolerant Parsing
 
 Strict parsing is the default. Tolerant parsing is opt-in and keeps malformed blocks separate from valid entries.

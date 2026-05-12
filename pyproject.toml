@@ -1,0 +1,35 @@
+[build-system]
+requires = ["maturin>=1.8,<2"]
+build-backend = "maturin"
+
+[project]
+name = "bibtex-parser"
+version = "0.1.0"
+description = "Fast Rust BibTeX parser with a native Python API"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT OR Apache-2.0" }
+authors = [{ name = "Ayan Das", email = "bvits@riseup.net" }]
+keywords = ["bibtex", "parser", "latex", "bibliography", "citation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Rust",
+    "Topic :: Text Processing",
+]
+
+[project.urls]
+Homepage = "https://github.com/b-vitamins/bibtex-parser"
+Repository = "https://github.com/b-vitamins/bibtex-parser"
+Documentation = "https://docs.rs/bibtex-parser"
+
+[tool.maturin]
+bindings = "pyo3"
+python-source = "python"
+module-name = "bibtex_parser._native"
+features = ["python-extension", "latex_to_unicode"]
+strip = true

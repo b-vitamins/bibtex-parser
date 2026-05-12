@@ -130,6 +130,8 @@ pub mod document;
 pub mod error;
 pub mod model;
 pub mod parser;
+#[cfg(feature = "python")]
+mod python;
 pub mod source;
 
 #[cfg(feature = "latex_to_unicode")]
@@ -196,4 +198,10 @@ pub fn parse(input: &str) -> Result<Library<'_>> {
 pub fn parse_file(path: impl AsRef<std::path::Path>) -> Result<Library<'static>> {
     let content = std::fs::read_to_string(path)?;
     parse(&content).map(Library::into_owned)
+}
+
+#[cfg(feature = "python")]
+#[pyo3::pymodule]
+fn _native(m: &pyo3::Bound<'_, pyo3::types::PyModule>) -> pyo3::PyResult<()> {
+    python::register(m)
 }

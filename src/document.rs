@@ -201,6 +201,15 @@ impl ParsedSource<'_> {
     pub const fn is_anonymous(&self) -> bool {
         self.name.is_none()
     }
+
+    /// Convert this source metadata into an owned value.
+    #[must_use]
+    pub fn into_owned(self) -> ParsedSource<'static> {
+        ParsedSource {
+            id: self.id,
+            name: self.name.map(|name| Cow::Owned(name.into_owned())),
+        }
+    }
 }
 
 /// Source-order block in a parsed document.
@@ -442,6 +451,20 @@ impl<'a> ParsedValue<'a> {
     pub fn unicode_plain_text(&self) -> String {
         self.value.to_unicode_plain_string()
     }
+
+    /// Convert this parsed value into an owned value.
+    #[must_use]
+    pub fn into_owned(self) -> ParsedValue<'static> {
+        ParsedValue {
+            value: self.value.into_owned(),
+            raw: self.raw.map(|raw| Cow::Owned(raw.into_owned())),
+            source: self.source,
+            expanded: self
+                .expanded
+                .map(|expanded| Cow::Owned(expanded.into_owned())),
+            delimiter: self.delimiter,
+        }
+    }
 }
 
 /// Parsed field plus optional source-preserving metadata.
@@ -481,6 +504,19 @@ impl<'a> ParsedField<'a> {
         Field {
             name: self.name,
             value: self.value.into_value(),
+        }
+    }
+
+    /// Convert this parsed field into an owned value.
+    #[must_use]
+    pub fn into_owned(self) -> ParsedField<'static> {
+        ParsedField {
+            name: Cow::Owned(self.name.into_owned()),
+            value: self.value.into_owned(),
+            raw: self.raw.map(|raw| Cow::Owned(raw.into_owned())),
+            source: self.source,
+            name_source: self.name_source,
+            value_source: self.value_source,
         }
     }
 }
@@ -764,6 +800,27 @@ impl<'a> ParsedEntry<'a> {
     pub fn resource_fields(&self) -> Vec<ResourceField> {
         self.clone().into_entry().resource_fields()
     }
+
+    /// Convert this parsed entry into an owned value.
+    #[must_use]
+    pub fn into_owned(self) -> ParsedEntry<'static> {
+        ParsedEntry {
+            ty: self.ty.into_owned(),
+            key: Cow::Owned(self.key.into_owned()),
+            fields: self
+                .fields
+                .into_iter()
+                .map(ParsedField::into_owned)
+                .collect(),
+            status: self.status,
+            source: self.source,
+            entry_type_source: self.entry_type_source,
+            key_source: self.key_source,
+            delimiter: self.delimiter,
+            raw: self.raw.map(|raw| Cow::Owned(raw.into_owned())),
+            diagnostics: self.diagnostics,
+        }
+    }
 }
 
 fn nth_field_index(fields: &[ParsedField<'_>], name: &str, occurrence: usize) -> Option<usize> {
@@ -825,6 +882,17 @@ impl<'a> ParsedString<'a> {
             raw: preserve_raw.then_some(Cow::Borrowed(raw)),
         }
     }
+
+    /// Convert this parsed string definition into an owned value.
+    #[must_use]
+    pub fn into_owned(self) -> ParsedString<'static> {
+        ParsedString {
+            name: Cow::Owned(self.name.into_owned()),
+            value: self.value.into_owned(),
+            source: self.source,
+            raw: self.raw.map(|raw| Cow::Owned(raw.into_owned())),
+        }
+    }
 }
 
 /// Parsed preamble plus optional source-preserving metadata.
@@ -872,6 +940,16 @@ impl<'a> ParsedPreamble<'a> {
             raw: preserve_raw.then_some(Cow::Borrowed(raw)),
         }
     }
+
+    /// Convert this parsed preamble into an owned value.
+    #[must_use]
+    pub fn into_owned(self) -> ParsedPreamble<'static> {
+        ParsedPreamble {
+            value: self.value.into_owned(),
+            source: self.source,
+            raw: self.raw.map(|raw| Cow::Owned(raw.into_owned())),
+        }
+    }
 }
 
 /// Parsed comment plus optional source-preserving metadata.
@@ -908,6 +986,16 @@ impl<'a> ParsedComment<'a> {
             raw: preserve_raw.then_some(Cow::Borrowed(raw)),
         }
     }
+
+    /// Convert this parsed comment into an owned value.
+    #[must_use]
+    pub fn into_owned(self) -> ParsedComment<'static> {
+        ParsedComment {
+            text: Cow::Owned(self.text.into_owned()),
+            source: self.source,
+            raw: self.raw.map(|raw| Cow::Owned(raw.into_owned())),
+        }
+    }
 }
 
 /// Failed block retained by a tolerant parse.
@@ -938,6 +1026,17 @@ impl<'a> ParsedFailedBlock<'a> {
             error: failed.error,
             source: failed.source,
             diagnostics: vec![diagnostic],
+        }
+    }
+
+    /// Convert this failed block into an owned value.
+    #[must_use]
+    pub fn into_owned(self) -> ParsedFailedBlock<'static> {
+        ParsedFailedBlock {
+            raw: Cow::Owned(self.raw.into_owned()),
+            error: self.error,
+            source: self.source,
+            diagnostics: self.diagnostics,
         }
     }
 }
@@ -1458,6 +1557,47 @@ impl<'a> ParsedDocument<'a> {
         options: ExpansionOptions,
     ) -> crate::Result<String> {
         expand_value_with_options(value, &self.strings, options, &mut Vec::new())
+    }
+
+    /// Convert this parsed document into an owned value.
+    #[must_use]
+    pub fn into_owned(self) -> ParsedDocument<'static> {
+        ParsedDocument {
+            library: self.library.into_owned(),
+            sources: self
+                .sources
+                .into_iter()
+                .map(ParsedSource::into_owned)
+                .collect(),
+            entries: self
+                .entries
+                .into_iter()
+                .map(ParsedEntry::into_owned)
+                .collect(),
+            strings: self
+                .strings
+                .into_iter()
+                .map(ParsedString::into_owned)
+                .collect(),
+            preambles: self
+                .preambles
+                .into_iter()
+                .map(ParsedPreamble::into_owned)
+                .collect(),
+            comments: self
+                .comments
+                .into_iter()
+                .map(ParsedComment::into_owned)
+                .collect(),
+            failed_blocks: self
+                .failed_blocks
+                .into_iter()
+                .map(ParsedFailedBlock::into_owned)
+                .collect(),
+            blocks: self.blocks,
+            diagnostics: self.diagnostics,
+            status: self.status,
+        }
     }
 }
 

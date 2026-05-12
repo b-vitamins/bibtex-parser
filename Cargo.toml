@@ -17,11 +17,18 @@ include = [
     "README.md",
     "LICENSE",
     "CHANGELOG.md",
+    "PYTHON.md",
+    "RELEASE_CHECKLIST.md",
     "src/**",
     "examples/**",
     "benches/**",
     "tests/**",
+    "python/**",
+    "pyproject.toml",
 ]
+
+[lib]
+crate-type = ["rlib", "cdylib"]
 
 [features]
 default = []
@@ -29,6 +36,10 @@ default = []
 latex_to_unicode = ["dep:phf"]
 # Enable multi-file parallel parsing
 parallel = ["dep:rayon"]
+# Enable the PyO3 module used by the Python package.
+python = ["dep:pyo3"]
+# Build an ABI-stable CPython extension module for maturin.
+python-extension = ["python", "pyo3/abi3-py38", "pyo3/extension-module"]
 # Enable comparison with other parsers in benchmarks
 compare_parsers = []
 
@@ -40,6 +51,7 @@ memchr = "2.7"
 ahash = "0.8"
 rayon = { version = "1.8", optional = true }
 phf = { version = "0.11", features = ["macros"], optional = true }
+pyo3 = { version = "0.27.2", optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

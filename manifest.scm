@@ -4,10 +4,12 @@
    "gcc-toolchain"
    "pkg-config"
    "python"
+   "maturin"
+   "python-pytest"
    "python-rich"
    "git"
    "make"
    "coreutils"
    "valgrind"
-   "rust-inferno"
+   "flamegraph"
    "perf"))
