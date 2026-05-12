@@ -127,9 +127,34 @@ impl fmt::Display for Location {
     }
 }
 
+/// Stable identifier for a parsed source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SourceId(usize);
+
+impl SourceId {
+    /// Create a source identifier from its document-local index.
+    #[must_use]
+    pub const fn new(index: usize) -> Self {
+        Self(index)
+    }
+
+    /// Return the document-local source index.
+    #[must_use]
+    pub const fn index(self) -> usize {
+        self.0
+    }
+}
+
 /// Byte and line/column location for source-backed items.
+///
+/// Byte offsets are zero-based and half-open: `byte_start..byte_end`.
+/// Lines and columns are one-based. End line and column identify the position
+/// immediately after the final character in the span, so an empty span has the
+/// same start and end position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SourceSpan {
+    /// Source identifier, when the span came from a named parsed source.
+    pub source: Option<SourceId>,
     /// Byte offset where the item starts.
     pub byte_start: usize,
     /// Byte offset where the item ends.
@@ -138,6 +163,10 @@ pub struct SourceSpan {
     pub line: usize,
     /// Column number where the item starts (1-indexed).
     pub column: usize,
+    /// Line number immediately after the item ends (1-indexed).
+    pub end_line: usize,
+    /// Column number immediately after the item ends (1-indexed).
+    pub end_column: usize,
 }
 
 impl SourceSpan {
@@ -145,11 +174,42 @@ impl SourceSpan {
     #[must_use]
     pub const fn new(byte_start: usize, byte_end: usize, line: usize, column: usize) -> Self {
         Self {
+            source: None,
             byte_start,
             byte_end,
             line,
             column,
+            end_line: line,
+            end_column: column,
         }
+    }
+
+    /// Create a new source span with explicit start and end positions.
+    #[must_use]
+    pub const fn with_end(
+        byte_start: usize,
+        byte_end: usize,
+        line: usize,
+        column: usize,
+        end_line: usize,
+        end_column: usize,
+    ) -> Self {
+        Self {
+            source: None,
+            byte_start,
+            byte_end,
+            line,
+            column,
+            end_line,
+            end_column,
+        }
+    }
+
+    /// Return this span associated with a source identifier.
+    #[must_use]
+    pub const fn with_source(mut self, source: SourceId) -> Self {
+        self.source = Some(source);
+        self
     }
 
     /// Return the byte length covered by this span.

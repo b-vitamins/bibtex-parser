@@ -7,8 +7,8 @@
 
 use crate::database::BlockKind;
 use crate::{
-    Comment, Entry, EntryType, FailedBlock, Field, Library, Preamble, SourceSpan, StringDefinition,
-    Value,
+    Comment, Entry, EntryType, FailedBlock, Field, Library, Preamble, SourceId, SourceMap,
+    SourceSpan, StringDefinition, Value,
 };
 use std::borrow::Cow;
 use std::fmt;
@@ -133,7 +133,7 @@ impl Diagnostic {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedSource<'a> {
     /// Source index inside the document.
-    pub id: usize,
+    pub id: SourceId,
     /// Human-readable source name or path, when known.
     pub name: Option<Cow<'a, str>>,
 }
@@ -256,6 +256,10 @@ pub struct ParsedEntry<'a> {
     pub status: ParsedEntryStatus,
     /// Source location for the whole entry, when available.
     pub source: Option<SourceSpan>,
+    /// Source location for the entry type token, when available.
+    pub entry_type_source: Option<SourceSpan>,
+    /// Source location for the citation key token, when available.
+    pub key_source: Option<SourceSpan>,
     /// Exact raw entry text, when retained by the parser mode.
     pub raw: Option<Cow<'a, str>>,
     /// Diagnostics attached to this entry.
@@ -276,6 +280,8 @@ impl<'a> ParsedEntry<'a> {
                 .collect(),
             status: ParsedEntryStatus::Complete,
             source,
+            entry_type_source: None,
+            key_source: None,
             raw: None,
             diagnostics: Vec::new(),
         }
@@ -425,8 +431,20 @@ pub struct ParsedDocument<'a> {
 impl<'a> ParsedDocument<'a> {
     /// Build a parsed document from the existing structured library model.
     #[must_use]
-    pub(crate) fn from_library(library: Library<'a>) -> Self {
-        let sources = vec![ParsedSource { id: 0, name: None }];
+    pub fn from_library(library: Library<'a>) -> Self {
+        Self::from_library_with_sources(
+            library,
+            vec![ParsedSource {
+                id: SourceId::new(0),
+                name: None,
+            }],
+        )
+    }
+
+    pub(crate) fn from_library_with_sources(
+        library: Library<'a>,
+        sources: Vec<ParsedSource<'a>>,
+    ) -> Self {
         let entries: Vec<ParsedEntry<'a>> = library
             .entries()
             .iter()
@@ -496,6 +514,34 @@ impl<'a> ParsedDocument<'a> {
         }
     }
 
+    pub(crate) fn apply_entry_locations(
+        &mut self,
+        entry_index: usize,
+        raw: &str,
+        source_map: &SourceMap<'_>,
+    ) {
+        let Some(entry) = self.entries.get_mut(entry_index) else {
+            return;
+        };
+        let Some(entry_span) = entry.source else {
+            return;
+        };
+        let Some(locations) = locate_entry(raw, entry_span.byte_start, entry.fields.len()) else {
+            return;
+        };
+
+        entry.entry_type_source =
+            Some(source_map.span(locations.entry_type.0, locations.entry_type.1));
+        entry.key_source = Some(source_map.span(locations.key.0, locations.key.1));
+
+        for (field, location) in entry.fields.iter_mut().zip(locations.fields) {
+            field.source = Some(source_map.span(location.whole.0, location.whole.1));
+            field.name_source = Some(source_map.span(location.name.0, location.name.1));
+            field.value.source = Some(source_map.span(location.value.0, location.value.1));
+            field.value_source = field.value.source;
+        }
+    }
+
     /// Return the compact structured library view.
     #[must_use]
     pub const fn library(&self) -> &Library<'a> {
@@ -561,4 +607,178 @@ impl<'a> ParsedDocument<'a> {
     pub const fn status(&self) -> ParseStatus {
         self.status
     }
+}
+
+#[derive(Debug, Clone)]
+struct EntryLocations {
+    entry_type: (usize, usize),
+    key: (usize, usize),
+    fields: Vec<FieldLocations>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FieldLocations {
+    whole: (usize, usize),
+    name: (usize, usize),
+    value: (usize, usize),
+}
+
+fn locate_entry(raw: &str, absolute_start: usize, field_count: usize) -> Option<EntryLocations> {
+    let bytes = raw.as_bytes();
+    let mut pos = 0;
+    if bytes.get(pos) != Some(&b'@') {
+        return None;
+    }
+    pos += 1;
+
+    let entry_type_start = pos;
+    pos += scan_identifier(&bytes[pos..]);
+    if pos == entry_type_start {
+        return None;
+    }
+    let entry_type = (absolute_start + entry_type_start, absolute_start + pos);
+
+    pos = skip_ascii_whitespace(bytes, pos);
+    let opening = *bytes.get(pos)?;
+    let closing = match opening {
+        b'{' => b'}',
+        b'(' => b')',
+        _ => return None,
+    };
+    pos += 1;
+    pos = skip_ascii_whitespace(bytes, pos);
+
+    let key_start = pos;
+    pos += scan_identifier(&bytes[pos..]);
+    if pos == key_start {
+        return None;
+    }
+    let key = (absolute_start + key_start, absolute_start + pos);
+
+    pos = skip_ascii_whitespace(bytes, pos);
+    if bytes.get(pos) != Some(&b',') {
+        return Some(EntryLocations {
+            entry_type,
+            key,
+            fields: Vec::new(),
+        });
+    }
+    pos += 1;
+
+    let mut fields = Vec::with_capacity(field_count);
+    while fields.len() < field_count {
+        pos = skip_ascii_whitespace(bytes, pos);
+        if bytes.get(pos) == Some(&closing) || pos >= bytes.len() {
+            break;
+        }
+
+        let field_start = pos;
+        let name_start = pos;
+        pos += scan_identifier(&bytes[pos..]);
+        if pos == name_start {
+            break;
+        }
+        let name_end = pos;
+
+        pos = skip_ascii_whitespace(bytes, pos);
+        if bytes.get(pos) != Some(&b'=') {
+            break;
+        }
+        pos += 1;
+        pos = skip_ascii_whitespace(bytes, pos);
+
+        let value_start = pos;
+        let boundary = find_value_boundary(bytes, pos, closing);
+        let value_end = trim_ascii_whitespace_end(bytes, value_start, boundary);
+        let mut whole_end = value_end;
+        pos = boundary;
+        if bytes.get(pos) == Some(&b',') {
+            whole_end = pos + 1;
+            pos += 1;
+        }
+
+        fields.push(FieldLocations {
+            whole: (absolute_start + field_start, absolute_start + whole_end),
+            name: (absolute_start + name_start, absolute_start + name_end),
+            value: (absolute_start + value_start, absolute_start + value_end),
+        });
+    }
+
+    Some(EntryLocations {
+        entry_type,
+        key,
+        fields,
+    })
+}
+
+fn skip_ascii_whitespace(bytes: &[u8], mut pos: usize) -> usize {
+    while matches!(bytes.get(pos), Some(b' ' | b'\t' | b'\n' | b'\r')) {
+        pos += 1;
+    }
+    pos
+}
+
+fn trim_ascii_whitespace_end(bytes: &[u8], start: usize, mut end: usize) -> usize {
+    while end > start && matches!(bytes.get(end - 1), Some(b' ' | b'\t' | b'\n' | b'\r')) {
+        end -= 1;
+    }
+    end
+}
+
+fn scan_identifier(bytes: &[u8]) -> usize {
+    bytes
+        .iter()
+        .position(|byte| !is_identifier_byte(*byte))
+        .unwrap_or(bytes.len())
+}
+
+const fn is_identifier_byte(byte: u8) -> bool {
+    matches!(
+        byte,
+        b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z' | b'_' | b'-' | b':' | b'.'
+    )
+}
+
+fn find_value_boundary(bytes: &[u8], mut pos: usize, closing: u8) -> usize {
+    while let Some(&byte) = bytes.get(pos) {
+        match byte {
+            b'{' => pos = skip_braced(bytes, pos + 1),
+            b'"' => pos = skip_quoted(bytes, pos + 1),
+            b',' => break,
+            b if b == closing => break,
+            _ => pos += 1,
+        }
+    }
+    pos
+}
+
+fn skip_braced(bytes: &[u8], mut pos: usize) -> usize {
+    let mut depth = 0usize;
+    while let Some(&byte) = bytes.get(pos) {
+        match byte {
+            b'\\' => pos = (pos + 2).min(bytes.len()),
+            b'{' => {
+                depth += 1;
+                pos += 1;
+            }
+            b'}' if depth == 0 => return pos + 1,
+            b'}' => {
+                depth -= 1;
+                pos += 1;
+            }
+            _ => pos += 1,
+        }
+    }
+    pos
+}
+
+fn skip_quoted(bytes: &[u8], mut pos: usize) -> usize {
+    while let Some(&byte) = bytes.get(pos) {
+        match byte {
+            b'\\' => pos = (pos + 2).min(bytes.len()),
+            b'"' => return pos + 1,
+            _ => pos += 1,
+        }
+    }
+    pos
 }

@@ -129,6 +129,7 @@ pub mod document;
 pub mod error;
 pub mod model;
 pub mod parser;
+pub mod source;
 
 #[cfg(feature = "latex_to_unicode")]
 pub mod latex_unicode;
@@ -146,12 +147,13 @@ pub use document::{
     ParsedComment, ParsedDocument, ParsedEntry, ParsedEntryStatus, ParsedFailedBlock, ParsedField,
     ParsedPreamble, ParsedSource, ParsedString, ParsedValue,
 };
-pub use error::{Error, Result, SourceSpan};
+pub use error::{Error, Result, SourceId, SourceSpan};
 pub use model::{
     normalize_doi, parse_names, Entry, EntryType, Field, PersonName, ValidationError,
     ValidationLevel, ValidationSeverity, Value,
 };
 pub use parser::{parse_bibtex, ParsedItem};
+pub use source::SourceMap;
 pub use writer::{to_file, to_string, Writer, WriterConfig};
 
 /// Re-export of common parser functions
@@ -163,8 +165,8 @@ pub mod prelude {
         MonthStyle, ParseStatus, ParsedBlock, ParsedComment, ParsedDocument, ParsedEntry,
         ParsedEntryStatus, ParsedFailedBlock, ParsedField, ParsedItem, ParsedPreamble,
         ParsedSource, ParsedString, ParsedValue, Parser, PersonName, Preamble, Result, SortOptions,
-        SourceSpan, StringDefinition, ValidationError, ValidationLevel, ValidationReport,
-        ValidationSeverity, Value, Writer, WriterConfig,
+        SourceId, SourceMap, SourceSpan, StringDefinition, ValidationError, ValidationLevel,
+        ValidationReport, ValidationSeverity, Value, Writer, WriterConfig,
     };
 }
 

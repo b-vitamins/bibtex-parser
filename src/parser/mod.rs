@@ -49,7 +49,7 @@ pub mod simd;
 pub mod utils;
 pub mod value;
 
-use crate::{Error, Result, SourceSpan};
+use crate::{Error, Result, SourceMap, SourceSpan};
 use winnow::ascii::multispace0;
 use winnow::prelude::*;
 
@@ -180,6 +180,7 @@ pub(crate) fn parse_bibtex_stream_with_spans<'a, F>(input: &'a str, mut on_item:
 where
     F: FnMut(ParsedItem<'a>, SourceSpan, &'a str) -> Result<()>,
 {
+    let source_map = SourceMap::anonymous(input);
     let mut remaining = input;
 
     loop {
@@ -193,8 +194,7 @@ where
         match parse_item(&mut remaining) {
             Ok(item) => {
                 let end = input.len() - remaining.len();
-                let (line, column) = calculate_position(input, start);
-                let span = SourceSpan::new(start, end, line, column);
+                let span = source_map.span(start, end);
                 on_item(item, span, &input[start..end])?;
             }
             Err(e) => {

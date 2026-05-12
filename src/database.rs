@@ -1,8 +1,8 @@
 //! BibTeX library representation
 
 use crate::{
-    normalize_doi, Entry, Error, ParsedDocument, Result, SourceSpan, ValidationError,
-    ValidationLevel, Value,
+    normalize_doi, Entry, Error, ParsedDocument, ParsedSource, Result, SourceId, SourceMap,
+    SourceSpan, ValidationError, ValidationLevel, Value,
 };
 use ahash::AHashMap;
 use memchr::memchr;
@@ -292,30 +292,6 @@ fn input_may_have_late_string_definition(input: &str) -> bool {
     false
 }
 
-fn source_span(input: &str, byte_start: usize, byte_end: usize) -> SourceSpan {
-    let (line, column) = source_position(input, byte_start);
-    SourceSpan::new(byte_start, byte_end, line, column)
-}
-
-fn source_position(input: &str, pos: usize) -> (usize, usize) {
-    let mut line = 1;
-    let mut column = 1;
-
-    for (byte_index, ch) in input.char_indices() {
-        if byte_index >= pos {
-            break;
-        }
-        if ch == '\n' {
-            line += 1;
-            column = 1;
-        } else {
-            column += 1;
-        }
-    }
-
-    (line, column)
-}
-
 fn next_recovery_boundary(input: &str, start: usize) -> usize {
     let bytes = input.as_bytes();
     let mut pos = start.saturating_add(1);
@@ -398,7 +374,48 @@ impl Parser {
     /// [`Library`] API.
     #[inline]
     pub fn parse_document<'a>(&self, input: &'a str) -> Result<ParsedDocument<'a>> {
-        self.parse(input).map(ParsedDocument::from_library)
+        self.parse_document_with_source(None, input)
+    }
+
+    /// Parse a named source into the richer document model.
+    ///
+    /// The parser does not read files itself; callers provide the source name
+    /// or path-like label together with the already-loaded input text.
+    #[inline]
+    pub fn parse_source<'a>(
+        &self,
+        source_name: impl Into<Cow<'a, str>>,
+        input: &'a str,
+    ) -> Result<ParsedDocument<'a>> {
+        self.parse_document_with_source(Some(source_name.into()), input)
+    }
+
+    fn parse_document_with_source<'a>(
+        &self,
+        source_name: Option<Cow<'a, str>>,
+        input: &'a str,
+    ) -> Result<ParsedDocument<'a>> {
+        let source_id = SourceId::new(0);
+        let source_map = SourceMap::new(Some(source_id), source_name.clone(), input);
+        let sources = vec![ParsedSource {
+            id: source_id,
+            name: source_name,
+        }];
+        let raw_items = if self.tolerant {
+            Library::parse_tolerant_raw_items(input, true, &source_map)
+        } else {
+            Library::parse_raw_items_with_source(input, &source_map)?
+        };
+        let library = Library::from_raw_items(raw_items.clone())?;
+        let mut document = ParsedDocument::from_library_with_sources(library, sources);
+        let mut entry_index = 0;
+        for raw_item in &raw_items {
+            if let RawBuildItem::Parsed(crate::parser::ParsedItem::Entry(_), _, raw) = raw_item {
+                document.apply_entry_locations(entry_index, raw, &source_map);
+                entry_index += 1;
+            }
+        }
+        Ok(document)
     }
 
     /// Parse multiple files in parallel
@@ -483,9 +500,9 @@ pub enum BlockKind {
     Failed(usize),
 }
 
-#[derive(Debug)]
-enum RawBuildItem<'a> {
-    Parsed(crate::parser::ParsedItem<'a>, SourceSpan),
+#[derive(Debug, Clone)]
+pub enum RawBuildItem<'a> {
+    Parsed(crate::parser::ParsedItem<'a>, SourceSpan, &'a str),
     Failed(FailedBlock<'a>),
 }
 
@@ -1081,15 +1098,39 @@ impl<'a> Library<'a> {
     }
 
     fn parse_with_spans(input: &'a str) -> Result<Self> {
-        let mut raw_items = Vec::new();
-        crate::parser::parse_bibtex_stream_with_spans(input, |item, span, _raw| {
-            raw_items.push(RawBuildItem::Parsed(item, span));
-            Ok(())
-        })?;
+        let source_map = SourceMap::anonymous(input);
+        let raw_items = Self::parse_raw_items_with_source(input, &source_map)?;
         Self::from_raw_items(raw_items)
     }
 
     fn parse_tolerant(input: &'a str, capture_source: bool) -> Result<Self> {
+        let source_map = SourceMap::anonymous(input);
+        let raw_items = Self::parse_tolerant_raw_items(input, capture_source, &source_map);
+        Self::from_raw_items(raw_items)
+    }
+
+    fn parse_raw_items_with_source(
+        input: &'a str,
+        source_map: &SourceMap<'_>,
+    ) -> Result<Vec<RawBuildItem<'a>>> {
+        let mut raw_items = Vec::new();
+        crate::parser::parse_bibtex_stream_with_spans(input, |item, span, raw| {
+            let span = if source_map.source_id().is_some() {
+                source_map.span(span.byte_start, span.byte_end)
+            } else {
+                span
+            };
+            raw_items.push(RawBuildItem::Parsed(item, span, raw));
+            Ok(())
+        })?;
+        Ok(raw_items)
+    }
+
+    fn parse_tolerant_raw_items(
+        input: &'a str,
+        capture_source: bool,
+        source_map: &SourceMap<'_>,
+    ) -> Vec<RawBuildItem<'a>> {
         let mut raw_items = Vec::new();
         let mut remaining = input;
 
@@ -1103,11 +1144,15 @@ impl<'a> Library<'a> {
             match crate::parser::parse_item(&mut remaining) {
                 Ok(item) => {
                     let end = input.len() - remaining.len();
-                    raw_items.push(RawBuildItem::Parsed(item, source_span(input, start, end)));
+                    raw_items.push(RawBuildItem::Parsed(
+                        item,
+                        source_map.span(start, end),
+                        &input[start..end],
+                    ));
                 }
                 Err(err) => {
                     let end = next_recovery_boundary(input, start);
-                    let source = capture_source.then(|| source_span(input, start, end));
+                    let source = capture_source.then(|| source_map.span(start, end));
                     raw_items.push(RawBuildItem::Failed(FailedBlock {
                         raw: Cow::Borrowed(&input[start..end]),
                         error: format!("Failed to parse entry: {err}"),
@@ -1118,14 +1163,14 @@ impl<'a> Library<'a> {
             }
         }
 
-        Self::from_raw_items(raw_items)
+        raw_items
     }
 
     fn from_raw_items(raw_items: Vec<RawBuildItem<'a>>) -> Result<Self> {
         let mut library = Self::new();
 
         for raw_item in &raw_items {
-            if let RawBuildItem::Parsed(crate::parser::ParsedItem::String(name, value), span) =
+            if let RawBuildItem::Parsed(crate::parser::ParsedItem::String(name, value), span, _) =
                 raw_item
             {
                 library.register_string_definition(Cow::Borrowed(name), value.clone(), Some(*span));
@@ -1142,7 +1187,7 @@ impl<'a> Library<'a> {
 
         for raw_item in raw_items {
             match raw_item {
-                RawBuildItem::Parsed(crate::parser::ParsedItem::Entry(mut entry), span) => {
+                RawBuildItem::Parsed(crate::parser::ParsedItem::Entry(mut entry), span, _) => {
                     for field in &mut entry.fields {
                         library.expand_value_for_parse(
                             &mut field.value,
@@ -1155,11 +1200,11 @@ impl<'a> Library<'a> {
                     }
                     library.push_entry_with_source(entry, Some(span));
                 }
-                RawBuildItem::Parsed(crate::parser::ParsedItem::String(_, _), _) => {
+                RawBuildItem::Parsed(crate::parser::ParsedItem::String(_, _), _, _) => {
                     library.block_order.push(BlockKind::String(string_index));
                     string_index += 1;
                 }
-                RawBuildItem::Parsed(crate::parser::ParsedItem::Preamble(mut value), span) => {
+                RawBuildItem::Parsed(crate::parser::ParsedItem::Preamble(mut value), span, _) => {
                     library.expand_value_for_parse(
                         &mut value,
                         has_user_strings,
@@ -1170,7 +1215,7 @@ impl<'a> Library<'a> {
                     )?;
                     library.push_preamble_with_source(value, Some(span));
                 }
-                RawBuildItem::Parsed(crate::parser::ParsedItem::Comment(text), span) => {
+                RawBuildItem::Parsed(crate::parser::ParsedItem::Comment(text), span, _) => {
                     library.push_comment_with_source(Cow::Borrowed(text), Some(span));
                 }
                 RawBuildItem::Failed(failed) => library.push_failed_block(failed),
