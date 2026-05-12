@@ -172,6 +172,26 @@ fn bench_parser_comparison(c: &mut Criterion) {
         });
     });
 
+    group.bench_function("bibtex-parser-streaming", |b| {
+        use bibtex_parser::{ParseEvent, ParseFlow};
+
+        let parser = Library::parser();
+        b.iter(|| {
+            let mut entries = 0usize;
+            let summary = parser
+                .parse_events(black_box(TUGBOAT_BIB), |event| {
+                    if matches!(event, ParseEvent::Entry(_)) {
+                        entries += 1;
+                    }
+                    Ok(ParseFlow::Continue)
+                })
+                .unwrap();
+            black_box(entries);
+            black_box(summary);
+            assert!(entries > 0);
+        });
+    });
+
     // serde_bibtex comparison - all modes
     bench_serde_bibtex_ignore(&mut group);
     bench_serde_bibtex_borrow(&mut group);

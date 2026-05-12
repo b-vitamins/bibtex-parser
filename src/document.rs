@@ -218,6 +218,97 @@ pub enum ParsedBlock {
     Failed(usize),
 }
 
+/// Source-order event emitted by streaming parsing.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParseEvent<'a> {
+    /// A regular or recovered bibliography entry.
+    Entry(ParsedEntry<'a>),
+    /// A string definition.
+    String(ParsedString<'a>),
+    /// A preamble block.
+    Preamble(ParsedPreamble<'a>),
+    /// A comment block.
+    Comment(ParsedComment<'a>),
+    /// A malformed block retained by tolerant parsing.
+    Failed(ParsedFailedBlock<'a>),
+    /// A structured diagnostic associated with a preceding event.
+    Diagnostic(Diagnostic),
+}
+
+/// Callback control returned from streaming parse handlers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParseFlow {
+    /// Continue parsing.
+    Continue,
+    /// Stop after the current event.
+    Stop,
+}
+
+/// Summary returned after streaming parsing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StreamingSummary {
+    /// File-level status for processed events.
+    pub status: ParseStatus,
+    /// Number of emitted entries.
+    pub entries: usize,
+    /// Number of emitted string definitions.
+    pub strings: usize,
+    /// Number of emitted preambles.
+    pub preambles: usize,
+    /// Number of emitted comments.
+    pub comments: usize,
+    /// Number of emitted failed blocks.
+    pub failed_blocks: usize,
+    /// Number of warning diagnostics.
+    pub warnings: usize,
+    /// Number of error diagnostics.
+    pub errors: usize,
+    /// Number of informational diagnostics.
+    pub infos: usize,
+    /// Number of recovered partial entries.
+    pub recovered_blocks: usize,
+    /// `true` when the callback requested early stop.
+    pub stopped: bool,
+}
+
+impl Default for StreamingSummary {
+    fn default() -> Self {
+        Self {
+            status: ParseStatus::Ok,
+            entries: 0,
+            strings: 0,
+            preambles: 0,
+            comments: 0,
+            failed_blocks: 0,
+            warnings: 0,
+            errors: 0,
+            infos: 0,
+            recovered_blocks: 0,
+            stopped: false,
+        }
+    }
+}
+
+impl StreamingSummary {
+    pub(crate) fn finalize_status(&mut self) {
+        self.status = if self.errors == 0 {
+            ParseStatus::Ok
+        } else if self.entries == 0 && self.strings == 0 && self.preambles == 0 {
+            ParseStatus::Failed
+        } else {
+            ParseStatus::Partial
+        };
+    }
+
+    pub(crate) fn count_diagnostic(&mut self, diagnostic: &Diagnostic) {
+        match diagnostic.severity {
+            DiagnosticSeverity::Error => self.errors += 1,
+            DiagnosticSeverity::Warning => self.warnings += 1,
+            DiagnosticSeverity::Info => self.infos += 1,
+        }
+    }
+}
+
 /// Status of a parsed entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParsedEntryStatus {
@@ -438,6 +529,52 @@ impl<'a> ParsedEntry<'a> {
             delimiter: None,
             raw: None,
             diagnostics: Vec::new(),
+        }
+    }
+
+    pub(crate) fn from_stream_entry(
+        entry: Entry<'a>,
+        source: SourceSpan,
+        raw: &'a str,
+        source_map: &SourceMap<'a>,
+        preserve_raw: bool,
+    ) -> Self {
+        let mut parsed = Self::from_entry(entry, Some(source));
+        parsed.apply_locations(raw, source_map, preserve_raw);
+        parsed
+    }
+
+    fn apply_locations(&mut self, raw: &'a str, source_map: &SourceMap<'a>, preserve_raw: bool) {
+        let Some(entry_span) = self.source else {
+            return;
+        };
+        let Some(locations) = locate_entry(raw, entry_span.byte_start, self.fields.len()) else {
+            return;
+        };
+
+        self.entry_type_source =
+            Some(source_map.span(locations.entry_type.0, locations.entry_type.1));
+        self.key_source = Some(source_map.span(locations.key.0, locations.key.1));
+        self.delimiter = Some(locations.delimiter);
+        if preserve_raw {
+            self.raw = Some(Cow::Borrowed(raw));
+        }
+
+        for (field, location) in self.fields.iter_mut().zip(locations.fields) {
+            field.source = Some(source_map.span(location.whole.0, location.whole.1));
+            field.name_source = Some(source_map.span(location.name.0, location.name.1));
+            field.value.source = Some(source_map.span(location.value.0, location.value.1));
+            field.value_source = field.value.source;
+            field.value.delimiter = Some(location.value_delimiter);
+
+            if preserve_raw {
+                if let Some(source) = field.source.and_then(|span| source_map.slice(span)) {
+                    field.raw = Some(Cow::Borrowed(source));
+                }
+                if let Some(source) = field.value_source.and_then(|span| source_map.slice(span)) {
+                    field.value.raw = Some(Cow::Borrowed(source));
+                }
+            }
         }
     }
 
@@ -662,6 +799,32 @@ impl<'a> ParsedString<'a> {
             raw: None,
         }
     }
+
+    pub(crate) fn from_stream_definition(
+        name: &'a str,
+        value: Value<'a>,
+        source: SourceSpan,
+        raw: &'a str,
+        preserve_raw: bool,
+    ) -> Self {
+        let value_raw = locate_definition_value(raw);
+        Self {
+            name: Cow::Borrowed(name),
+            value: ParsedValue {
+                value,
+                raw: if preserve_raw {
+                    value_raw.map(Cow::Borrowed)
+                } else {
+                    None
+                },
+                source: None,
+                expanded: None,
+                delimiter: value_raw.map(value_delimiter),
+            },
+            source: Some(source),
+            raw: preserve_raw.then_some(Cow::Borrowed(raw)),
+        }
+    }
 }
 
 /// Parsed preamble plus optional source-preserving metadata.
@@ -685,6 +848,30 @@ impl<'a> ParsedPreamble<'a> {
             raw: None,
         }
     }
+
+    pub(crate) fn from_stream_preamble(
+        value: Value<'a>,
+        source: SourceSpan,
+        raw: &'a str,
+        preserve_raw: bool,
+    ) -> Self {
+        let value_raw = locate_preamble_value(raw);
+        Self {
+            value: ParsedValue {
+                value,
+                raw: if preserve_raw {
+                    value_raw.map(Cow::Borrowed)
+                } else {
+                    None
+                },
+                source: None,
+                expanded: None,
+                delimiter: value_raw.map(value_delimiter),
+            },
+            source: Some(source),
+            raw: preserve_raw.then_some(Cow::Borrowed(raw)),
+        }
+    }
 }
 
 /// Parsed comment plus optional source-preserving metadata.
@@ -706,6 +893,19 @@ impl<'a> ParsedComment<'a> {
             text: comment.text,
             source: comment.source,
             raw: None,
+        }
+    }
+
+    pub(crate) fn from_stream_comment(
+        text: &'a str,
+        source: SourceSpan,
+        raw: &'a str,
+        preserve_raw: bool,
+    ) -> Self {
+        Self {
+            text: Cow::Borrowed(text),
+            source: Some(source),
+            raw: preserve_raw.then_some(Cow::Borrowed(raw)),
         }
     }
 }
@@ -1449,6 +1649,15 @@ fn recover_partial_entry<'a>(
         raw: preserve_raw.then(|| failed.raw.clone()),
         diagnostics: vec![diagnostic],
     })
+}
+
+pub(crate) fn recover_partial_stream_entry<'a>(
+    failed: &ParsedFailedBlock<'a>,
+    source_map: &SourceMap<'a>,
+    entry_index: usize,
+    preserve_raw: bool,
+) -> Option<ParsedEntry<'a>> {
+    recover_partial_entry(failed, source_map, entry_index, preserve_raw)
 }
 
 struct PartialHeader<'a> {

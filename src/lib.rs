@@ -144,9 +144,10 @@ pub use database::{
 };
 pub use document::{
     Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticTarget, EntryDelimiter,
-    ExpansionOptions, ParseStatus, ParseSummary, ParsedBlock, ParsedComment, ParsedDocument,
-    ParsedEntry, ParsedEntryStatus, ParsedFailedBlock, ParsedField, ParsedPreamble, ParsedSource,
-    ParsedString, ParsedValue, UnresolvedVariablePolicy, ValueDelimiter,
+    ExpansionOptions, ParseEvent, ParseFlow, ParseStatus, ParseSummary, ParsedBlock, ParsedComment,
+    ParsedDocument, ParsedEntry, ParsedEntryStatus, ParsedFailedBlock, ParsedField, ParsedPreamble,
+    ParsedSource, ParsedString, ParsedValue, StreamingSummary, UnresolvedVariablePolicy,
+    ValueDelimiter,
 };
 pub use error::{Error, Result, SourceId, SourceSpan};
 pub use model::{
@@ -171,13 +172,13 @@ pub mod prelude {
         DateParts, Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticTarget, Entry,
         EntryDelimiter, EntryType, Error, ExpansionOptions, FailedBlock, Field, FieldNameCase,
         FieldNormalizeOptions, IssueSummary, Library, LibraryBuilder, LibraryStats, MonthStyle,
-        ParseStatus, ParseSummary, ParsedBlock, ParsedComment, ParsedDocument, ParsedEntry,
-        ParsedEntryStatus, ParsedFailedBlock, ParsedField, ParsedItem, ParsedPreamble,
-        ParsedSource, ParsedString, ParsedValue, Parser, PersonName, Preamble, RawWriteMode,
-        ResourceField, ResourceKind, Result, SortOptions, SourceId, SourceMap, SourceSpan,
-        StringDefinition, TrailingComma, UnresolvedVariablePolicy, ValidationError,
-        ValidationLevel, ValidationReport, ValidationSeverity, Value, ValueDelimiter, Writer,
-        WriterConfig,
+        ParseEvent, ParseFlow, ParseStatus, ParseSummary, ParsedBlock, ParsedComment,
+        ParsedDocument, ParsedEntry, ParsedEntryStatus, ParsedFailedBlock, ParsedField, ParsedItem,
+        ParsedPreamble, ParsedSource, ParsedString, ParsedValue, Parser, PersonName, Preamble,
+        RawWriteMode, ResourceField, ResourceKind, Result, SortOptions, SourceId, SourceMap,
+        SourceSpan, StreamingSummary, StringDefinition, TrailingComma, UnresolvedVariablePolicy,
+        ValidationError, ValidationLevel, ValidationReport, ValidationSeverity, Value,
+        ValueDelimiter, Writer, WriterConfig,
     };
 }
 

@@ -104,6 +104,27 @@ fn main() -> Result<()> {
 }
 ```
 
+## Streaming
+
+```rust
+use bibtex_parser::{ParseEvent, ParseFlow, Parser, Result};
+
+fn main() -> Result<()> {
+    let mut entries = 0;
+    let summary = Parser::new().parse_events("@article{paper, title = \"A\"}", |event| {
+        if let ParseEvent::Entry(entry) = event {
+            assert_eq!(entry.key(), "paper");
+            entries += 1;
+        }
+        Ok(ParseFlow::Continue)
+    })?;
+
+    assert_eq!(entries, 1);
+    assert_eq!(summary.entries, 1);
+    Ok(())
+}
+```
+
 ## Tolerant Parsing
 
 Strict parsing is the default. Tolerant parsing is opt-in and keeps malformed blocks separate from valid entries.

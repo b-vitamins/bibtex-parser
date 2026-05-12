@@ -1,8 +1,10 @@
 //! BibTeX library representation
 
 use crate::{
-    canonical_biblatex_field_alias, normalize_doi, Entry, Error, ParsedDocument, ParsedSource,
-    Result, SourceId, SourceMap, SourceSpan, ValidationError, ValidationLevel, Value,
+    canonical_biblatex_field_alias, normalize_doi, Entry, Error, ParseEvent, ParseFlow,
+    ParsedComment, ParsedDocument, ParsedEntry, ParsedFailedBlock, ParsedPreamble, ParsedSource,
+    ParsedString, Result, SourceId, SourceMap, SourceSpan, StreamingSummary, ValidationError,
+    ValidationLevel, Value,
 };
 use ahash::AHashMap;
 use memchr::memchr;
@@ -411,6 +413,233 @@ impl Parser {
         input: &'a str,
     ) -> Result<ParsedDocument<'a>> {
         self.parse_document_with_source(Some(source_name.into()), input)
+    }
+
+    /// Stream parsed source-order events to a callback.
+    ///
+    /// Strict mode returns an error on the first malformed block. Tolerant mode
+    /// emits recovered partial entries or failed blocks with diagnostics and
+    /// continues. The callback can return [`ParseFlow::Stop`] to stop after the
+    /// current event; the returned summary then has `stopped = true`.
+    #[inline]
+    pub fn parse_events<'a, F>(&self, input: &'a str, on_event: F) -> Result<StreamingSummary>
+    where
+        F: FnMut(ParseEvent<'a>) -> Result<ParseFlow>,
+    {
+        self.parse_source_events_with_source(None, input, on_event)
+    }
+
+    /// Stream parsed source-order events from a named source.
+    #[inline]
+    pub fn parse_source_events<'a, F>(
+        &self,
+        source_name: impl Into<Cow<'a, str>>,
+        input: &'a str,
+        on_event: F,
+    ) -> Result<StreamingSummary>
+    where
+        F: FnMut(ParseEvent<'a>) -> Result<ParseFlow>,
+    {
+        self.parse_source_events_with_source(Some(source_name.into()), input, on_event)
+    }
+
+    fn parse_source_events_with_source<'a, F>(
+        &self,
+        source_name: Option<Cow<'a, str>>,
+        input: &'a str,
+        mut on_event: F,
+    ) -> Result<StreamingSummary>
+    where
+        F: FnMut(ParseEvent<'a>) -> Result<ParseFlow>,
+    {
+        let source_map = SourceMap::new(Some(SourceId::new(0)), source_name, input);
+        let mut summary = StreamingSummary::default();
+
+        if self.tolerant {
+            self.parse_tolerant_events(input, &source_map, &mut summary, &mut on_event)?;
+        } else {
+            crate::parser::parse_bibtex_stream_with_spans(input, |item, span, raw| {
+                let source = source_map.span(span.byte_start, span.byte_end);
+                self.emit_parsed_event(item, source, raw, &source_map, &mut summary, &mut on_event)
+            })?;
+        }
+
+        summary.finalize_status();
+        Ok(summary)
+    }
+
+    fn parse_tolerant_events<'a, F>(
+        &self,
+        input: &'a str,
+        source_map: &SourceMap<'a>,
+        summary: &mut StreamingSummary,
+        on_event: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut(ParseEvent<'a>) -> Result<ParseFlow>,
+    {
+        let mut remaining = input;
+
+        loop {
+            crate::parser::lexer::skip_whitespace(&mut remaining);
+            if remaining.is_empty() || summary.stopped {
+                break;
+            }
+
+            let start = input.len() - remaining.len();
+            match crate::parser::parse_item(&mut remaining) {
+                Ok(item) => {
+                    let end = input.len() - remaining.len();
+                    let source = source_map.span(start, end);
+                    self.emit_parsed_event(
+                        item,
+                        source,
+                        &input[start..end],
+                        source_map,
+                        summary,
+                        on_event,
+                    )?;
+                }
+                Err(err) => {
+                    let end = next_recovery_boundary(input, start);
+                    let failed = FailedBlock {
+                        raw: Cow::Borrowed(&input[start..end]),
+                        error: format!("Failed to parse entry: {err}"),
+                        source: Some(source_map.span(start, end)),
+                    };
+                    let failed_index = summary.failed_blocks;
+                    let failed = ParsedFailedBlock::from_failed_block(
+                        failed_index,
+                        failed,
+                        Some(source_map),
+                    );
+                    if let Some(partial) = crate::document::recover_partial_stream_entry(
+                        &failed,
+                        source_map,
+                        summary.entries,
+                        self.document.preserve_raw,
+                    ) {
+                        Self::emit_event(ParseEvent::Entry(partial), summary, on_event)?;
+                    } else {
+                        Self::emit_event(ParseEvent::Failed(failed), summary, on_event)?;
+                    }
+                    remaining = &input[end..];
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn emit_parsed_event<'a, F>(
+        &self,
+        item: crate::parser::ParsedItem<'a>,
+        source: SourceSpan,
+        raw: &'a str,
+        source_map: &SourceMap<'a>,
+        summary: &mut StreamingSummary,
+        on_event: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut(ParseEvent<'a>) -> Result<ParseFlow>,
+    {
+        if summary.stopped {
+            return Ok(());
+        }
+
+        let event = match item {
+            crate::parser::ParsedItem::Entry(entry) => {
+                ParseEvent::Entry(ParsedEntry::from_stream_entry(
+                    entry,
+                    source,
+                    raw,
+                    source_map,
+                    self.document.preserve_raw,
+                ))
+            }
+            crate::parser::ParsedItem::String(name, value) => {
+                ParseEvent::String(ParsedString::from_stream_definition(
+                    name,
+                    value,
+                    source,
+                    raw,
+                    self.document.preserve_raw,
+                ))
+            }
+            crate::parser::ParsedItem::Preamble(value) => {
+                ParseEvent::Preamble(ParsedPreamble::from_stream_preamble(
+                    value,
+                    source,
+                    raw,
+                    self.document.preserve_raw,
+                ))
+            }
+            crate::parser::ParsedItem::Comment(text) => ParseEvent::Comment(
+                ParsedComment::from_stream_comment(text, source, raw, self.document.preserve_raw),
+            ),
+        };
+
+        Self::emit_event(event, summary, on_event)
+    }
+
+    fn emit_event<'a, F>(
+        event: ParseEvent<'a>,
+        summary: &mut StreamingSummary,
+        on_event: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut(ParseEvent<'a>) -> Result<ParseFlow>,
+    {
+        if summary.stopped {
+            return Ok(());
+        }
+
+        let diagnostics = match &event {
+            ParseEvent::Entry(entry) => {
+                summary.entries += 1;
+                if entry.status == crate::ParsedEntryStatus::Partial {
+                    summary.recovered_blocks += 1;
+                }
+                entry.diagnostics.clone()
+            }
+            ParseEvent::String(_) => {
+                summary.strings += 1;
+                Vec::new()
+            }
+            ParseEvent::Preamble(_) => {
+                summary.preambles += 1;
+                Vec::new()
+            }
+            ParseEvent::Comment(_) => {
+                summary.comments += 1;
+                Vec::new()
+            }
+            ParseEvent::Failed(failed) => {
+                summary.failed_blocks += 1;
+                failed.diagnostics.clone()
+            }
+            ParseEvent::Diagnostic(diagnostic) => {
+                summary.count_diagnostic(diagnostic);
+                Vec::new()
+            }
+        };
+        for diagnostic in &diagnostics {
+            summary.count_diagnostic(diagnostic);
+        }
+
+        if on_event(event)? == ParseFlow::Stop {
+            summary.stopped = true;
+            return Ok(());
+        }
+
+        for diagnostic in diagnostics {
+            if on_event(ParseEvent::Diagnostic(diagnostic))? == ParseFlow::Stop {
+                summary.stopped = true;
+                break;
+            }
+        }
+
+        Ok(())
     }
 
     fn parse_document_with_source<'a>(
