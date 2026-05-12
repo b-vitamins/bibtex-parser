@@ -167,6 +167,35 @@ impl<W: Write> Writer<W> {
         Ok(())
     }
 
+    /// Write selected parsed-document entries in source order.
+    ///
+    /// Non-entry blocks are skipped. Duplicate keys in `keys` do not duplicate
+    /// output entries.
+    pub fn write_selected_entries(
+        &mut self,
+        document: &ParsedDocument,
+        keys: &[&str],
+    ) -> io::Result<()> {
+        let mut written = 0usize;
+        for block in document.blocks().iter().copied() {
+            let ParsedBlock::Entry(entry_index) = block else {
+                continue;
+            };
+            let entry = &document.entries()[entry_index];
+            if !keys.iter().any(|key| *key == entry.key()) {
+                continue;
+            }
+            if written > 0 {
+                self.writer
+                    .write_all(self.config.entry_separator.as_bytes())?;
+            }
+            self.write_parsed_entry(entry)?;
+            written += 1;
+        }
+
+        Ok(())
+    }
+
     fn write_library_sorted(&mut self, library: &Library) -> io::Result<()> {
         // Write preambles
         for preamble in library.preambles() {
@@ -322,17 +351,42 @@ fn escape_quotes(s: &str) -> String {
 fn patched_entry_raw<'entry>(entry: &'entry ParsedEntry<'_>) -> Option<Cow<'entry, str>> {
     let raw = entry.raw.as_deref()?;
     let source = entry.source?;
-    let mut replacements = entry
-        .fields
-        .iter()
-        .filter(|field| field.value.raw.is_none())
-        .filter_map(|field| {
+    let mut replacements = Vec::new();
+
+    push_token_replacement(
+        &mut replacements,
+        raw,
+        source.byte_start,
+        entry.entry_type_source,
+        &entry.ty.to_string(),
+        |raw_type| crate::EntryType::parse(raw_type) == entry.ty,
+    )?;
+    push_token_replacement(
+        &mut replacements,
+        raw,
+        source.byte_start,
+        entry.key_source,
+        &entry.key,
+        |raw_key| raw_key == entry.key,
+    )?;
+
+    for field in &entry.fields {
+        push_token_replacement(
+            &mut replacements,
+            raw,
+            source.byte_start,
+            field.name_source,
+            &field.name,
+            |raw_name| raw_name == field.name,
+        )?;
+
+        if field.value.raw.is_none() {
             let value_source = field.value_source?;
             let start = value_source.byte_start.checked_sub(source.byte_start)?;
             let end = value_source.byte_end.checked_sub(source.byte_start)?;
-            Some((start, end, field.value.value.to_bibtex_source()))
-        })
-        .collect::<Vec<_>>();
+            replacements.push((start, end, field.value.value.to_bibtex_source()));
+        }
+    }
 
     if replacements.is_empty() {
         return Some(Cow::Borrowed(raw));
@@ -353,6 +407,24 @@ fn patched_entry_raw<'entry>(entry: &'entry ParsedEntry<'_>) -> Option<Cow<'entr
     Some(Cow::Owned(output))
 }
 
+fn push_token_replacement(
+    replacements: &mut Vec<(usize, usize, String)>,
+    raw: &str,
+    base: usize,
+    span: Option<crate::SourceSpan>,
+    replacement: &str,
+    unchanged: impl FnOnce(&str) -> bool,
+) -> Option<()> {
+    let span = span?;
+    let start = span.byte_start.checked_sub(base)?;
+    let end = span.byte_end.checked_sub(base)?;
+    let original = raw.get(start..end)?;
+    if !unchanged(original) {
+        replacements.push((start, end, replacement.to_string()));
+    }
+    Some(())
+}
+
 /// Convenience function to write a library to a string.
 #[must_use = "Check the result to detect serialization errors"]
 pub fn to_string(library: &Library) -> Result<String> {
@@ -368,6 +440,15 @@ pub fn document_to_string(document: &ParsedDocument) -> Result<String> {
     let mut buf = Vec::new();
     let mut writer = Writer::new(&mut buf);
     writer.write_document(document)?;
+    Ok(String::from_utf8(buf).expect("valid UTF-8"))
+}
+
+/// Convenience function to write selected parsed-document entries to a string.
+#[must_use = "Check the result to detect serialization errors"]
+pub fn selected_entries_to_string(document: &ParsedDocument, keys: &[&str]) -> Result<String> {
+    let mut buf = Vec::new();
+    let mut writer = Writer::new(&mut buf);
+    writer.write_selected_entries(document, keys)?;
     Ok(String::from_utf8(buf).expect("valid UTF-8"))
 }
 

@@ -459,6 +459,117 @@ impl<'a> ParsedEntry<'a> {
                 .collect(),
         }
     }
+
+    /// Rename the citation key.
+    pub fn rename_key(&mut self, key: impl Into<Cow<'a, str>>) {
+        self.key = key.into();
+    }
+
+    /// Replace the entry type.
+    pub fn set_entry_type(&mut self, ty: EntryType<'a>) {
+        self.ty = ty;
+    }
+
+    /// Add a field and switch this entry to structured writing.
+    pub fn add_field(&mut self, name: impl Into<Cow<'a, str>>, value: Value<'a>) {
+        self.fields.push(ParsedField {
+            name: name.into(),
+            value: ParsedValue::new(value),
+            raw: None,
+            source: None,
+            name_source: None,
+            value_source: None,
+        });
+        self.raw = None;
+    }
+
+    /// Replace the first field value whose name matches exactly.
+    #[must_use]
+    pub fn replace_field_value(&mut self, name: &str, value: Value<'a>) -> bool {
+        self.replace_field_value_at(name, 0, value)
+    }
+
+    /// Replace a specific duplicate field occurrence by zero-based occurrence index.
+    #[must_use]
+    pub fn replace_field_value_at(
+        &mut self,
+        name: &str,
+        occurrence: usize,
+        value: Value<'a>,
+    ) -> bool {
+        let Some(index) = nth_field_index(&self.fields, name, occurrence) else {
+            return false;
+        };
+        let field = &mut self.fields[index];
+        field.value.value = value;
+        field.value.raw = None;
+        field.raw = None;
+        field.value.expanded = None;
+        true
+    }
+
+    /// Rename all fields whose name matches exactly.
+    #[must_use]
+    pub fn rename_field(&mut self, old: &str, new: impl Into<Cow<'a, str>>) -> usize {
+        let new = new.into();
+        let mut renamed = 0;
+        for field in &mut self.fields {
+            if field.name == old {
+                field.name.clone_from(&new);
+                field.raw = None;
+                renamed += 1;
+            }
+        }
+        renamed
+    }
+
+    /// Remove all fields whose name matches exactly.
+    #[must_use]
+    pub fn remove_field(&mut self, name: &str) -> usize {
+        let original_len = self.fields.len();
+        self.fields.retain(|field| field.name != name);
+        let removed = original_len - self.fields.len();
+        if removed > 0 {
+            self.raw = None;
+        }
+        removed
+    }
+
+    /// Remove a specific duplicate field occurrence by zero-based occurrence index.
+    #[must_use]
+    pub fn remove_field_at(&mut self, name: &str, occurrence: usize) -> bool {
+        let Some(index) = nth_field_index(&self.fields, name, occurrence) else {
+            return false;
+        };
+        self.fields.remove(index);
+        self.raw = None;
+        true
+    }
+
+    /// Remove configured export-only fields from this entry.
+    #[must_use]
+    pub fn remove_export_fields(&mut self, names: &[&str]) -> usize {
+        let original_len = self.fields.len();
+        self.fields.retain(|field| {
+            !names
+                .iter()
+                .any(|name| field.name.eq_ignore_ascii_case(name))
+        });
+        let removed = original_len - self.fields.len();
+        if removed > 0 {
+            self.raw = None;
+        }
+        removed
+    }
+}
+
+fn nth_field_index(fields: &[ParsedField<'_>], name: &str, occurrence: usize) -> Option<usize> {
+    fields
+        .iter()
+        .enumerate()
+        .filter(|(_, field)| field.name == name)
+        .nth(occurrence)
+        .map(|(index, _)| index)
 }
 
 /// Parsed string definition plus optional source-preserving metadata.
@@ -972,6 +1083,31 @@ impl<'a> ParsedDocument<'a> {
     #[must_use]
     pub fn entries_mut(&mut self) -> &mut [ParsedEntry<'a>] {
         &mut self.entries
+    }
+
+    /// Return a mutable entry by citation key.
+    #[must_use]
+    pub fn entry_mut_by_key(&mut self, key: &str) -> Option<&mut ParsedEntry<'a>> {
+        self.entries.iter_mut().find(|entry| entry.key == key)
+    }
+
+    /// Rename a citation key.
+    #[must_use]
+    pub fn rename_key(&mut self, old: &str, new: impl Into<Cow<'a, str>>) -> bool {
+        let Some(entry) = self.entry_mut_by_key(old) else {
+            return false;
+        };
+        entry.rename_key(new);
+        true
+    }
+
+    /// Remove configured export-only fields from all entries.
+    #[must_use]
+    pub fn remove_export_fields(&mut self, names: &[&str]) -> usize {
+        self.entries
+            .iter_mut()
+            .map(|entry| entry.remove_export_fields(names))
+            .sum()
     }
 
     /// Return parsed string definitions.

@@ -156,22 +156,23 @@ pub use model::{
 pub use parser::{parse_bibtex, ParsedItem};
 pub use source::SourceMap;
 pub use writer::{
-    document_to_string, to_file, to_string, RawWriteMode, TrailingComma, Writer, WriterConfig,
+    document_to_string, selected_entries_to_string, to_file, to_string, RawWriteMode,
+    TrailingComma, Writer, WriterConfig,
 };
 
 /// Re-export of common parser functions
 pub mod prelude {
     pub use crate::{
-        document_to_string, normalize_doi, parse_bibtex, parse_names, Block, Comment, Diagnostic,
-        DiagnosticCode, DiagnosticSeverity, DiagnosticTarget, Entry, EntryDelimiter, EntryType,
-        Error, ExpansionOptions, FailedBlock, Field, FieldNameCase, FieldNormalizeOptions,
-        IssueSummary, Library, LibraryBuilder, LibraryStats, MonthStyle, ParseStatus, ParseSummary,
-        ParsedBlock, ParsedComment, ParsedDocument, ParsedEntry, ParsedEntryStatus,
-        ParsedFailedBlock, ParsedField, ParsedItem, ParsedPreamble, ParsedSource, ParsedString,
-        ParsedValue, Parser, PersonName, Preamble, RawWriteMode, Result, SortOptions, SourceId,
-        SourceMap, SourceSpan, StringDefinition, TrailingComma, UnresolvedVariablePolicy,
-        ValidationError, ValidationLevel, ValidationReport, ValidationSeverity, Value,
-        ValueDelimiter, Writer, WriterConfig,
+        document_to_string, normalize_doi, parse_bibtex, parse_names, selected_entries_to_string,
+        Block, Comment, Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticTarget, Entry,
+        EntryDelimiter, EntryType, Error, ExpansionOptions, FailedBlock, Field, FieldNameCase,
+        FieldNormalizeOptions, IssueSummary, Library, LibraryBuilder, LibraryStats, MonthStyle,
+        ParseStatus, ParseSummary, ParsedBlock, ParsedComment, ParsedDocument, ParsedEntry,
+        ParsedEntryStatus, ParsedFailedBlock, ParsedField, ParsedItem, ParsedPreamble,
+        ParsedSource, ParsedString, ParsedValue, Parser, PersonName, Preamble, RawWriteMode,
+        Result, SortOptions, SourceId, SourceMap, SourceSpan, StringDefinition, TrailingComma,
+        UnresolvedVariablePolicy, ValidationError, ValidationLevel, ValidationReport,
+        ValidationSeverity, Value, ValueDelimiter, Writer, WriterConfig,
     };
 }
 
