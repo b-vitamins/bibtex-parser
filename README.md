@@ -125,6 +125,28 @@ fn main() -> Result<()> {
 }
 ```
 
+## Multi-File Corpora
+
+```rust
+use bibtex_parser::{CorpusSource, Parser, Result, SourceId};
+
+fn main() -> Result<()> {
+    let sources = [
+        CorpusSource::new("refs/a.bib", "@article{paper, title = \"A\"}"),
+        CorpusSource::new("refs/b.bib", "@article{paper, title = \"B\"}"),
+    ];
+
+    let corpus = Parser::new().parse_sources(&sources)?;
+    let duplicates = corpus.duplicate_keys();
+
+    assert_eq!(corpus.entries().count(), 2);
+    assert_eq!(duplicates[0].key, "paper");
+    assert!(duplicates[0].cross_source);
+    assert_eq!(duplicates[0].occurrences[1].source, SourceId::new(1));
+    Ok(())
+}
+```
+
 ## Tolerant Parsing
 
 Strict parsing is the default. Tolerant parsing is opt-in and keeps malformed blocks separate from valid entries.

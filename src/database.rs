@@ -1,10 +1,10 @@
 //! BibTeX library representation
 
 use crate::{
-    canonical_biblatex_field_alias, normalize_doi, Entry, Error, ParseEvent, ParseFlow,
-    ParsedComment, ParsedDocument, ParsedEntry, ParsedFailedBlock, ParsedPreamble, ParsedSource,
-    ParsedString, Result, SourceId, SourceMap, SourceSpan, StreamingSummary, ValidationError,
-    ValidationLevel, Value,
+    canonical_biblatex_field_alias, normalize_doi, CorpusEvent, CorpusSource, Entry, Error,
+    ParseEvent, ParseFlow, ParsedComment, ParsedCorpus, ParsedDocument, ParsedEntry,
+    ParsedFailedBlock, ParsedPreamble, ParsedSource, ParsedString, Result, SourceId, SourceMap,
+    SourceSpan, StreamingSummary, ValidationError, ValidationLevel, Value,
 };
 use ahash::AHashMap;
 use memchr::memchr;
@@ -317,6 +317,19 @@ fn line_prefix_is_whitespace(bytes: &[u8], pos: usize) -> bool {
         .all(|byte| matches!(byte, b' ' | b'\t'))
 }
 
+fn merge_streaming_summary(total: &mut StreamingSummary, source: StreamingSummary) {
+    total.entries += source.entries;
+    total.strings += source.strings;
+    total.preambles += source.preambles;
+    total.comments += source.comments;
+    total.failed_blocks += source.failed_blocks;
+    total.warnings += source.warnings;
+    total.errors += source.errors;
+    total.infos += source.infos;
+    total.recovered_blocks += source.recovered_blocks;
+    total.stopped |= source.stopped;
+}
+
 /// Parser configuration.
 #[derive(Debug, Default, Clone)]
 pub struct Parser {
@@ -399,7 +412,7 @@ impl Parser {
     /// [`Library`] API.
     #[inline]
     pub fn parse_document<'a>(&self, input: &'a str) -> Result<ParsedDocument<'a>> {
-        self.parse_document_with_source(None, input)
+        self.parse_document_with_source_id(SourceId::new(0), None, input)
     }
 
     /// Parse a named source into the richer document model.
@@ -412,7 +425,21 @@ impl Parser {
         source_name: impl Into<Cow<'a, str>>,
         input: &'a str,
     ) -> Result<ParsedDocument<'a>> {
-        self.parse_document_with_source(Some(source_name.into()), input)
+        self.parse_document_with_source_id(SourceId::new(0), Some(source_name.into()), input)
+    }
+
+    /// Parse multiple named in-memory sources into a corpus result.
+    pub fn parse_sources<'a>(&self, sources: &[CorpusSource<'a>]) -> Result<ParsedCorpus<'a>> {
+        let mut documents = Vec::with_capacity(sources.len());
+        for (index, source) in sources.iter().enumerate() {
+            documents.push(self.parse_document_with_source_id(
+                SourceId::new(index),
+                Some(Cow::Borrowed(source.name)),
+                source.input,
+            )?);
+        }
+
+        Ok(ParsedCorpus::from_documents(documents))
     }
 
     /// Stream parsed source-order events to a callback.
@@ -426,7 +453,7 @@ impl Parser {
     where
         F: FnMut(ParseEvent<'a>) -> Result<ParseFlow>,
     {
-        self.parse_source_events_with_source(None, input, on_event)
+        self.parse_source_events_with_source(SourceId::new(0), None, input, on_event)
     }
 
     /// Stream parsed source-order events from a named source.
@@ -440,11 +467,65 @@ impl Parser {
     where
         F: FnMut(ParseEvent<'a>) -> Result<ParseFlow>,
     {
-        self.parse_source_events_with_source(Some(source_name.into()), input, on_event)
+        self.parse_source_events_with_source(
+            SourceId::new(0),
+            Some(source_name.into()),
+            input,
+            on_event,
+        )
+    }
+
+    /// Stream events from multiple named in-memory sources in corpus order.
+    pub fn parse_corpus_events<'a, F>(
+        &self,
+        sources: &[CorpusSource<'a>],
+        mut on_event: F,
+    ) -> Result<StreamingSummary>
+    where
+        F: FnMut(CorpusEvent<'a>) -> Result<ParseFlow>,
+    {
+        let mut summary = StreamingSummary::default();
+
+        for (index, source) in sources.iter().enumerate() {
+            if summary.stopped {
+                break;
+            }
+
+            let source_id = SourceId::new(index);
+            let parsed_source = ParsedSource {
+                id: source_id,
+                name: Some(Cow::Borrowed(source.name)),
+            };
+            if on_event(CorpusEvent::SourceStart(parsed_source.clone()))? == ParseFlow::Stop {
+                summary.stopped = true;
+                break;
+            }
+
+            let source_summary = self.parse_source_events_with_source(
+                source_id,
+                Some(Cow::Borrowed(source.name)),
+                source.input,
+                |event| {
+                    on_event(CorpusEvent::Event {
+                        source: source_id,
+                        event: Box::new(event),
+                    })
+                },
+            )?;
+            merge_streaming_summary(&mut summary, source_summary);
+
+            if on_event(CorpusEvent::SourceEnd(parsed_source))? == ParseFlow::Stop {
+                summary.stopped = true;
+            }
+        }
+
+        summary.finalize_status();
+        Ok(summary)
     }
 
     fn parse_source_events_with_source<'a, F>(
         &self,
+        source_id: SourceId,
         source_name: Option<Cow<'a, str>>,
         input: &'a str,
         mut on_event: F,
@@ -452,7 +533,7 @@ impl Parser {
     where
         F: FnMut(ParseEvent<'a>) -> Result<ParseFlow>,
     {
-        let source_map = SourceMap::new(Some(SourceId::new(0)), source_name, input);
+        let source_map = SourceMap::new(Some(source_id), source_name, input);
         let mut summary = StreamingSummary::default();
 
         if self.tolerant {
@@ -642,12 +723,12 @@ impl Parser {
         Ok(())
     }
 
-    fn parse_document_with_source<'a>(
+    fn parse_document_with_source_id<'a>(
         &self,
+        source_id: SourceId,
         source_name: Option<Cow<'a, str>>,
         input: &'a str,
     ) -> Result<ParsedDocument<'a>> {
-        let source_id = SourceId::new(0);
         let source_map = SourceMap::new(Some(source_id), source_name.clone(), input);
         let sources = vec![ParsedSource {
             id: source_id,

@@ -489,6 +489,43 @@ fn bench_memory_efficiency(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_corpus_parsing(c: &mut Criterion) {
+    use bibtex_parser::{CorpusSource, Library};
+
+    let source_texts = [
+        extract_entries(TUGBOAT_BIB, 250),
+        extract_entries(TUGBOAT_BIB, 500),
+        extract_entries(TUGBOAT_BIB, 750),
+        extract_entries(TUGBOAT_BIB, 1000),
+    ];
+    let source_names = ["a.bib", "b.bib", "c.bib", "d.bib"];
+    let sources = source_names
+        .iter()
+        .zip(source_texts.iter())
+        .map(|(name, input)| CorpusSource::new(name, input))
+        .collect::<Vec<_>>();
+    let total_bytes = source_texts.iter().map(String::len).sum::<usize>() as u64;
+
+    let mut group = c.benchmark_group("corpus");
+    group.measurement_time(Duration::from_secs(15));
+    group.warm_up_time(Duration::from_secs(6));
+    group.sample_size(120);
+    group.throughput(Throughput::Bytes(total_bytes));
+
+    stabilize_system();
+
+    let parser = Library::parser();
+    group.bench_function("parse_sources", |b| {
+        b.iter(|| {
+            let corpus = parser.parse_sources(black_box(&sources)).unwrap();
+            black_box(&corpus);
+            assert!(!corpus.documents().is_empty());
+        });
+    });
+
+    group.finish();
+}
+
 /// Extract first N entries from BibTeX string
 fn extract_entries(input: &str, max_entries: usize) -> String {
     let mut result = String::with_capacity(input.len() / 10);
@@ -558,7 +595,7 @@ criterion_group! {
         .significance_level(0.02)
         .confidence_level(0.98)
         .noise_threshold(0.03);
-    targets = bench_parser_comparison, bench_critical_operations, bench_memory_efficiency
+    targets = bench_parser_comparison, bench_critical_operations, bench_memory_efficiency, bench_corpus_parsing
 }
 
 criterion_main!(benches);

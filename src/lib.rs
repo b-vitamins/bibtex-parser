@@ -125,6 +125,7 @@
     clippy::multiple_crate_versions
 )]
 
+pub mod corpus;
 pub mod document;
 pub mod error;
 pub mod model;
@@ -137,6 +138,9 @@ pub mod latex_unicode;
 mod database;
 mod writer;
 
+pub use corpus::{
+    CorpusEvent, CorpusSource, DuplicateKeyGroup, DuplicateKeyOccurrence, ParsedCorpus,
+};
 pub use database::{
     Block, Comment, FailedBlock, FieldNameCase, FieldNormalizeOptions, IssueSummary, Library,
     LibraryBuilder, LibraryStats, MonthStyle, Parser, Preamble, SortOptions, StringDefinition,
@@ -168,11 +172,12 @@ pub mod prelude {
     pub use crate::{
         canonical_biblatex_field_alias, classify_resource_field, document_to_string,
         normalize_biblatex_field_name, normalize_doi, normalize_field_name_ascii, parse_bibtex,
-        parse_date_parts, parse_names, selected_entries_to_string, Block, Comment, DateParseError,
-        DateParts, Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticTarget, Entry,
-        EntryDelimiter, EntryType, Error, ExpansionOptions, FailedBlock, Field, FieldNameCase,
+        parse_date_parts, parse_names, selected_entries_to_string, Block, Comment, CorpusEvent,
+        CorpusSource, DateParseError, DateParts, Diagnostic, DiagnosticCode, DiagnosticSeverity,
+        DiagnosticTarget, DuplicateKeyGroup, DuplicateKeyOccurrence, Entry, EntryDelimiter,
+        EntryType, Error, ExpansionOptions, FailedBlock, Field, FieldNameCase,
         FieldNormalizeOptions, IssueSummary, Library, LibraryBuilder, LibraryStats, MonthStyle,
-        ParseEvent, ParseFlow, ParseStatus, ParseSummary, ParsedBlock, ParsedComment,
+        ParseEvent, ParseFlow, ParseStatus, ParseSummary, ParsedBlock, ParsedComment, ParsedCorpus,
         ParsedDocument, ParsedEntry, ParsedEntryStatus, ParsedFailedBlock, ParsedField, ParsedItem,
         ParsedPreamble, ParsedSource, ParsedString, ParsedValue, Parser, PersonName, Preamble,
         RawWriteMode, ResourceField, ResourceKind, Result, SortOptions, SourceId, SourceMap,
