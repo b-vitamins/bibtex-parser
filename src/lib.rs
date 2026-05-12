@@ -83,6 +83,31 @@
 //! assert!(String::from_utf8(output).unwrap().contains("@article{paper"));
 //! # Ok::<(), bibtex_parser::Error>(())
 //! ```
+//!
+//! ## `Library` Versus `ParsedDocument`
+//!
+//! Use [`Library`] when application code wants structured bibliography data.
+//! Use [`ParsedDocument`] when tooling needs source-order blocks, diagnostics,
+//! partial results, or source-preserving metadata.
+//!
+//! ```
+//! use bibtex_parser::{ParsedBlock, Parser};
+//!
+//! let input = r#"
+//!     % retained comment
+//!     @article{paper, title = "Fast BibTeX"}
+//! "#;
+//!
+//! let document = Parser::new()
+//!     .capture_source()
+//!     .parse_document(input)?;
+//!
+//! assert_eq!(document.library().entries().len(), 1);
+//! assert_eq!(document.entries()[0].key(), "paper");
+//! assert!(matches!(document.blocks()[0], ParsedBlock::Comment(0)));
+//! assert!(document.entries()[0].source.is_some());
+//! # Ok::<(), bibtex_parser::Error>(())
+//! ```
 
 #![forbid(unsafe_code)]
 #![warn(
@@ -100,6 +125,7 @@
     clippy::multiple_crate_versions
 )]
 
+pub mod document;
 pub mod error;
 pub mod model;
 pub mod parser;
@@ -115,6 +141,11 @@ pub use database::{
     LibraryBuilder, LibraryStats, MonthStyle, Parser, Preamble, SortOptions, StringDefinition,
     ValidationReport,
 };
+pub use document::{
+    Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticTarget, ParseStatus, ParsedBlock,
+    ParsedComment, ParsedDocument, ParsedEntry, ParsedEntryStatus, ParsedFailedBlock, ParsedField,
+    ParsedPreamble, ParsedSource, ParsedString, ParsedValue,
+};
 pub use error::{Error, Result, SourceSpan};
 pub use model::{
     normalize_doi, parse_names, Entry, EntryType, Field, PersonName, ValidationError,
@@ -126,11 +157,14 @@ pub use writer::{to_file, to_string, Writer, WriterConfig};
 /// Re-export of common parser functions
 pub mod prelude {
     pub use crate::{
-        normalize_doi, parse_bibtex, parse_names, Block, Comment, Entry, EntryType, Error,
-        FailedBlock, Field, FieldNameCase, FieldNormalizeOptions, IssueSummary, Library,
-        LibraryBuilder, LibraryStats, MonthStyle, ParsedItem, Parser, PersonName, Preamble, Result,
-        SortOptions, SourceSpan, StringDefinition, ValidationError, ValidationLevel,
-        ValidationReport, ValidationSeverity, Value, Writer, WriterConfig,
+        normalize_doi, parse_bibtex, parse_names, Block, Comment, Diagnostic, DiagnosticCode,
+        DiagnosticSeverity, DiagnosticTarget, Entry, EntryType, Error, FailedBlock, Field,
+        FieldNameCase, FieldNormalizeOptions, IssueSummary, Library, LibraryBuilder, LibraryStats,
+        MonthStyle, ParseStatus, ParsedBlock, ParsedComment, ParsedDocument, ParsedEntry,
+        ParsedEntryStatus, ParsedFailedBlock, ParsedField, ParsedItem, ParsedPreamble,
+        ParsedSource, ParsedString, ParsedValue, Parser, PersonName, Preamble, Result, SortOptions,
+        SourceSpan, StringDefinition, ValidationError, ValidationLevel, ValidationReport,
+        ValidationSeverity, Value, Writer, WriterConfig,
     };
 }
 

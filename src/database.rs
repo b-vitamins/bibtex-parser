@@ -1,7 +1,8 @@
 //! BibTeX library representation
 
 use crate::{
-    normalize_doi, Entry, Error, Result, SourceSpan, ValidationError, ValidationLevel, Value,
+    normalize_doi, Entry, Error, ParsedDocument, Result, SourceSpan, ValidationError,
+    ValidationLevel, Value,
 };
 use ahash::AHashMap;
 use memchr::memchr;
@@ -390,6 +391,16 @@ impl Parser {
         }
     }
 
+    /// Parse a single input string into the richer document model.
+    ///
+    /// Use this when a caller needs source-order blocks, diagnostics, raw-text
+    /// slots, or partial parse results. Use [`Self::parse`] for the compact
+    /// [`Library`] API.
+    #[inline]
+    pub fn parse_document<'a>(&self, input: &'a str) -> Result<ParsedDocument<'a>> {
+        self.parse(input).map(ParsedDocument::from_library)
+    }
+
     /// Parse multiple files in parallel
     pub fn parse_files<P: AsRef<Path> + Sync>(&self, paths: &[P]) -> Result<Library<'static>> {
         #[cfg(feature = "parallel")]
@@ -464,7 +475,7 @@ pub enum Block<'lib, 'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BlockKind {
+pub enum BlockKind {
     Entry(usize),
     String(usize),
     Preamble(usize),
@@ -1299,6 +1310,18 @@ impl<'a> Library<'a> {
                 BlockKind::Failed(index) => Block::Failed(&self.failed_blocks[index]),
             })
             .collect()
+    }
+
+    #[must_use]
+    pub(crate) fn entry_source(&self, index: usize) -> Option<SourceSpan> {
+        self.entry_sources
+            .as_ref()
+            .and_then(|sources| sources.get(index).copied().flatten())
+    }
+
+    #[must_use]
+    pub(crate) fn block_kinds(&self) -> &[BlockKind] {
+        &self.block_order
     }
 
     /// Find entries by key
