@@ -36,12 +36,38 @@ pub enum DiagnosticSeverity {
 }
 
 /// Stable machine-readable diagnostic code.
+///
+/// The initial parser diagnostic codes are:
+/// `missing-entry-key`, `missing-field-separator`, `expected-field-name`,
+/// `empty-field-value`, `expected-value-atom`, `bad-field-boundary`,
+/// `bad-value-boundary`, `unclosed-entry`, `unclosed-braced-value`, and
+/// `unclosed-quoted-value`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DiagnosticCode(Cow<'static, str>);
 
 impl DiagnosticCode {
     /// Generic parse error code used before finer-grained recovery classifies a failure.
     pub const PARSE_ERROR: Self = Self(Cow::Borrowed("parse-error"));
+    /// Entry body did not contain a citation key.
+    pub const MISSING_ENTRY_KEY: Self = Self(Cow::Borrowed("missing-entry-key"));
+    /// Expected a comma after an entry key or `=` after a field name.
+    pub const MISSING_FIELD_SEPARATOR: Self = Self(Cow::Borrowed("missing-field-separator"));
+    /// Expected a field name inside an entry body.
+    pub const EXPECTED_FIELD_NAME: Self = Self(Cow::Borrowed("expected-field-name"));
+    /// Field separator was present but no value was provided.
+    pub const EMPTY_FIELD_VALUE: Self = Self(Cow::Borrowed("empty-field-value"));
+    /// Expected a literal, number, variable, quoted value, or braced value.
+    pub const EXPECTED_VALUE_ATOM: Self = Self(Cow::Borrowed("expected-value-atom"));
+    /// Expected a comma or entry close after a field value.
+    pub const BAD_FIELD_BOUNDARY: Self = Self(Cow::Borrowed("bad-field-boundary"));
+    /// Expected a value atom after a concatenation operator.
+    pub const BAD_VALUE_BOUNDARY: Self = Self(Cow::Borrowed("bad-value-boundary"));
+    /// Entry ended before its closing delimiter was found.
+    pub const UNCLOSED_ENTRY: Self = Self(Cow::Borrowed("unclosed-entry"));
+    /// Braced field value ended before its closing brace was found.
+    pub const UNCLOSED_BRACED_VALUE: Self = Self(Cow::Borrowed("unclosed-braced-value"));
+    /// Quoted field value ended before its closing quote was found.
+    pub const UNCLOSED_QUOTED_VALUE: Self = Self(Cow::Borrowed("unclosed-quoted-value"));
 
     /// Create a borrowed static diagnostic code.
     #[must_use]
@@ -108,6 +134,8 @@ pub struct Diagnostic {
     pub target: DiagnosticTarget,
     /// Source location, when available.
     pub source: Option<SourceSpan>,
+    /// Short source context suitable for display, when available.
+    pub snippet: Option<String>,
 }
 
 impl Diagnostic {
@@ -125,8 +153,35 @@ impl Diagnostic {
             message: message.into(),
             target,
             source,
+            snippet: None,
         }
     }
+
+    /// Attach source context to this diagnostic.
+    #[must_use]
+    pub fn with_snippet(mut self, snippet: impl Into<String>) -> Self {
+        self.snippet = Some(snippet.into());
+        self
+    }
+}
+
+/// Summary counts for a parsed document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParseSummary {
+    /// File-level parse status.
+    pub status: ParseStatus,
+    /// Number of parsed entries.
+    pub entries: usize,
+    /// Number of warning diagnostics.
+    pub warnings: usize,
+    /// Number of error diagnostics.
+    pub errors: usize,
+    /// Number of informational diagnostics.
+    pub infos: usize,
+    /// Number of failed blocks.
+    pub failed_blocks: usize,
+    /// Number of entries recovered as partial entries.
+    pub recovered_blocks: usize,
 }
 
 /// Source metadata associated with a parsed document.
@@ -396,13 +451,12 @@ pub struct ParsedFailedBlock<'a> {
 impl<'a> ParsedFailedBlock<'a> {
     /// Create failed-block metadata from a retained failed block.
     #[must_use]
-    pub fn from_failed_block(index: usize, failed: FailedBlock<'a>) -> Self {
-        let diagnostic = Diagnostic::error(
-            DiagnosticCode::PARSE_ERROR,
-            failed.error.clone(),
-            DiagnosticTarget::FailedBlock(index),
-            failed.source,
-        );
+    pub fn from_failed_block(
+        index: usize,
+        failed: FailedBlock<'a>,
+        source_map: Option<&SourceMap<'_>>,
+    ) -> Self {
+        let diagnostic = diagnostic_for_failed_block(index, &failed, source_map);
 
         Self {
             raw: failed.raw,
@@ -445,6 +499,14 @@ impl<'a> ParsedDocument<'a> {
         library: Library<'a>,
         sources: Vec<ParsedSource<'a>>,
     ) -> Self {
+        Self::from_library_with_source_map(library, sources, None)
+    }
+
+    pub(crate) fn from_library_with_source_map(
+        library: Library<'a>,
+        sources: Vec<ParsedSource<'a>>,
+        source_map: Option<&SourceMap<'_>>,
+    ) -> Self {
         let entries: Vec<ParsedEntry<'a>> = library
             .entries()
             .iter()
@@ -475,7 +537,7 @@ impl<'a> ParsedDocument<'a> {
             .iter()
             .cloned()
             .enumerate()
-            .map(|(index, failed)| ParsedFailedBlock::from_failed_block(index, failed))
+            .map(|(index, failed)| ParsedFailedBlock::from_failed_block(index, failed, source_map))
             .collect::<Vec<_>>();
         let diagnostics = failed_blocks
             .iter()
@@ -539,6 +601,61 @@ impl<'a> ParsedDocument<'a> {
             field.name_source = Some(source_map.span(location.name.0, location.name.1));
             field.value.source = Some(source_map.span(location.value.0, location.value.1));
             field.value_source = field.value.source;
+        }
+    }
+
+    pub(crate) fn failed_from_error(
+        sources: Vec<ParsedSource<'a>>,
+        source_map: &SourceMap<'a>,
+        error: &crate::Error,
+    ) -> Self {
+        let (byte, message, fallback_snippet) = match error {
+            crate::Error::ParseError {
+                line,
+                column,
+                message,
+                snippet,
+            } => (
+                source_map.byte_at_line_column(*line, *column).unwrap_or(0),
+                message.clone(),
+                snippet.clone(),
+            ),
+            other => (0, other.to_string(), None),
+        };
+        let raw = source_map.input().get(byte..).unwrap_or_default();
+        let failed_source = source_map.span(byte, source_map.len());
+        let failed = FailedBlock {
+            raw: Cow::Borrowed(raw),
+            error: message.clone(),
+            source: Some(failed_source),
+        };
+        let diagnostic = diagnostic_for_raw_failure(
+            0,
+            raw,
+            message,
+            Some(failed_source),
+            Some(source_map),
+            byte,
+            fallback_snippet,
+        );
+        let failed_block = ParsedFailedBlock {
+            raw: failed.raw,
+            error: failed.error,
+            source: failed.source,
+            diagnostics: vec![diagnostic.clone()],
+        };
+
+        Self {
+            library: Library::new(),
+            sources,
+            entries: Vec::new(),
+            strings: Vec::new(),
+            preambles: Vec::new(),
+            comments: Vec::new(),
+            failed_blocks: vec![failed_block],
+            blocks: vec![ParsedBlock::Failed(0)],
+            diagnostics: vec![diagnostic],
+            status: ParseStatus::Failed,
         }
     }
 
@@ -607,6 +724,36 @@ impl<'a> ParsedDocument<'a> {
     pub const fn status(&self) -> ParseStatus {
         self.status
     }
+
+    /// Return summary counts for the parsed document.
+    #[must_use]
+    pub fn summary(&self) -> ParseSummary {
+        let mut warnings = 0;
+        let mut errors = 0;
+        let mut infos = 0;
+
+        for diagnostic in &self.diagnostics {
+            match diagnostic.severity {
+                DiagnosticSeverity::Error => errors += 1,
+                DiagnosticSeverity::Warning => warnings += 1,
+                DiagnosticSeverity::Info => infos += 1,
+            }
+        }
+
+        ParseSummary {
+            status: self.status,
+            entries: self.entries.len(),
+            warnings,
+            errors,
+            infos,
+            failed_blocks: self.failed_blocks.len(),
+            recovered_blocks: self
+                .entries
+                .iter()
+                .filter(|entry| entry.status == ParsedEntryStatus::Partial)
+                .count(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -621,6 +768,340 @@ struct FieldLocations {
     whole: (usize, usize),
     name: (usize, usize),
     value: (usize, usize),
+}
+
+#[derive(Debug, Clone)]
+struct FailureClassification {
+    code: DiagnosticCode,
+    range: (usize, usize),
+}
+
+fn diagnostic_for_failed_block(
+    index: usize,
+    failed: &FailedBlock<'_>,
+    source_map: Option<&SourceMap<'_>>,
+) -> Diagnostic {
+    let absolute_start = failed.source.map_or(0, |source| source.byte_start);
+    diagnostic_for_raw_failure(
+        index,
+        &failed.raw,
+        failed.error.clone(),
+        failed.source,
+        source_map,
+        absolute_start,
+        None,
+    )
+}
+
+fn diagnostic_for_raw_failure(
+    index: usize,
+    raw: &str,
+    fallback_message: String,
+    fallback_source: Option<SourceSpan>,
+    source_map: Option<&SourceMap<'_>>,
+    absolute_start: usize,
+    fallback_snippet: Option<String>,
+) -> Diagnostic {
+    let classification = classify_failure(raw);
+    let source = source_map
+        .map(|map| {
+            map.span(
+                absolute_start + classification.range.0,
+                absolute_start + classification.range.1,
+            )
+        })
+        .or(fallback_source);
+    let snippet = source
+        .and_then(|span| source_map.and_then(|map| map.snippet(span, 160)))
+        .or(fallback_snippet)
+        .or_else(|| Some(raw.chars().take(160).collect()));
+
+    let mut diagnostic = Diagnostic::error(
+        classification.code.clone(),
+        diagnostic_message(&classification.code, fallback_message),
+        DiagnosticTarget::FailedBlock(index),
+        source,
+    );
+    diagnostic.snippet = snippet;
+    diagnostic
+}
+
+fn diagnostic_message(code: &DiagnosticCode, fallback: String) -> String {
+    match code.as_str() {
+        "missing-entry-key" => "missing citation key".to_string(),
+        "missing-field-separator" => "missing field separator".to_string(),
+        "expected-field-name" => "expected field name".to_string(),
+        "empty-field-value" => "empty field value".to_string(),
+        "expected-value-atom" => "expected value atom".to_string(),
+        "bad-field-boundary" => "expected comma or entry close after field value".to_string(),
+        "bad-value-boundary" => "expected value after concatenation operator".to_string(),
+        "unclosed-entry" => "entry ended before its closing delimiter".to_string(),
+        "unclosed-braced-value" => "braced value ended before its closing brace".to_string(),
+        "unclosed-quoted-value" => "quoted value ended before its closing quote".to_string(),
+        _ => fallback,
+    }
+}
+
+fn classify_failure(raw: &str) -> FailureClassification {
+    classify_failure_inner(raw).unwrap_or_else(|| FailureClassification {
+        code: DiagnosticCode::PARSE_ERROR,
+        range: empty_range(0),
+    })
+}
+
+fn classify_failure_inner(raw: &str) -> Option<FailureClassification> {
+    let bytes = raw.as_bytes();
+    let header = match parse_failure_header(bytes)? {
+        Ok(header) => header,
+        Err(classification) => return Some(classification),
+    };
+
+    classify_failure_fields(bytes, header.pos, header.closing)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FailureHeader {
+    pos: usize,
+    closing: u8,
+}
+
+fn parse_failure_header(bytes: &[u8]) -> Option<Result<FailureHeader, FailureClassification>> {
+    let mut pos = bytes.iter().position(|byte| *byte == b'@')?;
+    pos += 1;
+    pos += scan_identifier(&bytes[pos..]);
+    pos = skip_ascii_whitespace(bytes, pos);
+
+    let opening = *bytes.get(pos)?;
+    let closing = match opening {
+        b'{' => b'}',
+        b'(' => b')',
+        _ => {
+            return Some(Err(classification(
+                DiagnosticCode::UNCLOSED_ENTRY,
+                pos,
+                bytes.len(),
+            )));
+        }
+    };
+    pos += 1;
+    pos = skip_ascii_whitespace(bytes, pos);
+
+    let key_len = scan_identifier(&bytes[pos..]);
+    if key_len == 0 {
+        return Some(Err(classification(
+            DiagnosticCode::MISSING_ENTRY_KEY,
+            pos,
+            bytes.len(),
+        )));
+    }
+    pos += key_len;
+    pos = skip_ascii_whitespace(bytes, pos);
+    if bytes.get(pos) != Some(&b',') {
+        return Some(Err(classification(
+            DiagnosticCode::MISSING_FIELD_SEPARATOR,
+            pos,
+            bytes.len(),
+        )));
+    }
+    pos += 1;
+
+    Some(Ok(FailureHeader { pos, closing }))
+}
+
+fn classify_failure_fields(
+    bytes: &[u8],
+    mut pos: usize,
+    closing: u8,
+) -> Option<FailureClassification> {
+    loop {
+        pos = skip_ascii_whitespace(bytes, pos);
+        let Some(&byte) = bytes.get(pos) else {
+            return Some(classification(
+                DiagnosticCode::UNCLOSED_ENTRY,
+                pos,
+                bytes.len(),
+            ));
+        };
+        if byte == closing {
+            return None;
+        }
+        if byte == b'@' {
+            return Some(classification(
+                DiagnosticCode::UNCLOSED_ENTRY,
+                pos,
+                bytes.len(),
+            ));
+        }
+
+        let field_name_len = scan_identifier(&bytes[pos..]);
+        if field_name_len == 0 {
+            return Some(classification(
+                DiagnosticCode::EXPECTED_FIELD_NAME,
+                pos,
+                bytes.len(),
+            ));
+        }
+        pos += field_name_len;
+        pos = skip_ascii_whitespace(bytes, pos);
+        if bytes.get(pos) != Some(&b'=') {
+            return Some(classification(
+                DiagnosticCode::MISSING_FIELD_SEPARATOR,
+                pos,
+                bytes.len(),
+            ));
+        }
+        pos += 1;
+        pos = skip_ascii_whitespace(bytes, pos);
+
+        let Some(&value_start) = bytes.get(pos) else {
+            return Some(classification(
+                DiagnosticCode::EMPTY_FIELD_VALUE,
+                pos,
+                bytes.len(),
+            ));
+        };
+        if value_start == b',' || value_start == closing {
+            return Some(classification(
+                DiagnosticCode::EMPTY_FIELD_VALUE,
+                pos,
+                bytes.len(),
+            ));
+        }
+        if value_start == b'#' {
+            return Some(classification(
+                DiagnosticCode::EXPECTED_VALUE_ATOM,
+                pos,
+                bytes.len(),
+            ));
+        }
+
+        match scan_value_sequence(bytes, pos, closing) {
+            Ok(next_pos) => pos = next_pos,
+            Err(classification) => return Some(classification),
+        }
+    }
+}
+
+fn scan_value_sequence(
+    bytes: &[u8],
+    mut pos: usize,
+    closing: u8,
+) -> Result<usize, FailureClassification> {
+    loop {
+        pos = skip_ascii_whitespace(bytes, pos);
+        let atom_start = pos;
+        let Some(&byte) = bytes.get(pos) else {
+            return Err(classification(
+                DiagnosticCode::EXPECTED_VALUE_ATOM,
+                pos,
+                bytes.len(),
+            ));
+        };
+
+        match byte {
+            b'"' => {
+                pos = skip_quoted_checked(bytes, pos + 1).ok_or_else(|| {
+                    classification(
+                        DiagnosticCode::UNCLOSED_QUOTED_VALUE,
+                        atom_start,
+                        bytes.len(),
+                    )
+                })?;
+            }
+            b'{' => {
+                pos = skip_braced_checked(bytes, pos + 1).ok_or_else(|| {
+                    classification(
+                        DiagnosticCode::UNCLOSED_BRACED_VALUE,
+                        atom_start,
+                        bytes.len(),
+                    )
+                })?;
+            }
+            b',' => {
+                return Err(classification(
+                    DiagnosticCode::EMPTY_FIELD_VALUE,
+                    pos,
+                    bytes.len(),
+                ));
+            }
+            b if b == closing => {
+                return Err(classification(
+                    DiagnosticCode::EMPTY_FIELD_VALUE,
+                    pos,
+                    bytes.len(),
+                ));
+            }
+            b'#' => {
+                return Err(classification(
+                    DiagnosticCode::EXPECTED_VALUE_ATOM,
+                    pos,
+                    bytes.len(),
+                ));
+            }
+            _ => {
+                let identifier_len = scan_identifier(&bytes[pos..]);
+                if identifier_len == 0 {
+                    return Err(classification(
+                        DiagnosticCode::EXPECTED_VALUE_ATOM,
+                        pos,
+                        bytes.len(),
+                    ));
+                }
+                pos += identifier_len;
+            }
+        }
+
+        pos = skip_ascii_whitespace(bytes, pos);
+        let Some(&boundary) = bytes.get(pos) else {
+            return Err(classification(
+                DiagnosticCode::UNCLOSED_ENTRY,
+                pos,
+                bytes.len(),
+            ));
+        };
+
+        match boundary {
+            b'#' => {
+                let hash = pos;
+                pos += 1;
+                pos = skip_ascii_whitespace(bytes, pos);
+                if matches!(bytes.get(pos), None | Some(b',' | b'#'))
+                    || bytes.get(pos) == Some(&closing)
+                {
+                    return Err(classification(
+                        DiagnosticCode::BAD_VALUE_BOUNDARY,
+                        hash,
+                        bytes.len(),
+                    ));
+                }
+            }
+            b',' => return Ok(pos + 1),
+            b if b == closing => return Ok(pos),
+            _ => {
+                return Err(classification(
+                    DiagnosticCode::BAD_FIELD_BOUNDARY,
+                    pos,
+                    bytes.len(),
+                ));
+            }
+        }
+    }
+}
+
+fn classification(code: DiagnosticCode, pos: usize, len: usize) -> FailureClassification {
+    FailureClassification {
+        code,
+        range: single_byte_range(pos, len),
+    }
+}
+
+const fn empty_range(pos: usize) -> (usize, usize) {
+    (pos, pos)
+}
+
+fn single_byte_range(pos: usize, len: usize) -> (usize, usize) {
+    let start = pos.min(len);
+    (start, (start + 1).min(len))
 }
 
 fn locate_entry(raw: &str, absolute_start: usize, field_count: usize) -> Option<EntryLocations> {
@@ -772,6 +1253,26 @@ fn skip_braced(bytes: &[u8], mut pos: usize) -> usize {
     pos
 }
 
+fn skip_braced_checked(bytes: &[u8], mut pos: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    while let Some(&byte) = bytes.get(pos) {
+        match byte {
+            b'\\' => pos = (pos + 2).min(bytes.len()),
+            b'{' => {
+                depth += 1;
+                pos += 1;
+            }
+            b'}' if depth == 0 => return Some(pos + 1),
+            b'}' => {
+                depth -= 1;
+                pos += 1;
+            }
+            _ => pos += 1,
+        }
+    }
+    None
+}
+
 fn skip_quoted(bytes: &[u8], mut pos: usize) -> usize {
     while let Some(&byte) = bytes.get(pos) {
         match byte {
@@ -781,4 +1282,15 @@ fn skip_quoted(bytes: &[u8], mut pos: usize) -> usize {
         }
     }
     pos
+}
+
+fn skip_quoted_checked(bytes: &[u8], mut pos: usize) -> Option<usize> {
+    while let Some(&byte) = bytes.get(pos) {
+        match byte {
+            b'\\' => pos = (pos + 2).min(bytes.len()),
+            b'"' => return Some(pos + 1),
+            _ => pos += 1,
+        }
+    }
+    None
 }

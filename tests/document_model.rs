@@ -76,7 +76,10 @@ fn parsed_document_exposes_failed_blocks_and_diagnostics() {
         document.diagnostics()[0].severity,
         DiagnosticSeverity::Error
     );
-    assert_eq!(document.diagnostics()[0].code, DiagnosticCode::PARSE_ERROR);
+    assert_eq!(
+        document.diagnostics()[0].code,
+        DiagnosticCode::UNCLOSED_ENTRY
+    );
     assert_eq!(
         document.diagnostics()[0].target,
         DiagnosticTarget::FailedBlock(0)

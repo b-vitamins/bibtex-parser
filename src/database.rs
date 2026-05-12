@@ -404,10 +404,20 @@ impl Parser {
         let raw_items = if self.tolerant {
             Library::parse_tolerant_raw_items(input, true, &source_map)
         } else {
-            Library::parse_raw_items_with_source(input, &source_map)?
+            match Library::parse_raw_items_with_source(input, &source_map) {
+                Ok(raw_items) => raw_items,
+                Err(error) => {
+                    return Ok(ParsedDocument::failed_from_error(
+                        sources,
+                        &source_map,
+                        &error,
+                    ));
+                }
+            }
         };
         let library = Library::from_raw_items(raw_items.clone())?;
-        let mut document = ParsedDocument::from_library_with_sources(library, sources);
+        let mut document =
+            ParsedDocument::from_library_with_source_map(library, sources, Some(&source_map));
         let mut entry_index = 0;
         for raw_item in &raw_items {
             if let RawBuildItem::Parsed(crate::parser::ParsedItem::Entry(_), _, raw) = raw_item {

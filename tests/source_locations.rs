@@ -124,9 +124,11 @@ fn diagnostics_carry_named_source_locations_when_available() {
 
     assert_eq!(span.source, Some(SourceId::new(0)));
     assert_eq!(document.sources()[0].name.as_deref(), Some("broken.bib"));
-    assert_eq!((span.line, span.column), (1, 1));
-    assert_eq!(
-        &input[span.byte_start..span.byte_end],
-        "@article{bad, title = \"Missing close\"\n"
-    );
+    assert_eq!((span.line, span.column), (2, 1));
+    assert_eq!(span.byte_start, span.byte_end);
+    assert!(diagnostic
+        .snippet
+        .as_deref()
+        .unwrap()
+        .contains("@article{bad"));
 }

@@ -60,6 +60,12 @@ impl<'a> SourceMap<'a> {
         self.input.len()
     }
 
+    /// Return the underlying source text.
+    #[must_use]
+    pub const fn input(&self) -> &'a str {
+        self.input
+    }
+
     /// Return true when this source is empty.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
@@ -80,6 +86,38 @@ impl<'a> SourceMap<'a> {
         let line_start = self.line_starts[line_index];
         let column = self.input[line_start..byte].chars().count() + 1;
         (line_index + 1, column)
+    }
+
+    /// Return the byte offset for a one-based line and column.
+    ///
+    /// Columns count Unicode scalar values. A column one past the end of the
+    /// line resolves to the line-end byte offset.
+    #[must_use]
+    pub fn byte_at_line_column(&self, line: usize, column: usize) -> Option<usize> {
+        if line == 0 || column == 0 {
+            return None;
+        }
+        let line_start = *self.line_starts.get(line - 1)?;
+        let line_end = self
+            .line_starts
+            .get(line)
+            .map_or(self.input.len(), |next| next.saturating_sub(1));
+        let line_text = self.input.get(line_start..line_end)?;
+        if column == 1 {
+            return Some(line_start);
+        }
+        let mut current_column = 1usize;
+        for (offset, _) in line_text.char_indices() {
+            if current_column == column {
+                return Some(line_start + offset);
+            }
+            current_column += 1;
+        }
+        if current_column == column {
+            Some(line_end)
+        } else {
+            None
+        }
     }
 
     /// Create a source span for a byte range.
@@ -103,5 +141,38 @@ impl<'a> SourceMap<'a> {
             return None;
         }
         self.input.get(span.byte_start..span.byte_end)
+    }
+
+    /// Return a short line-oriented snippet for a span.
+    #[must_use]
+    pub fn snippet(&self, span: SourceSpan, max_chars: usize) -> Option<String> {
+        if span.source.is_some() && span.source != self.source {
+            return None;
+        }
+
+        let anchor_start = if span.is_empty() && span.byte_start > 0 {
+            span.byte_start - 1
+        } else {
+            span.byte_start
+        };
+        let anchor_end = if span.is_empty() && span.byte_end > 0 {
+            span.byte_end - 1
+        } else {
+            span.byte_end
+        };
+
+        let start = self.input[..anchor_start]
+            .rfind('\n')
+            .map_or(0, |index| index + 1);
+        let end = self.input[anchor_end..]
+            .find('\n')
+            .map_or(self.input.len(), |index| anchor_end + index);
+        let snippet = self.input.get(start..end)?;
+
+        if snippet.chars().count() <= max_chars {
+            return Some(snippet.to_string());
+        }
+
+        Some(snippet.chars().take(max_chars).collect())
     }
 }
