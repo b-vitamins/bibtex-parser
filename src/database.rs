@@ -1,9 +1,12 @@
-//! BibTeX database representation
+//! BibTeX library representation
 
-use crate::{normalize_doi, Entry, Error, Result, ValidationError, ValidationLevel, Value};
+use crate::{
+    normalize_doi, Entry, Error, Result, SourceSpan, ValidationError, ValidationLevel, Value,
+};
 use ahash::AHashMap;
 use memchr::memchr;
 use std::borrow::Cow;
+use std::ops::Deref;
 use std::path::Path;
 
 #[cfg(feature = "parallel")]
@@ -142,23 +145,36 @@ fn get_month_expansion(name: &str) -> Option<&'static str> {
 
 #[inline]
 fn get_string_value<'map, 'a>(
-    strings: &'map AHashMap<Cow<'a, str>, Value<'a>>,
+    strings: &'map [StringDefinition<'a>],
+    string_lookup: &'map AHashMap<Cow<'a, str>, usize>,
     name: &str,
 ) -> Option<&'map Value<'a>> {
+    get_string_definition(strings, string_lookup, name).map(|definition| &definition.value)
+}
+
+#[inline]
+fn get_string_definition<'map, 'a>(
+    strings: &'map [StringDefinition<'a>],
+    string_lookup: &'map AHashMap<Cow<'a, str>, usize>,
+    name: &str,
+) -> Option<&'map StringDefinition<'a>> {
     if strings.len() <= SMALL_STRING_LOOKUP_LIMIT {
         strings
             .iter()
-            .find_map(|(key, value)| (key.as_ref() == name).then_some(value))
+            .rev()
+            .find(|definition| definition.name.as_ref() == name)
     } else {
-        strings.get(name)
+        string_lookup
+            .get(name)
+            .and_then(|&index| strings.get(index))
     }
 }
 
 #[inline]
-fn user_strings_shadow_month_constants(strings: &AHashMap<Cow<'_, str>, Value<'_>>) -> bool {
+fn user_strings_shadow_month_constants(strings: &[StringDefinition<'_>]) -> bool {
     strings
-        .keys()
-        .any(|name| get_month_expansion(name.as_ref()).is_some())
+        .iter()
+        .any(|definition| get_month_expansion(definition.name.as_ref()).is_some())
 }
 
 /// Check if a value contains any variables
@@ -208,19 +224,25 @@ fn starts_with_at_keyword(input: &[u8], keyword: &[u8]) -> bool {
     !is_identifier_char(input[keyword.len() + 1])
 }
 
-/// Fast pre-scan to detect whether the file might contain `@string` entries.
-///
-/// False positives are acceptable (we just take the slower path), but false
-/// negatives would be incorrect, so the check matches parser keyword rules.
-fn input_may_contain_string_definition(input: &str) -> bool {
+#[derive(Debug, Clone, Copy)]
+struct InputScan {
+    may_contain_string_definition: bool,
+    at_count: usize,
+}
+
+/// Fast pre-scan to detect `@string` entries and estimate block capacity.
+fn scan_input(input: &str) -> InputScan {
     let bytes = input.as_bytes();
     let mut pos = 0;
+    let mut at_count = 0;
+    let mut may_contain_string_definition = false;
 
     while pos < bytes.len() {
         if let Some(offset) = memchr(b'@', &bytes[pos..]) {
             let at = pos + offset;
+            at_count += 1;
             if starts_with_at_keyword(&bytes[at..], b"string") {
-                return true;
+                may_contain_string_definition = true;
             }
             pos = at + 1;
         } else {
@@ -228,7 +250,10 @@ fn input_may_contain_string_definition(input: &str) -> bool {
         }
     }
 
-    false
+    InputScan {
+        may_contain_string_definition,
+        at_count,
+    }
 }
 
 /// Detect whether a `@string` may appear after a regular entry.
@@ -266,14 +291,63 @@ fn input_may_have_late_string_definition(input: &str) -> bool {
     false
 }
 
-/// Parser configuration with builder pattern
-#[derive(Debug, Default)]
-pub struct ParseOptions {
-    threads: Option<usize>,
+fn source_span(input: &str, byte_start: usize, byte_end: usize) -> SourceSpan {
+    let (line, column) = source_position(input, byte_start);
+    SourceSpan::new(byte_start, byte_end, line, column)
 }
 
-impl ParseOptions {
-    /// Create new parse options
+fn source_position(input: &str, pos: usize) -> (usize, usize) {
+    let mut line = 1;
+    let mut column = 1;
+
+    for (byte_index, ch) in input.char_indices() {
+        if byte_index >= pos {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+    }
+
+    (line, column)
+}
+
+fn next_recovery_boundary(input: &str, start: usize) -> usize {
+    let bytes = input.as_bytes();
+    let mut pos = start.saturating_add(1);
+    while pos < bytes.len() {
+        if bytes[pos] == b'@' && line_prefix_is_whitespace(bytes, pos) {
+            return pos;
+        }
+        pos += 1;
+    }
+    input.len()
+}
+
+fn line_prefix_is_whitespace(bytes: &[u8], pos: usize) -> bool {
+    let line_start = bytes[..pos]
+        .iter()
+        .rposition(|byte| matches!(byte, b'\n' | b'\r'))
+        .map_or(0, |index| index + 1);
+
+    bytes[line_start..pos]
+        .iter()
+        .all(|byte| matches!(byte, b' ' | b'\t'))
+}
+
+/// Parser configuration.
+#[derive(Debug, Default, Clone)]
+pub struct Parser {
+    threads: Option<usize>,
+    tolerant: bool,
+    capture_source: bool,
+}
+
+impl Parser {
+    /// Create a new parser.
     #[must_use]
     #[inline]
     pub fn new() -> Self {
@@ -288,14 +362,36 @@ impl ParseOptions {
         self
     }
 
+    /// Continue after malformed blocks and collect diagnostics.
+    #[must_use]
+    #[inline]
+    pub const fn tolerant(mut self) -> Self {
+        self.tolerant = true;
+        self
+    }
+
+    /// Capture source spans for blocks.
+    #[must_use]
+    #[inline]
+    pub const fn capture_source(mut self) -> Self {
+        self.capture_source = true;
+        self
+    }
+
     /// Parse a single input string.
     #[inline]
-    pub fn parse<'a>(&self, input: &'a str) -> Result<Database<'a>> {
-        Database::parse_sequential(input)
+    pub fn parse<'a>(&self, input: &'a str) -> Result<Library<'a>> {
+        if self.tolerant {
+            Library::parse_tolerant(input, self.capture_source)
+        } else if self.capture_source {
+            Library::parse_with_spans(input)
+        } else {
+            Library::parse_sequential(input)
+        }
     }
 
     /// Parse multiple files in parallel
-    pub fn parse_files<P: AsRef<Path> + Sync>(&self, paths: &[P]) -> Result<Database<'static>> {
+    pub fn parse_files<P: AsRef<Path> + Sync>(&self, paths: &[P]) -> Result<Library<'static>> {
         #[cfg(feature = "parallel")]
         {
             if let Some(threads) = self.threads {
@@ -306,21 +402,19 @@ impl ParseOptions {
 
             let pool = self.build_thread_pool()?;
 
-            // Parse files in parallel
-            let databases: Result<Vec<_>> = pool.install(|| {
+            let libraries: Result<Vec<_>> = pool.install(|| {
                 paths
                     .par_iter()
                     .map(|path| {
                         let content = std::fs::read_to_string(path)?;
-                        let db = Database::parse_sequential(&content)?;
-                        Ok(db.into_owned())
+                        let library = Library::parse_sequential(&content)?;
+                        Ok(library.into_owned())
                     })
                     .collect()
             });
 
-            // Merge databases
-            let dbs = databases?;
-            Ok(Database::merge_databases_parallel(dbs))
+            let libraries = libraries?;
+            Ok(Library::merge_libraries_parallel(libraries))
         }
 
         #[cfg(not(feature = "parallel"))]
@@ -330,12 +424,12 @@ impl ParseOptions {
     }
 
     /// Sequential file parsing fallback
-    fn parse_files_sequential<P: AsRef<Path>>(paths: &[P]) -> Result<Database<'static>> {
-        let mut result = Database::new();
+    fn parse_files_sequential<P: AsRef<Path>>(paths: &[P]) -> Result<Library<'static>> {
+        let mut result = Library::new();
         for path in paths {
             let content = std::fs::read_to_string(path)?;
-            let db = Database::parse_sequential(&content)?;
-            result.merge(db.into_owned());
+            let library = Library::parse_sequential(&content)?;
+            result.merge(library.into_owned());
         }
         Ok(result)
     }
@@ -354,20 +448,310 @@ impl ParseOptions {
     }
 }
 
-/// A parsed BibTeX database
-#[derive(Debug, Clone, Default)]
-pub struct Database<'a> {
-    /// Bibliography entries
-    entries: Vec<Entry<'a>>,
-    /// String definitions
-    strings: AHashMap<Cow<'a, str>, Value<'a>>,
-    /// Preambles
-    preambles: Vec<Value<'a>>,
-    /// Comments
-    comments: Vec<Cow<'a, str>>,
+/// A high-level block in a parsed BibTeX library.
+#[derive(Debug, Clone, Copy)]
+pub enum Block<'lib, 'a> {
+    /// A regular bibliography entry.
+    Entry(&'lib Entry<'a>, Option<SourceSpan>),
+    /// A string definition.
+    String(&'lib StringDefinition<'a>),
+    /// A preamble block.
+    Preamble(&'lib Preamble<'a>),
+    /// A comment block.
+    Comment(&'lib Comment<'a>),
+    /// A malformed block retained by tolerant parsing.
+    Failed(&'lib FailedBlock<'a>),
 }
 
-impl<'a> Database<'a> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BlockKind {
+    Entry(usize),
+    String(usize),
+    Preamble(usize),
+    Comment(usize),
+    Failed(usize),
+}
+
+#[derive(Debug)]
+enum RawBuildItem<'a> {
+    Parsed(crate::parser::ParsedItem<'a>, SourceSpan),
+    Failed(FailedBlock<'a>),
+}
+
+/// A BibTeX string definition.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StringDefinition<'a> {
+    /// String variable name.
+    pub name: Cow<'a, str>,
+    /// Unexpanded string value.
+    pub value: Value<'a>,
+    /// Optional source location.
+    pub source: Option<SourceSpan>,
+}
+
+impl<'a> StringDefinition<'a> {
+    /// Create a string definition.
+    #[must_use]
+    pub const fn new(name: &'a str, value: Value<'a>) -> Self {
+        Self {
+            name: Cow::Borrowed(name),
+            value,
+            source: None,
+        }
+    }
+
+    /// Return the string name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Return the string value.
+    #[must_use]
+    pub const fn value(&self) -> &Value<'a> {
+        &self.value
+    }
+
+    /// Convert to an owned definition.
+    #[must_use]
+    pub fn into_owned(self) -> StringDefinition<'static> {
+        StringDefinition {
+            name: Cow::Owned(self.name.into_owned()),
+            value: self.value.into_owned(),
+            source: self.source,
+        }
+    }
+}
+
+/// A BibTeX preamble block.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Preamble<'a> {
+    /// Expanded preamble value.
+    pub value: Value<'a>,
+    /// Optional source location.
+    pub source: Option<SourceSpan>,
+}
+
+impl<'a> Preamble<'a> {
+    /// Create a preamble block.
+    #[must_use]
+    pub const fn new(value: Value<'a>) -> Self {
+        Self {
+            value,
+            source: None,
+        }
+    }
+
+    /// Return the preamble value.
+    #[must_use]
+    pub const fn value(&self) -> &Value<'a> {
+        &self.value
+    }
+
+    /// Convert to an owned preamble.
+    #[must_use]
+    pub fn into_owned(self) -> Preamble<'static> {
+        Preamble {
+            value: self.value.into_owned(),
+            source: self.source,
+        }
+    }
+}
+
+impl<'a> Deref for Preamble<'a> {
+    type Target = Value<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
+/// A BibTeX comment block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Comment<'a> {
+    /// Comment text.
+    pub text: Cow<'a, str>,
+    /// Optional source location.
+    pub source: Option<SourceSpan>,
+}
+
+impl<'a> Comment<'a> {
+    /// Create a comment block.
+    #[must_use]
+    pub const fn new(text: &'a str) -> Self {
+        Self {
+            text: Cow::Borrowed(text),
+            source: None,
+        }
+    }
+
+    /// Return the comment text.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// Convert to an owned comment.
+    #[must_use]
+    pub fn into_owned(self) -> Comment<'static> {
+        Comment {
+            text: Cow::Owned(self.text.into_owned()),
+            source: self.source,
+        }
+    }
+}
+
+impl Deref for Comment<'_> {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.text
+    }
+}
+
+/// A malformed block retained by tolerant parsing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FailedBlock<'a> {
+    /// Raw source for the malformed block.
+    pub raw: Cow<'a, str>,
+    /// Parse error message.
+    pub error: String,
+    /// Optional source location.
+    pub source: Option<SourceSpan>,
+}
+
+impl FailedBlock<'_> {
+    /// Convert to an owned failed block.
+    #[must_use]
+    pub fn into_owned(self) -> FailedBlock<'static> {
+        FailedBlock {
+            raw: Cow::Owned(self.raw.into_owned()),
+            error: self.error,
+            source: self.source,
+        }
+    }
+}
+
+/// Month rendering style used by month normalization.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MonthStyle {
+    /// Full English month names such as `January`.
+    #[default]
+    Long,
+    /// Three-letter lowercase BibTeX abbreviations such as `jan`.
+    Abbrev,
+    /// One-based month numbers such as `1`.
+    Number,
+}
+
+/// Entry and field ordering options.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SortOptions {
+    /// Sort regular entries by citation key.
+    pub entries_by_key: bool,
+    /// Sort fields inside each entry by field name.
+    pub fields_by_name: bool,
+}
+
+/// Field-name casing policy for field normalization.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FieldNameCase {
+    /// Preserve existing field names.
+    #[default]
+    Preserve,
+    /// Convert field names to lowercase ASCII.
+    Lowercase,
+}
+
+/// Field normalization options.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FieldNormalizeOptions {
+    /// Field-name casing policy.
+    pub name_case: FieldNameCase,
+    /// Normalize common BibLaTeX aliases to classic BibTeX field names.
+    pub biblatex_aliases: bool,
+}
+
+/// A parsed BibTeX library.
+#[derive(Debug, Clone, Default)]
+pub struct Library<'a> {
+    /// Bibliography entries
+    entries: Vec<Entry<'a>>,
+    /// Optional entry source spans
+    entry_sources: Option<Vec<Option<SourceSpan>>>,
+    /// String definitions
+    strings: Vec<StringDefinition<'a>>,
+    /// Latest string definition by name
+    string_lookup: AHashMap<Cow<'a, str>, usize>,
+    /// Preambles
+    preambles: Vec<Preamble<'a>>,
+    /// Comments
+    comments: Vec<Comment<'a>>,
+    /// Failed blocks retained during tolerant parsing
+    failed_blocks: Vec<FailedBlock<'a>>,
+    /// Original block order
+    block_order: Vec<BlockKind>,
+}
+
+impl<'a> Library<'a> {
+    fn push_entry_with_source(&mut self, entry: Entry<'a>, source: Option<SourceSpan>) {
+        let index = self.entries.len();
+        self.entries.push(entry);
+        if let Some(sources) = &mut self.entry_sources {
+            sources.push(source);
+        } else if source.is_some() {
+            let mut sources = vec![None; index];
+            sources.push(source);
+            self.entry_sources = Some(sources);
+        }
+        self.block_order.push(BlockKind::Entry(index));
+    }
+
+    fn register_string_definition(
+        &mut self,
+        name: Cow<'a, str>,
+        value: Value<'a>,
+        source: Option<SourceSpan>,
+    ) -> usize {
+        let index = self.strings.len();
+        self.string_lookup.insert(name.clone(), index);
+        self.strings.push(StringDefinition {
+            name,
+            value,
+            source,
+        });
+        index
+    }
+
+    fn push_string_with_source(
+        &mut self,
+        name: Cow<'a, str>,
+        value: Value<'a>,
+        source: Option<SourceSpan>,
+    ) {
+        let index = self.register_string_definition(name, value, source);
+        self.block_order.push(BlockKind::String(index));
+    }
+
+    fn push_preamble_with_source(&mut self, value: Value<'a>, source: Option<SourceSpan>) -> usize {
+        let index = self.preambles.len();
+        self.preambles.push(Preamble { value, source });
+        self.block_order.push(BlockKind::Preamble(index));
+        index
+    }
+
+    fn push_comment_with_source(&mut self, text: Cow<'a, str>, source: Option<SourceSpan>) {
+        let index = self.comments.len();
+        self.comments.push(Comment { text, source });
+        self.block_order.push(BlockKind::Comment(index));
+    }
+
+    fn push_failed_block(&mut self, failed: FailedBlock<'a>) {
+        let index = self.failed_blocks.len();
+        self.failed_blocks.push(failed);
+        self.block_order.push(BlockKind::Failed(index));
+    }
+
     #[inline]
     fn expand_value_for_parse(
         &self,
@@ -441,7 +825,7 @@ impl<'a> Database<'a> {
         }
     }
 
-    /// Create a new empty database
+    /// Create a new empty library
     #[must_use]
     #[inline]
     pub fn new() -> Self {
@@ -458,32 +842,56 @@ impl<'a> Database<'a> {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use bibtex_parser::Database;
+    /// use bibtex_parser::Library;
     /// // Parse multiple files in parallel
-    /// let db = Database::parser()
+    /// let library = Library::parser()
     ///     .threads(4)
     ///     .parse_files(&["file1.bib", "file2.bib"]).unwrap();
     ///
     /// // Single-file parsing stays sequential
     /// let content = "@article{demo, title=\"Demo\"}";
-    /// let db = Database::parser()
+    /// let library = Library::parser()
     ///     .threads(4)
     ///     .parse(content).unwrap();
     /// ```
     #[must_use]
     #[inline]
-    pub fn parser() -> ParseOptions {
-        ParseOptions::new()
+    pub fn parser() -> Parser {
+        Parser::new()
     }
 
-    /// Parse a BibTeX database from a string (single-threaded implementation)
+    /// Parse a BibTeX library from a string with default strict settings.
+    pub fn parse(input: &'a str) -> Result<Self> {
+        Self::parser().parse(input)
+    }
+
+    /// Parse a BibTeX library from a file into owned data.
+    pub fn parse_file(path: impl AsRef<Path>) -> Result<Library<'static>> {
+        let content = std::fs::read_to_string(path)?;
+        Library::parser().parse(&content).map(Library::into_owned)
+    }
+
+    /// Serialize this library to BibTeX.
+    pub fn to_bibtex(&self) -> Result<String> {
+        crate::writer::to_string(self)
+    }
+
+    /// Serialize this library to a BibTeX file.
+    pub fn write_file(&self, path: impl AsRef<Path>) -> Result<()> {
+        crate::writer::to_file(self, path)
+    }
+
+    /// Parse a BibTeX library from a string (single-threaded implementation)
     #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_sequential(input: &'a str) -> Result<Self> {
         let mut db = Self::new();
+        let input_scan = scan_input(input);
 
         // Fast path for common corpora (like tugboat) with no user-defined strings.
         // This avoids buffering all entries before expansion.
-        if !input_may_contain_string_definition(input) {
+        if !input_scan.may_contain_string_definition {
+            db.entries.reserve(input_scan.at_count);
+            db.block_order.reserve(input_scan.at_count);
             let has_user_strings = false;
             let month_constants_shadowed = false;
             let mut expanded_variables = ExpansionCache::with_capacity(0);
@@ -503,7 +911,7 @@ impl<'a> Database<'a> {
                                 &mut concat_cache,
                             )?;
                         }
-                        db.entries.push(entry);
+                        db.push_entry_with_source(entry, None);
                     }
                     crate::parser::ParsedItem::Preamble(value) => {
                         let mut expanded = value;
@@ -515,14 +923,14 @@ impl<'a> Database<'a> {
                             &mut expansion_stack,
                             &mut concat_cache,
                         )?;
-                        db.preambles.push(expanded);
+                        db.push_preamble_with_source(expanded, None);
                     }
                     crate::parser::ParsedItem::Comment(text) => {
-                        db.comments.push(Cow::Borrowed(text));
+                        db.push_comment_with_source(Cow::Borrowed(text), None);
                     }
                     crate::parser::ParsedItem::String(name, value) => {
                         // Defensive fallback for scanner false negatives.
-                        db.strings.insert(Cow::Borrowed(name), value);
+                        db.push_string_with_source(Cow::Borrowed(name), value, None);
                     }
                 }
                 Ok(())
@@ -530,6 +938,8 @@ impl<'a> Database<'a> {
 
             return Ok(db);
         }
+
+        db.block_order.reserve(input_scan.at_count);
 
         // Single-pass path when all @string definitions appear before regular
         // entries. This keeps correctness while avoiding buffering entries and
@@ -559,14 +969,17 @@ impl<'a> Database<'a> {
                                 &mut concat_cache,
                             )?;
                         }
-                        db.entries.push(entry);
+                        db.push_entry_with_source(entry, None);
                     }
-                    crate::parser::ParsedItem::Preamble(value) => pending_preambles.push(value),
+                    crate::parser::ParsedItem::Preamble(value) => {
+                        let index = db.push_preamble_with_source(value, None);
+                        pending_preambles.push(index);
+                    }
                     crate::parser::ParsedItem::String(name, value) => {
-                        db.strings.insert(Cow::Borrowed(name), value);
+                        db.push_string_with_source(Cow::Borrowed(name), value, None);
                     }
                     crate::parser::ParsedItem::Comment(text) => {
-                        db.comments.push(Cow::Borrowed(text));
+                        db.push_comment_with_source(Cow::Borrowed(text), None);
                     }
                 }
                 Ok(())
@@ -575,8 +988,8 @@ impl<'a> Database<'a> {
             let has_user_strings = !db.strings.is_empty();
             let month_constants_shadowed =
                 has_user_strings && user_strings_shadow_month_constants(&db.strings);
-            for value in pending_preambles {
-                let mut expanded = value;
+            for index in pending_preambles {
+                let mut expanded = std::mem::take(&mut db.preambles[index].value);
                 db.expand_value_for_parse(
                     &mut expanded,
                     has_user_strings,
@@ -585,31 +998,35 @@ impl<'a> Database<'a> {
                     &mut expansion_stack,
                     &mut concat_cache,
                 )?;
-                db.preambles.push(expanded);
+                db.preambles[index].value = expanded;
             }
 
             return Ok(db);
         }
 
-        let mut pending_entries = Vec::new();
-        let mut pending_preambles = Vec::new();
+        let mut entry_indices = Vec::new();
+        let mut preamble_indices = Vec::new();
 
         crate::parser::parse_bibtex_stream(input, |item| {
             match item {
-                crate::parser::ParsedItem::Entry(entry) => pending_entries.push(entry),
-                crate::parser::ParsedItem::Preamble(value) => pending_preambles.push(value),
+                crate::parser::ParsedItem::Entry(entry) => {
+                    let index = db.entries.len();
+                    db.push_entry_with_source(entry, None);
+                    entry_indices.push(index);
+                }
+                crate::parser::ParsedItem::Preamble(value) => {
+                    let index = db.push_preamble_with_source(value, None);
+                    preamble_indices.push(index);
+                }
                 crate::parser::ParsedItem::String(name, value) => {
-                    db.strings.insert(Cow::Borrowed(name), value);
+                    db.push_string_with_source(Cow::Borrowed(name), value, None);
                 }
                 crate::parser::ParsedItem::Comment(text) => {
-                    db.comments.push(Cow::Borrowed(text));
+                    db.push_comment_with_source(Cow::Borrowed(text), None);
                 }
             }
             Ok(())
         })?;
-
-        db.entries.reserve_exact(pending_entries.len());
-        db.preambles.reserve_exact(pending_preambles.len());
 
         // Expand after parsing so all @string definitions are available globally.
         let has_user_strings = !db.strings.is_empty();
@@ -619,22 +1036,25 @@ impl<'a> Database<'a> {
         let mut expansion_stack = Vec::new();
         let mut concat_cache = ConcatCache::new();
 
-        for mut entry in pending_entries {
-            for field in &mut entry.fields {
+        for entry_index in entry_indices {
+            let field_count = db.entries[entry_index].fields.len();
+            for field_index in 0..field_count {
+                let mut value =
+                    std::mem::take(&mut db.entries[entry_index].fields[field_index].value);
                 db.expand_value_for_parse(
-                    &mut field.value,
+                    &mut value,
                     has_user_strings,
                     month_constants_shadowed,
                     &mut expanded_variables,
                     &mut expansion_stack,
                     &mut concat_cache,
                 )?;
+                db.entries[entry_index].fields[field_index].value = value;
             }
-            db.entries.push(entry);
         }
 
-        for value in pending_preambles {
-            let mut expanded = value;
+        for preamble_index in preamble_indices {
+            let mut expanded = std::mem::take(&mut db.preambles[preamble_index].value);
             db.expand_value_for_parse(
                 &mut expanded,
                 has_user_strings,
@@ -643,62 +1063,161 @@ impl<'a> Database<'a> {
                 &mut expansion_stack,
                 &mut concat_cache,
             )?;
-            db.preambles.push(expanded);
+            db.preambles[preamble_index].value = expanded;
         }
 
         Ok(db)
     }
 
-    /// Merge another database into this one
+    fn parse_with_spans(input: &'a str) -> Result<Self> {
+        let mut raw_items = Vec::new();
+        crate::parser::parse_bibtex_stream_with_spans(input, |item, span, _raw| {
+            raw_items.push(RawBuildItem::Parsed(item, span));
+            Ok(())
+        })?;
+        Self::from_raw_items(raw_items)
+    }
+
+    fn parse_tolerant(input: &'a str, capture_source: bool) -> Result<Self> {
+        let mut raw_items = Vec::new();
+        let mut remaining = input;
+
+        loop {
+            crate::parser::lexer::skip_whitespace(&mut remaining);
+            if remaining.is_empty() {
+                break;
+            }
+
+            let start = input.len() - remaining.len();
+            match crate::parser::parse_item(&mut remaining) {
+                Ok(item) => {
+                    let end = input.len() - remaining.len();
+                    raw_items.push(RawBuildItem::Parsed(item, source_span(input, start, end)));
+                }
+                Err(err) => {
+                    let end = next_recovery_boundary(input, start);
+                    let source = capture_source.then(|| source_span(input, start, end));
+                    raw_items.push(RawBuildItem::Failed(FailedBlock {
+                        raw: Cow::Borrowed(&input[start..end]),
+                        error: format!("Failed to parse entry: {err}"),
+                        source,
+                    }));
+                    remaining = &input[end..];
+                }
+            }
+        }
+
+        Self::from_raw_items(raw_items)
+    }
+
+    fn from_raw_items(raw_items: Vec<RawBuildItem<'a>>) -> Result<Self> {
+        let mut library = Self::new();
+
+        for raw_item in &raw_items {
+            if let RawBuildItem::Parsed(crate::parser::ParsedItem::String(name, value), span) =
+                raw_item
+            {
+                library.register_string_definition(Cow::Borrowed(name), value.clone(), Some(*span));
+            }
+        }
+
+        let has_user_strings = !library.strings.is_empty();
+        let month_constants_shadowed =
+            has_user_strings && user_strings_shadow_month_constants(&library.strings);
+        let mut expanded_variables = ExpansionCache::with_capacity(library.strings.len());
+        let mut expansion_stack = Vec::new();
+        let mut concat_cache = ConcatCache::new();
+        let mut string_index = 0;
+
+        for raw_item in raw_items {
+            match raw_item {
+                RawBuildItem::Parsed(crate::parser::ParsedItem::Entry(mut entry), span) => {
+                    for field in &mut entry.fields {
+                        library.expand_value_for_parse(
+                            &mut field.value,
+                            has_user_strings,
+                            month_constants_shadowed,
+                            &mut expanded_variables,
+                            &mut expansion_stack,
+                            &mut concat_cache,
+                        )?;
+                    }
+                    library.push_entry_with_source(entry, Some(span));
+                }
+                RawBuildItem::Parsed(crate::parser::ParsedItem::String(_, _), _) => {
+                    library.block_order.push(BlockKind::String(string_index));
+                    string_index += 1;
+                }
+                RawBuildItem::Parsed(crate::parser::ParsedItem::Preamble(mut value), span) => {
+                    library.expand_value_for_parse(
+                        &mut value,
+                        has_user_strings,
+                        month_constants_shadowed,
+                        &mut expanded_variables,
+                        &mut expansion_stack,
+                        &mut concat_cache,
+                    )?;
+                    library.push_preamble_with_source(value, Some(span));
+                }
+                RawBuildItem::Parsed(crate::parser::ParsedItem::Comment(text), span) => {
+                    library.push_comment_with_source(Cow::Borrowed(text), Some(span));
+                }
+                RawBuildItem::Failed(failed) => library.push_failed_block(failed),
+            }
+        }
+
+        Ok(library)
+    }
+
+    /// Merge another library into this one
     pub fn merge(&mut self, other: Self) {
+        let entry_offset = self.entries.len();
+        let string_offset = self.strings.len();
+        let preamble_offset = self.preambles.len();
+        let comment_offset = self.comments.len();
+        let failed_offset = self.failed_blocks.len();
+        let other_entry_count = other.entries.len();
+        let other_entry_sources = other.entry_sources;
+
         self.entries.extend(other.entries);
-        self.strings.extend(other.strings);
+        match (&mut self.entry_sources, other_entry_sources) {
+            (Some(sources), Some(other_sources)) => sources.extend(other_sources),
+            (Some(sources), None) => {
+                sources.extend(std::iter::repeat(None).take(other_entry_count));
+            }
+            (None, Some(other_sources)) => {
+                let mut sources = vec![None; entry_offset];
+                sources.extend(other_sources);
+                self.entry_sources = Some(sources);
+            }
+            (None, None) => {}
+        }
         self.preambles.extend(other.preambles);
         self.comments.extend(other.comments);
+        self.failed_blocks.extend(other.failed_blocks);
+
+        for definition in other.strings {
+            let index = self.strings.len();
+            self.string_lookup.insert(definition.name.clone(), index);
+            self.strings.push(definition);
+        }
+
+        self.block_order
+            .extend(other.block_order.into_iter().map(|kind| match kind {
+                BlockKind::Entry(index) => BlockKind::Entry(entry_offset + index),
+                BlockKind::String(index) => BlockKind::String(string_offset + index),
+                BlockKind::Preamble(index) => BlockKind::Preamble(preamble_offset + index),
+                BlockKind::Comment(index) => BlockKind::Comment(comment_offset + index),
+                BlockKind::Failed(index) => BlockKind::Failed(failed_offset + index),
+            }));
     }
 
     #[cfg(feature = "parallel")]
-    fn merge_databases_parallel(databases: Vec<Database<'static>>) -> Database<'static> {
-        use rayon::prelude::*;
-
-        // Type alias to simplify complex type
-        type DatabaseComponents = (
-            AHashMap<Cow<'static, str>, Value<'static>>,
-            Vec<Value<'static>>,
-            Vec<Cow<'static, str>>,
-        );
-
-        // Move entries out for parallel merging while collecting other data
-        let mut others: Vec<DatabaseComponents> = Vec::with_capacity(databases.len());
-        let entry_vecs: Vec<Vec<Entry<'static>>> = databases
-            .into_iter()
-            .map(|db| {
-                let Database {
-                    entries,
-                    strings,
-                    preambles,
-                    comments,
-                } = db;
-                others.push((strings, preambles, comments));
-                entries
-            })
-            .collect();
-
-        let all_entries: Vec<_> = entry_vecs.into_par_iter().flatten().collect();
-
-        let mut result = Database {
-            entries: all_entries,
-            strings: AHashMap::new(),
-            preambles: Vec::new(),
-            comments: Vec::new(),
-        };
-
-        for (strings, preambles, comments) in others {
-            result.strings.extend(strings);
-            result.preambles.extend(preambles);
-            result.comments.extend(comments);
+    fn merge_libraries_parallel(libraries: Vec<Library<'static>>) -> Library<'static> {
+        let mut result = Library::new();
+        for library in libraries {
+            result.merge(library);
         }
-
         result
     }
 
@@ -716,38 +1235,70 @@ impl<'a> Database<'a> {
 
     /// Get all string definitions
     #[must_use]
-    pub const fn strings(&self) -> &AHashMap<Cow<'a, str>, Value<'a>> {
+    pub fn strings(&self) -> &[StringDefinition<'a>] {
         &self.strings
     }
 
-    /// Get mutable access to string definitions
+    /// Get a string definition by name.
     #[must_use]
-    pub fn strings_mut(&mut self) -> &mut AHashMap<Cow<'a, str>, Value<'a>> {
-        &mut self.strings
+    pub fn string(&self, name: &str) -> Option<&StringDefinition<'a>> {
+        get_string_definition(&self.strings, &self.string_lookup, name)
+    }
+
+    /// Get a string definition value by name.
+    #[must_use]
+    pub fn string_value(&self, name: &str) -> Option<&Value<'a>> {
+        self.string(name).map(|definition| &definition.value)
     }
 
     /// Get all preambles
     #[must_use]
-    pub fn preambles(&self) -> &[Value<'a>] {
+    pub fn preambles(&self) -> &[Preamble<'a>] {
         &self.preambles
     }
 
     /// Get mutable access to preambles
     #[must_use]
-    pub fn preambles_mut(&mut self) -> &mut Vec<Value<'a>> {
+    pub fn preambles_mut(&mut self) -> &mut Vec<Preamble<'a>> {
         &mut self.preambles
     }
 
     /// Get all comments
     #[must_use]
-    pub fn comments(&self) -> &[Cow<'a, str>] {
+    pub fn comments(&self) -> &[Comment<'a>] {
         &self.comments
     }
 
     /// Get mutable access to comments
     #[must_use]
-    pub fn comments_mut(&mut self) -> &mut Vec<Cow<'a, str>> {
+    pub fn comments_mut(&mut self) -> &mut Vec<Comment<'a>> {
         &mut self.comments
+    }
+
+    /// Get malformed blocks retained by tolerant parsing.
+    #[must_use]
+    pub fn failed_blocks(&self) -> &[FailedBlock<'a>] {
+        &self.failed_blocks
+    }
+
+    /// Return blocks in source order.
+    #[must_use]
+    pub fn blocks(&self) -> Vec<Block<'_, 'a>> {
+        self.block_order
+            .iter()
+            .map(|kind| match *kind {
+                BlockKind::Entry(index) => Block::Entry(
+                    &self.entries[index],
+                    self.entry_sources
+                        .as_ref()
+                        .and_then(|sources| sources.get(index).copied().flatten()),
+                ),
+                BlockKind::String(index) => Block::String(&self.strings[index]),
+                BlockKind::Preamble(index) => Block::Preamble(&self.preambles[index]),
+                BlockKind::Comment(index) => Block::Comment(&self.comments[index]),
+                BlockKind::Failed(index) => Block::Failed(&self.failed_blocks[index]),
+            })
+            .collect()
     }
 
     /// Find entries by key
@@ -764,7 +1315,7 @@ impl<'a> Database<'a> {
             .find(|entry| entry.key.eq_ignore_ascii_case(key))
     }
 
-    /// Return `true` when the database contains `key`.
+    /// Return `true` when the library contains `key`.
     #[must_use]
     pub fn contains_key(&self, key: &str) -> bool {
         self.find_by_key(key).is_some()
@@ -851,7 +1402,9 @@ impl<'a> Database<'a> {
                     return Err(Error::CircularReference(cycle));
                 }
 
-                if let Some(user_value) = get_string_value(&self.strings, name_text) {
+                if let Some(user_value) =
+                    get_string_value(&self.strings, &self.string_lookup, name_text)
+                {
                     // Recursively expand the variable's value and cache the result.
                     expansion_stack.push(name.clone());
                     let expanded = self.smart_expand_value_cached(
@@ -905,7 +1458,7 @@ impl<'a> Database<'a> {
             // Variables need to be resolved
             Value::Variable(name) => {
                 // First check user-defined strings
-                self.strings.get(name.as_ref()).map_or_else(
+                get_string_value(&self.strings, &self.string_lookup, name.as_ref()).map_or_else(
                     || {
                         // Check month abbreviations as fallback
                         get_month_expansion(name.as_ref()).map_or_else(
@@ -981,7 +1534,7 @@ impl<'a> Database<'a> {
             Value::Number(n) => Ok(n.to_string()),
             Value::Variable(name) => {
                 // First check user-defined strings
-                self.strings.get(name.as_ref()).map_or_else(
+                get_string_value(&self.strings, &self.string_lookup, name.as_ref()).map_or_else(
                     || {
                         // Check month abbreviations as fallback
                         get_month_expansion(name.as_ref()).map_or_else(
@@ -1007,44 +1560,190 @@ impl<'a> Database<'a> {
 
     /// Convert to owned version (no borrowed data)
     #[must_use]
-    pub fn into_owned(self) -> Database<'static> {
-        Database {
+    pub fn into_owned(self) -> Library<'static> {
+        let strings = self
+            .strings
+            .into_iter()
+            .map(StringDefinition::into_owned)
+            .collect::<Vec<_>>();
+        let mut string_lookup = AHashMap::with_capacity(strings.len());
+        for (index, definition) in strings.iter().enumerate() {
+            string_lookup.insert(Cow::Owned(definition.name.to_string()), index);
+        }
+
+        Library {
             entries: self.entries.into_iter().map(Entry::into_owned).collect(),
-            strings: self
-                .strings
+            entry_sources: self.entry_sources,
+            strings,
+            string_lookup,
+            preambles: self
+                .preambles
                 .into_iter()
-                .map(|(k, v)| (Cow::Owned(k.into_owned()), v.into_owned()))
+                .map(Preamble::into_owned)
                 .collect(),
-            preambles: self.preambles.into_iter().map(Value::into_owned).collect(),
-            comments: self
-                .comments
+            comments: self.comments.into_iter().map(Comment::into_owned).collect(),
+            failed_blocks: self
+                .failed_blocks
                 .into_iter()
-                .map(|c| Cow::Owned(c.into_owned()))
+                .map(FailedBlock::into_owned)
                 .collect(),
+            block_order: self.block_order,
         }
     }
 
-    /// Add a string definition (useful for building databases programmatically)
+    /// Add a string definition (useful for building libraries programmatically)
     pub fn add_string(&mut self, name: &'a str, value: Value<'a>) {
-        self.strings.insert(Cow::Borrowed(name), value);
+        self.push_string_with_source(Cow::Borrowed(name), value, None);
     }
 
     /// Add an entry
     pub fn add_entry(&mut self, entry: Entry<'a>) {
-        self.entries.push(entry);
+        self.push_entry_with_source(entry, None);
     }
 
     /// Add a preamble
     pub fn add_preamble(&mut self, value: Value<'a>) {
-        self.preambles.push(value);
+        self.push_preamble_with_source(value, None);
     }
 
     /// Add a comment
     pub fn add_comment(&mut self, comment: &'a str) {
-        self.comments.push(Cow::Borrowed(comment));
+        self.push_comment_with_source(Cow::Borrowed(comment), None);
     }
 
-    /// Validate all entries in the database
+    /// Resolve string variables and concatenations in entries and preambles in place.
+    pub fn resolve_strings(&mut self) -> Result<()> {
+        let has_user_strings = !self.strings.is_empty();
+        let month_constants_shadowed =
+            has_user_strings && user_strings_shadow_month_constants(&self.strings);
+        let mut expanded_variables = ExpansionCache::with_capacity(self.strings.len());
+        let mut expansion_stack = Vec::new();
+        let mut concat_cache = ConcatCache::new();
+
+        for entry_index in 0..self.entries.len() {
+            let field_count = self.entries[entry_index].fields.len();
+            for field_index in 0..field_count {
+                let mut value =
+                    std::mem::take(&mut self.entries[entry_index].fields[field_index].value);
+                self.expand_value_for_parse(
+                    &mut value,
+                    has_user_strings,
+                    month_constants_shadowed,
+                    &mut expanded_variables,
+                    &mut expansion_stack,
+                    &mut concat_cache,
+                )?;
+                self.entries[entry_index].fields[field_index].value = value;
+            }
+        }
+
+        for preamble_index in 0..self.preambles.len() {
+            let mut value = std::mem::take(&mut self.preambles[preamble_index].value);
+            self.expand_value_for_parse(
+                &mut value,
+                has_user_strings,
+                month_constants_shadowed,
+                &mut expanded_variables,
+                &mut expansion_stack,
+                &mut concat_cache,
+            )?;
+            self.preambles[preamble_index].value = value;
+        }
+
+        Ok(())
+    }
+
+    /// Normalize DOI fields to lowercase `10.x/...` form when recognizable.
+    pub fn normalize_doi_fields(&mut self) {
+        for entry in &mut self.entries {
+            for field in &mut entry.fields {
+                if field.name.eq_ignore_ascii_case("doi") {
+                    if let Some(normalized) = normalize_doi(&value_to_plain_string(&field.value)) {
+                        field.value = Value::Literal(Cow::Owned(normalized));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Normalize month fields to a chosen representation.
+    pub fn normalize_months(&mut self, style: MonthStyle) {
+        for entry in &mut self.entries {
+            for field in &mut entry.fields {
+                if field.name.eq_ignore_ascii_case("month") {
+                    if let Some(month) =
+                        normalize_month_value(&value_to_plain_string(&field.value), style)
+                    {
+                        field.value = month;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Normalize field names and common BibLaTeX aliases.
+    pub fn normalize_fields(&mut self, options: FieldNormalizeOptions) {
+        for entry in &mut self.entries {
+            for field in &mut entry.fields {
+                let mut name = if options.biblatex_aliases {
+                    canonical_field_alias(&field.name)
+                        .unwrap_or_else(|| field.name.as_ref())
+                        .to_string()
+                } else {
+                    field.name.to_string()
+                };
+
+                if options.name_case == FieldNameCase::Lowercase {
+                    name.make_ascii_lowercase();
+                }
+
+                if name != field.name {
+                    field.name = Cow::Owned(name);
+                }
+            }
+        }
+    }
+
+    /// Sort entries and/or fields in place.
+    pub fn sort(&mut self, options: SortOptions) {
+        if options.fields_by_name {
+            for entry in &mut self.entries {
+                entry
+                    .fields
+                    .sort_by(|left, right| left.name.cmp(&right.name));
+            }
+        }
+
+        if options.entries_by_key {
+            if let Some(sources) = self.entry_sources.take() {
+                let mut entries = self.entries.drain(..).zip(sources).collect::<Vec<_>>();
+                entries.sort_by(|(left, _), (right, _)| left.key.cmp(&right.key));
+                let (sorted_entries, sorted_sources): (Vec<_>, Vec<_>) =
+                    entries.into_iter().unzip();
+                self.entries = sorted_entries;
+                self.entry_sources = Some(sorted_sources);
+            } else {
+                self.entries.sort_by(|left, right| left.key.cmp(&right.key));
+            }
+            self.rebuild_grouped_block_order();
+        }
+    }
+
+    fn rebuild_grouped_block_order(&mut self) {
+        self.block_order.clear();
+        self.block_order
+            .extend((0..self.strings.len()).map(BlockKind::String));
+        self.block_order
+            .extend((0..self.preambles.len()).map(BlockKind::Preamble));
+        self.block_order
+            .extend((0..self.comments.len()).map(BlockKind::Comment));
+        self.block_order
+            .extend((0..self.entries.len()).map(BlockKind::Entry));
+        self.block_order
+            .extend((0..self.failed_blocks.len()).map(BlockKind::Failed));
+    }
+
+    /// Validate all entries in the library
     /// Returns a list of entries with their indices and validation errors
     #[must_use]
     pub fn validate(
@@ -1135,15 +1834,15 @@ impl<'a> Database<'a> {
             .collect()
     }
 
-    /// Get statistics about the database
+    /// Get statistics about the library
     #[must_use]
-    pub fn stats(&self) -> DatabaseStats {
+    pub fn stats(&self) -> LibraryStats {
         let mut type_counts = AHashMap::new();
         for entry in &self.entries {
             *type_counts.entry(entry.ty.to_string()).or_insert(0) += 1;
         }
 
-        DatabaseStats {
+        LibraryStats {
             total_entries: self.entries.len(),
             total_strings: self.strings.len(),
             total_preambles: self.preambles.len(),
@@ -1153,9 +1852,9 @@ impl<'a> Database<'a> {
     }
 }
 
-/// Statistics about a database
+/// Statistics about a library
 #[derive(Debug, Clone)]
-pub struct DatabaseStats {
+pub struct LibraryStats {
     /// Total number of entries
     pub total_entries: usize,
     /// Total number of string definitions
@@ -1168,7 +1867,7 @@ pub struct DatabaseStats {
     pub entries_by_type: AHashMap<String, usize>,
 }
 
-/// Comprehensive validation report for a database
+/// Comprehensive validation report for a library
 #[derive(Debug, Clone)]
 pub struct ValidationReport<'a> {
     /// Entries that failed validation with their errors
@@ -1177,14 +1876,14 @@ pub struct ValidationReport<'a> {
     pub duplicate_keys: Vec<&'a str>,
     /// Entries with no fields
     pub empty_entries: Vec<(usize, &'a Entry<'a>)>,
-    /// Total number of entries in the database
+    /// Total number of entries in the library
     pub total_entries: usize,
     /// Validation level used
     pub validation_level: ValidationLevel,
 }
 
 impl ValidationReport<'_> {
-    /// Check if the database is completely valid
+    /// Check if the library is completely valid
     #[must_use]
     pub fn is_valid(&self) -> bool {
         self.invalid_entries.is_empty()
@@ -1272,13 +1971,99 @@ fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
     haystack.to_lowercase().contains(&needle.to_lowercase())
 }
 
-/// Builder for creating databases programmatically
-#[derive(Debug, Default)]
-pub struct DatabaseBuilder<'a> {
-    db: Database<'a>,
+fn value_to_plain_string(value: &Value<'_>) -> String {
+    match value {
+        Value::Literal(text) => text.to_string(),
+        Value::Number(number) => number.to_string(),
+        Value::Variable(name) => name.to_string(),
+        Value::Concat(parts) => parts.iter().map(value_to_plain_string).collect(),
+    }
 }
 
-impl<'a> DatabaseBuilder<'a> {
+fn normalize_month_value(input: &str, style: MonthStyle) -> Option<Value<'static>> {
+    let normalized = input.trim().trim_matches(['{', '}']).to_ascii_lowercase();
+    let month_index = match normalized.as_str() {
+        "jan" | "january" | "1" | "01" => 1,
+        "feb" | "february" | "2" | "02" => 2,
+        "mar" | "march" | "3" | "03" => 3,
+        "apr" | "april" | "4" | "04" => 4,
+        "may" | "5" | "05" => 5,
+        "jun" | "june" | "6" | "06" => 6,
+        "jul" | "july" | "7" | "07" => 7,
+        "aug" | "august" | "8" | "08" => 8,
+        "sep" | "september" | "9" | "09" => 9,
+        "oct" | "october" | "10" => 10,
+        "nov" | "november" | "11" => 11,
+        "dec" | "december" | "12" => 12,
+        _ => return None,
+    };
+
+    let text = match style {
+        MonthStyle::Long => month_long_name(month_index),
+        MonthStyle::Abbrev => month_abbreviation(month_index),
+        MonthStyle::Number => return Some(Value::Number(month_index)),
+    };
+
+    Some(Value::Literal(Cow::Borrowed(text)))
+}
+
+const fn month_long_name(month: i64) -> &'static str {
+    match month {
+        1 => "January",
+        2 => "February",
+        3 => "March",
+        4 => "April",
+        5 => "May",
+        6 => "June",
+        7 => "July",
+        8 => "August",
+        9 => "September",
+        10 => "October",
+        11 => "November",
+        12 => "December",
+        _ => "",
+    }
+}
+
+const fn month_abbreviation(month: i64) -> &'static str {
+    match month {
+        1 => "jan",
+        2 => "feb",
+        3 => "mar",
+        4 => "apr",
+        5 => "may",
+        6 => "jun",
+        7 => "jul",
+        8 => "aug",
+        9 => "sep",
+        10 => "oct",
+        11 => "nov",
+        12 => "dec",
+        _ => "",
+    }
+}
+
+fn canonical_field_alias(name: &str) -> Option<&'static str> {
+    if name.eq_ignore_ascii_case("journaltitle") {
+        Some("journal")
+    } else if name.eq_ignore_ascii_case("date") {
+        Some("year")
+    } else if name.eq_ignore_ascii_case("institution") {
+        Some("school")
+    } else if name.eq_ignore_ascii_case("location") {
+        Some("address")
+    } else {
+        None
+    }
+}
+
+/// Builder for creating libraries programmatically
+#[derive(Debug, Default)]
+pub struct LibraryBuilder<'a> {
+    db: Library<'a>,
+}
+
+impl<'a> LibraryBuilder<'a> {
     /// Create a new builder
     #[must_use]
     pub fn new() -> Self {
@@ -1288,34 +2073,34 @@ impl<'a> DatabaseBuilder<'a> {
     /// Add an entry
     #[must_use]
     pub fn entry(mut self, entry: Entry<'a>) -> Self {
-        self.db.entries.push(entry);
+        self.db.add_entry(entry);
         self
     }
 
     /// Add a string definition
     #[must_use]
     pub fn string(mut self, name: &'a str, value: Value<'a>) -> Self {
-        self.db.strings.insert(Cow::Borrowed(name), value);
+        self.db.add_string(name, value);
         self
     }
 
     /// Add a preamble
     #[must_use]
     pub fn preamble(mut self, value: Value<'a>) -> Self {
-        self.db.preambles.push(value);
+        self.db.add_preamble(value);
         self
     }
 
     /// Add a comment
     #[must_use]
     pub fn comment(mut self, text: &'a str) -> Self {
-        self.db.comments.push(Cow::Borrowed(text));
+        self.db.add_comment(text);
         self
     }
 
-    /// Build the database
+    /// Build the library
     #[must_use]
-    pub fn build(self) -> Database<'a> {
+    pub fn build(self) -> Library<'a> {
         self.db
     }
 }
@@ -1326,7 +2111,7 @@ mod tests {
     use crate::model::{EntryType, Field};
 
     #[test]
-    fn test_database_parse() {
+    fn test_library_parse() {
         let input = r#"
             @string{me = "John Doe"}
             
@@ -1337,11 +2122,11 @@ mod tests {
             }
         "#;
 
-        let db = Database::parser().parse(input).unwrap();
-        assert_eq!(db.entries().len(), 1);
-        assert_eq!(db.strings().len(), 1);
+        let library = Library::parser().parse(input).unwrap();
+        assert_eq!(library.entries().len(), 1);
+        assert_eq!(library.strings().len(), 1);
 
-        let entry = &db.entries()[0];
+        let entry = &library.entries()[0];
         // Use get_as_string since the value might be a variable reference
         assert_eq!(entry.get_as_string("author").unwrap(), "John Doe");
     }
@@ -1355,8 +2140,8 @@ mod tests {
             }
         "#;
 
-        let db = Database::parser().parse(input).unwrap();
-        let entry = &db.entries()[0];
+        let library = Library::parser().parse(input).unwrap();
+        let entry = &library.entries()[0];
 
         // The title should still be borrowed from the input
         if let Some(Value::Literal(cow)) = entry
@@ -1380,8 +2165,8 @@ mod tests {
             }
         "#;
 
-        let db = Database::parser().parse(input).unwrap();
-        let entry = &db.entries()[0];
+        let library = Library::parser().parse(input).unwrap();
+        let entry = &library.entries()[0];
 
         // Concatenation should create an owned string
         assert_eq!(entry.get_as_string("title").unwrap(), "Hello, World");
@@ -1406,7 +2191,7 @@ mod tests {
             }
         "#;
 
-        let db = Database::parser().parse(input).unwrap();
+        let db = Library::parser().parse(input).unwrap();
         let entry = &db.entries()[0];
 
         assert_eq!(entry.fields.len(), 10);
@@ -1419,8 +2204,8 @@ mod tests {
     }
 
     #[test]
-    fn test_database_builder() {
-        let db = DatabaseBuilder::new()
+    fn test_library_builder() {
+        let library = LibraryBuilder::new()
             .string("me", Value::Literal(Cow::Borrowed("John Doe")))
             .entry(Entry {
                 ty: EntryType::Article,
@@ -1432,12 +2217,12 @@ mod tests {
             })
             .build();
 
-        assert_eq!(db.entries().len(), 1);
-        assert_eq!(db.strings().len(), 1);
+        assert_eq!(library.entries().len(), 1);
+        assert_eq!(library.strings().len(), 1);
     }
 
     #[test]
-    fn test_database_stats() {
+    fn test_library_stats() {
         let input = r#"
             @string{ieee = "IEEE"}
             @preamble{"Test preamble"}
@@ -1448,8 +2233,8 @@ mod tests {
             @book{b1, title = "Book 1"}
         "#;
 
-        let db = Database::parser().parse(input).unwrap();
-        let stats = db.stats();
+        let library = Library::parser().parse(input).unwrap();
+        let stats = library.stats();
 
         assert_eq!(stats.total_entries, 3);
         assert_eq!(stats.total_strings, 1);
@@ -1473,7 +2258,7 @@ mod tests {
 
         let paths: Vec<PathBuf> = vec![path1.clone(), path2.clone()];
 
-        let db = Database::parser().threads(2).parse_files(&paths).unwrap();
+        let db = Library::parser().threads(2).parse_files(&paths).unwrap();
 
         assert_eq!(db.entries().len(), 2);
 
@@ -1486,11 +2271,11 @@ mod tests {
         let input = "@article{test, title = \"Test\"}";
 
         // Single-threaded (default)
-        let db1 = Database::parser().parse(input).unwrap();
+        let db1 = Library::parser().parse(input).unwrap();
         assert_eq!(db1.entries().len(), 1);
 
         // Using parser builder
-        let db2 = Database::parser().threads(1).parse(input).unwrap();
+        let db2 = Library::parser().threads(1).parse(input).unwrap();
         assert_eq!(db2.entries().len(), 1);
 
         #[cfg(feature = "parallel")]
@@ -1498,7 +2283,7 @@ mod tests {
             use std::fs::write;
 
             // Parallel only works for multiple files
-            let db3 = Database::parser().threads(4).parse(input).unwrap();
+            let db3 = Library::parser().threads(4).parse(input).unwrap();
             assert_eq!(db3.entries().len(), 1);
 
             // Multi-file parallel processing
@@ -1507,7 +2292,7 @@ mod tests {
             write(path1, "@article{a1, title=\"A\"}").unwrap();
             write(path2, "@article{a2, title=\"B\"}").unwrap();
 
-            let db4 = Database::parser()
+            let db4 = Library::parser()
                 .threads(2)
                 .parse_files(&[path1, path2])
                 .unwrap();

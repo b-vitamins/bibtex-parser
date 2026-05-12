@@ -4,20 +4,31 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
 authors = ["Ayan Das <bvits@riseup.net>"]
-description = "Yet another bibtex-parser"
+description = "Fast BibTeX parser with a rich Rust-first library API"
 documentation = "https://docs.rs/bibtex-parser"
 repository = "https://github.com/b-vitamins/bibtex-parser"
+homepage = "https://github.com/b-vitamins/bibtex-parser"
 readme = "README.md"
 keywords = ["bibtex", "parser", "latex", "bibliography", "citation"]
 categories = ["parser-implementations", "text-processing"]
 license = "MIT OR Apache-2.0"
+include = [
+    "Cargo.toml",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "src/**",
+    "examples/**",
+    "benches/**",
+    "tests/**",
+]
 
 [features]
 default = []
 # Enable LaTeX to Unicode conversion
-latex_to_unicode = []
+latex_to_unicode = ["dep:phf"]
 # Enable multi-file parallel parsing
-parallel = ["rayon"]
+parallel = ["dep:rayon"]
 # Enable comparison with other parsers in benchmarks
 compare_parsers = []
 
@@ -28,13 +39,7 @@ thiserror = "1.0"
 memchr = "2.7"
 ahash = "0.8"
 rayon = { version = "1.8", optional = true }
-unicode-normalization = "0.1"
-backtrace = "0.3"
-serde_json = "1.0.140"
-chrono = "0.4.41"
-lazy_static = "1.5.0"
-serde = "1.0.219"
-phf = { version = "0.11", features = ["macros"] }
+phf = { version = "0.11", features = ["macros"], optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -48,11 +53,6 @@ serde_bibtex = { version = "0.6", features = ["entry"] }
 biblatex = "0.10"
 serde = { version = "1.0", features = ["derive"] }
 tempfile = "3"
-
-
-[[bin]]
-name = "profile"
-path = "src/bin/profile.rs"
 
 [[bench]]
 name = "performance"
@@ -70,3 +70,6 @@ strip = false
 opt-level = 3
 lto = "fat"
 codegen-units = 1
+
+[package.metadata.docs.rs]
+all-features = true

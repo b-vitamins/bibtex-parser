@@ -30,7 +30,7 @@ fn benchmark_cpu() -> usize {
 
 #[cfg(target_os = "linux")]
 fn detect_benchmark_cpu() -> usize {
-    use bibtex_parser::Database;
+    use bibtex_parser::Library;
 
     if let Ok(cpu) = std::env::var("BIBTEX_BENCH_CPU") {
         if let Ok(cpu) = cpu.parse::<usize>() {
@@ -54,7 +54,7 @@ fn detect_benchmark_cpu() -> usize {
         let mut fastest_probe = Duration::MAX;
         for _ in 0..3 {
             let start = Instant::now();
-            let db = Database::parser().parse(black_box(TUGBOAT_BIB)).unwrap();
+            let db = Library::parser().parse(black_box(TUGBOAT_BIB)).unwrap();
             black_box(&db);
             fastest_probe = fastest_probe.min(start.elapsed());
         }
@@ -116,20 +116,20 @@ fn set_thread_affinity(cpu: usize) {
 
 /// Actively warm the parser so the benchmark starts at steady-state frequency.
 fn stabilize_system() {
-    use bibtex_parser::Database;
+    use bibtex_parser::Library;
 
     pin_benchmark_thread();
 
     let deadline = Instant::now() + Duration::from_secs(3);
     while Instant::now() < deadline {
-        let db = Database::parser().parse(black_box(TUGBOAT_BIB)).unwrap();
+        let db = Library::parser().parse(black_box(TUGBOAT_BIB)).unwrap();
         black_box(&db);
     }
 }
 
 /// Main parser comparison benchmark
 fn bench_parser_comparison(c: &mut Criterion) {
-    use bibtex_parser::Database;
+    use bibtex_parser::Library;
 
     let mut group = c.benchmark_group("throughput");
 
@@ -147,14 +147,14 @@ fn bench_parser_comparison(c: &mut Criterion) {
     // Extensive warmup phase
     stabilize_system();
     for _ in 0..50 {
-        let _ = Database::parser().parse(TUGBOAT_BIB);
+        let _ = Library::parser().parse(TUGBOAT_BIB);
         std::hint::black_box(());
     }
 
     // Our parser - core performance
     group.bench_function("bibtex-parser", |b| {
         b.iter(|| {
-            let db = Database::parser().parse(black_box(TUGBOAT_BIB)).unwrap();
+            let db = Library::parser().parse(black_box(TUGBOAT_BIB)).unwrap();
             // Ensure result is not optimized away
             black_box(&db);
             assert!(!db.entries().is_empty());
@@ -358,15 +358,15 @@ fn bench_biblatex(group: &mut criterion::BenchmarkGroup<criterion::measurement::
 
 /// Focused benchmark on specific performance-critical operations
 fn bench_critical_operations(c: &mut Criterion) {
-    use bibtex_parser::Database;
+    use bibtex_parser::Library;
 
     let mut group = c.benchmark_group("operations");
     group.measurement_time(Duration::from_secs(15));
     group.warm_up_time(Duration::from_secs(6));
     group.sample_size(150);
 
-    // Pre-parse database for operation benchmarks
-    let db = Database::parser().parse(TUGBOAT_BIB).unwrap();
+    // Pre-parse library for operation benchmarks
+    let db = Library::parser().parse(TUGBOAT_BIB).unwrap();
 
     stabilize_system();
 
@@ -422,7 +422,7 @@ fn bench_critical_operations(c: &mut Criterion) {
 
 /// Memory efficiency benchmark
 fn bench_memory_efficiency(c: &mut Criterion) {
-    use bibtex_parser::Database;
+    use bibtex_parser::Library;
 
     let mut group = c.benchmark_group("memory");
     group.measurement_time(Duration::from_secs(10));
@@ -446,7 +446,7 @@ fn bench_memory_efficiency(c: &mut Criterion) {
             input.as_str(),
             |b, input| {
                 b.iter(|| {
-                    let db = Database::parser().parse(black_box(input)).unwrap();
+                    let db = Library::parser().parse(black_box(input)).unwrap();
                     // Verify parsing succeeded
                     assert!(!db.entries().is_empty());
                     black_box(&db);

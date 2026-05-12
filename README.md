@@ -1,178 +1,172 @@
 # bibtex-parser
 
-Yet another BibTeX parser written in Rust.
+[![Crates.io](https://img.shields.io/crates/v/bibtex-parser.svg)](https://crates.io/crates/bibtex-parser)
+[![docs.rs](https://img.shields.io/docsrs/bibtex-parser.svg)](https://docs.rs/bibtex-parser)
+[![License](https://img.shields.io/crates/l/bibtex-parser.svg)](LICENSE)
+
+Fast BibTeX parsing for Rust applications that need both throughput and a real user-facing API.
+
+`bibtex-parser` parses strict BibTeX at high speed, expands string variables and month constants, exposes top-level block order, provides ergonomic query/edit helpers, and writes BibTeX back out with configurable formatting.
 
 ## Features
 
-- Zero-copy parsing using winnow
-- Support for string concatenation and variable expansion
-- Error messages with line/column information
-- Handles standard BibTeX plus common BibLaTeX entry types, preambles, comments, and string variables
-- Structured author/editor name parsing
-- DOI normalization, duplicate detection, and case-insensitive lookup helpers
-- Writer functionality for generating BibTeX files
+- High-throughput single-file parsing with borrowed values where possible.
+- Strict parsing by default, with explicit tolerant recovery for malformed corpora.
+- String definitions, concatenation, month constants, preambles, comments, and ordered blocks.
+- Source-span capture for entries and recovered failures when requested.
+- Case-insensitive lookup, duplicate detection, DOI normalization, field normalization, sorting, and validation.
+- Structured author/editor name parsing and typed entry helpers.
+- Configurable writer for serializing, formatting, sorting, and writing files.
+- Optional `parallel` feature for parsing multiple files concurrently.
+- Optional `latex_to_unicode` feature for LaTeX accent conversion helpers.
 
-## Installation
-
-Add to your `Cargo.toml`:
+## Install
 
 ```toml
 [dependencies]
 bibtex-parser = "0.1"
 ```
 
-## Usage
-
-Parse a BibTeX string:
+## Parse
 
 ```rust
-use bibtex_parser::{Database, Result};
+use bibtex_parser::{Library, Result};
 
 fn main() -> Result<()> {
-    let bibtex = r#"
-        @article{einstein1905,
-            author = "Albert Einstein",
-            title = "Zur Elektrodynamik bewegter Körper",
-            journal = "Annalen der Physik",
-            year = 1905
+    let input = r#"
+        @string{venue = "VLDB"}
+        @article{paper,
+            author = "Jane Doe and John Smith",
+            title = "Fast BibTeX",
+            journal = venue,
+            year = 2026
         }
     "#;
-    
-    let db = Database::parse(bibtex)?;
-    
-    for entry in db.entries() {
-        println!("{}: {}", entry.key(), entry.get("title").unwrap_or("No title"));
-    }
-    
+
+    let library = Library::parse(input)?;
+    let entry = library.find_by_key("paper").unwrap();
+
+    assert_eq!(entry.get("journal"), Some("VLDB"));
+    assert_eq!(entry.year(), Some("2026".to_string()));
+    assert_eq!(entry.authors().len(), 2);
     Ok(())
 }
 ```
 
-### Parallel Parsing
+## Query And Edit
 
-For batch processing of multiple files, enable the `parallel` feature:
+```rust
+use bibtex_parser::{Library, Result};
+
+fn main() -> Result<()> {
+    let mut library = Library::parse(r#"
+        @article{paper,
+            title = "Fast BibTeX",
+            doi = "https://doi.org/10.1000/XYZ.",
+            keywords = "rust; parsing, bibtex"
+        }
+    "#)?;
+
+    let entry = &mut library.entries_mut()[0];
+    entry.set_literal("note", "accepted");
+    entry.rename_field("keywords", "tags");
+
+    library.normalize_doi_fields();
+
+    let entry = &library.entries()[0];
+    assert_eq!(entry.doi(), Some("10.1000/xyz".to_string()));
+    assert_eq!(entry.get("note"), Some("accepted"));
+    assert_eq!(entry.get("tags"), Some("rust; parsing, bibtex"));
+    Ok(())
+}
+```
+
+## Tolerant Parsing
+
+Strict parsing is the default. Tolerant parsing is opt-in and keeps malformed blocks separate from valid entries.
+
+```rust
+use bibtex_parser::{Block, Library, Result};
+
+fn main() -> Result<()> {
+    let library = Library::parser()
+        .tolerant()
+        .capture_source()
+        .parse(r#"
+            @article{ok, title = "Good"}
+            @article{bad, title = "Missing close"
+            @book{recovered, title = "Recovered"}
+        "#)?;
+
+    assert_eq!(library.entries().len(), 2);
+    assert_eq!(library.failed_blocks().len(), 1);
+
+    for block in library.blocks() {
+        if let Block::Failed(failed) = block {
+            eprintln!("bad block at {:?}", failed.source);
+        }
+    }
+
+    Ok(())
+}
+```
+
+## Write
+
+```rust
+use bibtex_parser::{Library, Result, Writer, WriterConfig};
+
+fn main() -> Result<()> {
+    let library = Library::parse(r#"@article{paper, title = "Fast BibTeX"}"#)?;
+
+    let config = WriterConfig {
+        indent: "  ".to_string(),
+        align_values: true,
+        sort_entries: true,
+        ..Default::default()
+    };
+
+    let mut output = Vec::new();
+    let mut writer = Writer::with_config(&mut output, config);
+    writer.write_library(&library)?;
+
+    Ok(())
+}
+```
+
+For simple cases:
+
+```rust
+let bibtex = library.to_bibtex()?;
+library.write_file("references.bib")?;
+```
+
+## Feature Flags
 
 ```toml
 [dependencies]
-bibtex-parser = { version = "0.1", features = ["parallel"] }
+bibtex-parser = { version = "0.1", features = ["parallel", "latex_to_unicode"] }
 ```
 
-Then use the builder API for multiple files:
+- `parallel`: enables Rayon-backed `Parser::parse_files` for multi-file workloads. Single-file parsing remains sequential.
+- `latex_to_unicode`: enables LaTeX accent-to-Unicode conversion helpers.
 
-```rust
-// Parse multiple files in parallel
-let db = Database::parser()
-    .threads(8)  // Use 8 threads
-    .parse_files(&["file1.bib", "file2.bib", "file3.bib"])?;
+## Semantics
+
+- `Library::parse` and `Parser::parse` are strict by default and return an error on malformed BibTeX.
+- `Parser::tolerant()` recovers valid blocks after malformed input and records failures in `Library::failed_blocks()`.
+- String definitions and concatenations are expanded for the `Library` API. Use `parse_bibtex` when you need raw parsed items.
+- Comments, preambles, strings, entries, and tolerant failures are available through `Library::blocks()` in source order.
+- Writer defaults preserve library block order. Sorting and alignment are explicit formatting choices.
+
+## Performance
+
+The repository includes Criterion benchmarks for parser throughput, common library operations, and memory-oriented workloads. Exact numbers depend on CPU, compiler, governor, and thermal state, so measure on the machine that matters for your workload.
+
+```sh
+cargo bench --bench performance -- throughput/bibtex-parser
 ```
-
-## Examples
-
-### Query Entries
-
-```rust
-// Find entries by type
-let articles = db.find_by_type("article");
-
-// Find entries by field value
-let einstein_papers = db.find_by_field("author", "Einstein");
-
-// Case-insensitive lookup helpers
-let smith_papers = db.find_by_field_ignore_case("AUTHOR", "smith");
-
-// DOI lookup normalizes values like "doi:10.x/..." and "https://doi.org/10.x/..."
-let matches = db.find_by_doi("https://doi.org/10.1000/example");
-
-// Get specific entry
-if let Some(entry) = db.find_by_key("einstein1905") {
-    println!("Title: {}", entry.get("title").unwrap());
-}
-
-// Parse BibTeX names into structured components
-if let Some(entry) = db.find_by_key("einstein1905") {
-    for author in entry.authors() {
-        println!("{} {}", author.first, author.last);
-    }
-}
-```
-
-### Extended Entry Types
-
-The parser recognizes classic BibTeX entry types and common BibLaTeX/repository
-exports including `online`, `software`, `dataset`, `incollection`, `collection`,
-`report`, `thesis`, `patent`, `periodical`, `mvbook`, and related variants.
-Validation accepts common aliases such as `date` for `year` and `journaltitle`
-for `journal`.
-
-### String Variables
-
-```rust
-let bibtex = r#"
-    @string{me = "John Doe"}
-    @string{inst = "MIT"}
-    
-    @article{doe2023,
-        author = me # " and Jane Smith",
-        institution = inst
-    }
-"#;
-
-let db = Database::parse(bibtex)?;
-// Variables are expanded during parsing
-assert_eq!(db.entries()[0].get("author"), Some("John Doe and Jane Smith"));
-```
-
-### Write BibTeX
-
-```rust
-use bibtex_parser::writer::{Writer, WriterConfig};
-
-let config = WriterConfig {
-    indent: "  ".to_string(),
-    align_values: true,
-    sort_entries: true,
-    ..Default::default()
-};
-
-let mut output = Vec::new();
-let mut writer = Writer::with_config(&mut output, config);
-writer.write_database(&db)?;
-```
-
-## Supported Entry Types
-
-- `@article` - Journal article
-- `@book` - Book with publisher
-- `@inbook` - Part of a book
-- `@inproceedings` / `@conference` - Conference paper
-- `@proceedings` - Conference proceedings
-- `@mastersthesis` - Master's thesis
-- `@phdthesis` - PhD thesis
-- `@techreport` - Technical report
-- `@unpublished` - Unpublished work
-- `@misc` - Miscellaneous
-
-Custom entry types are also supported.
-
-## Error Handling
-
-```rust
-match Database::parse(input) {
-    Ok(db) => { /* use database */ },
-    Err(e) => {
-        eprintln!("Error: {}", e);
-        // Error: Parse error at line 5, column 12: Expected '=' after field name
-    }
-}
-```
-
-## Dependencies
-
-- winnow - Parser combinator library
-- ahash - Fast hashing
-- thiserror - Error handling
-- memchr - String searching
 
 ## License
 
-MIT license ([LICENSE](LICENSE))
+Licensed under either of Apache-2.0 or MIT, at your option.

@@ -1,6 +1,6 @@
 //! Example of parsing a BibTeX file
 
-use bibtex_parser::{Database, Result};
+use bibtex_parser::{Library, Result};
 use std::env;
 use std::fs;
 
@@ -17,17 +17,17 @@ fn main() -> Result<()> {
 
     println!("Parsing {}...", filename);
 
-    let db = Database::parser().parse(&content)?;
+    let library = Library::parser().parse(&content)?;
 
     println!("\nStatistics:");
-    println!("  Entries: {}", db.entries().len());
-    println!("  Strings: {}", db.strings().len());
-    println!("  Preambles: {}", db.preambles().len());
-    println!("  Comments: {}", db.comments().len());
+    println!("  Entries: {}", library.entries().len());
+    println!("  Strings: {}", library.strings().len());
+    println!("  Preambles: {}", library.preambles().len());
+    println!("  Comments: {}", library.comments().len());
 
     // Show entry types
     let mut type_counts = std::collections::HashMap::new();
-    for entry in db.entries() {
+    for entry in library.entries() {
         *type_counts
             .entry(entry.entry_type().to_string())
             .or_insert(0) += 1;
@@ -40,7 +40,7 @@ fn main() -> Result<()> {
 
     // Show first few entries
     println!("\nFirst entries (max 5):");
-    for (i, entry) in db.entries().iter().take(5).enumerate() {
+    for (i, entry) in library.entries().iter().take(5).enumerate() {
         println!("\n{}. {} ({})", i + 1, entry.key(), entry.entry_type());
 
         if let Some(author) = entry.get("author") {

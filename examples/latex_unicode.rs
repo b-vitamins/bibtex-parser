@@ -15,7 +15,7 @@ fn main() {
 
 #[cfg(feature = "latex_to_unicode")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use bibtex_parser::Database;
+    use bibtex_parser::Library;
 
     println!("LaTeX to Unicode Conversion Demo");
     println!("=================================\n");
@@ -72,14 +72,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     "#;
 
     // Parse the BibTeX data
-    let db = Database::parser().parse(bibtex)?;
+    let library = Library::parser().parse(bibtex)?;
 
     println!(
         "Parsed {} entries with LaTeX escape sequences.\n",
-        db.entries().len()
+        library.entries().len()
     );
 
-    for (i, entry) in db.entries().iter().enumerate() {
+    for (i, entry) in library.entries().iter().enumerate() {
         println!("Entry {} - Key: {}", i + 1, entry.key());
         println!("Type: {}\n", entry.entry_type());
 
@@ -147,7 +147,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(feature = "latex_to_unicode")]
 fn demonstrate_conversion_categories() -> Result<(), Box<dyn std::error::Error>> {
-    use bibtex_parser::Database;
+    use bibtex_parser::Library;
 
     println!("LaTeX to Unicode Conversion Categories");
     println!("=====================================\n");
@@ -186,7 +186,7 @@ fn demonstrate_conversion_categories() -> Result<(), Box<dyn std::error::Error>>
         }
     "#;
 
-    let db = Database::parser().parse(categories_bibtex)?;
+    let library = Library::parser().parse(categories_bibtex)?;
 
     let categories = [
         ("Accent Marks", "accent_demo"),
@@ -196,7 +196,7 @@ fn demonstrate_conversion_categories() -> Result<(), Box<dyn std::error::Error>>
     ];
 
     for (category_name, entry_key) in &categories {
-        if let Some(entry) = db.find_by_key(entry_key) {
+        if let Some(entry) = library.find_by_key(entry_key) {
             println!("{}", category_name);
             println!("{}", "─".repeat(category_name.len()));
 
@@ -207,15 +207,6 @@ fn demonstrate_conversion_categories() -> Result<(), Box<dyn std::error::Error>>
             println!();
         }
     }
-
-    // Performance note
-    println!("Performance Note:");
-    println!("{}", "─".repeat(16));
-    println!("The LaTeX to Unicode conversion is designed for minimal performance impact:");
-    println!("• Uses static lookup tables (PHF perfect hash functions)");
-    println!("• Fast path for strings without LaTeX sequences");
-    println!("• Zero cost when feature is disabled");
-    println!("• Maintains the parser's 650-700 MB/s throughput");
 
     Ok(())
 }

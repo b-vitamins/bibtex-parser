@@ -1,7 +1,7 @@
 //! BibTeX parser implementation using winnow
 //!
 //! This module provides both high-level and low-level APIs for parsing BibTeX files.
-//! Most users should use the high-level `Database` API, but the low-level API is available
+//! Most users should use the high-level `Library` API, but the low-level API is available
 //! for advanced use cases that require access to raw parsed items.
 //!
 //! # Low-level API Example
@@ -49,7 +49,7 @@ pub mod simd;
 pub mod utils;
 pub mod value;
 
-use crate::{Error, Result};
+use crate::{Error, Result, SourceSpan};
 use winnow::ascii::multispace0;
 use winnow::prelude::*;
 
@@ -74,7 +74,7 @@ pub(crate) fn backtrack<O>() -> PResult<'static, O> {
 ///
 /// This is a low-level API that returns the raw parsed items before
 /// string variable expansion or other processing. Most users should
-/// use `Database::parse()` instead.
+/// use `Library::parse()` instead.
 ///
 /// The returned items preserve the original structure:
 /// - String variables are not expanded
@@ -85,7 +85,7 @@ pub(crate) fn backtrack<O>() -> PResult<'static, O> {
 /// # Performance
 ///
 /// This function uses the same zero-copy value parser as the high-level API,
-/// but returns raw items without string expansion or database indexing.
+/// but returns raw items without string expansion or library indexing.
 ///
 /// # Example
 ///
@@ -166,6 +166,45 @@ where
                     column,
                     message: format!("Failed to parse entry: {e}"),
                     snippet: Some(get_snippet(remaining, 40)),
+                });
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Parse a BibTeX file and stream raw items with source spans.
+#[inline]
+pub(crate) fn parse_bibtex_stream_with_spans<'a, F>(input: &'a str, mut on_item: F) -> Result<()>
+where
+    F: FnMut(ParsedItem<'a>, SourceSpan, &'a str) -> Result<()>,
+{
+    let mut remaining = input;
+
+    loop {
+        lexer::skip_whitespace(&mut remaining);
+        if remaining.is_empty() {
+            break;
+        }
+
+        let start = input.len() - remaining.len();
+        let before_item = remaining;
+        match parse_item(&mut remaining) {
+            Ok(item) => {
+                let end = input.len() - remaining.len();
+                let (line, column) = calculate_position(input, start);
+                let span = SourceSpan::new(start, end, line, column);
+                on_item(item, span, &input[start..end])?;
+            }
+            Err(e) => {
+                let (line, column) = calculate_position(input, start);
+
+                return Err(Error::ParseError {
+                    line,
+                    column,
+                    message: format!("Failed to parse entry: {e}"),
+                    snippet: Some(get_snippet(before_item, 40)),
                 });
             }
         }
@@ -378,7 +417,7 @@ fn calculate_position(input: &str, pos: usize) -> (usize, usize) {
     let mut line = 1;
     let mut column = 1;
 
-    for (i, ch) in input.chars().enumerate() {
+    for (i, ch) in input.char_indices() {
         if i >= pos {
             break;
         }

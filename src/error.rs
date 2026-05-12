@@ -126,3 +126,41 @@ impl fmt::Display for Location {
         write!(f, "{}:{}", self.line, self.column)
     }
 }
+
+/// Byte and line/column location for source-backed items.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceSpan {
+    /// Byte offset where the item starts.
+    pub byte_start: usize,
+    /// Byte offset where the item ends.
+    pub byte_end: usize,
+    /// Line number where the item starts (1-indexed).
+    pub line: usize,
+    /// Column number where the item starts (1-indexed).
+    pub column: usize,
+}
+
+impl SourceSpan {
+    /// Create a new source span.
+    #[must_use]
+    pub const fn new(byte_start: usize, byte_end: usize, line: usize, column: usize) -> Self {
+        Self {
+            byte_start,
+            byte_end,
+            line,
+            column,
+        }
+    }
+
+    /// Return the byte length covered by this span.
+    #[must_use]
+    pub const fn len(self) -> usize {
+        self.byte_end - self.byte_start
+    }
+
+    /// Return true when the span is empty.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.byte_start == self.byte_end
+    }
+}

@@ -1,4 +1,4 @@
-use bibtex_parser::{Database, ValidationLevel};
+use bibtex_parser::{Library, ValidationLevel};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bibtex = r#"
@@ -38,15 +38,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         @misc{empty_entry, title="Minimal Entry"}
     "#;
 
-    let db = Database::parser().parse(bibtex)?;
+    let library = Library::parser().parse(bibtex)?;
 
     println!("=== BibTeX Validation Report ===\n");
 
     // Basic validation statistics
-    println!("Total entries: {}", db.entries().len());
-    println!("Total strings: {}", db.strings().len());
-    println!("Total preambles: {}", db.preambles().len());
-    println!("Total comments: {}\n", db.comments().len());
+    println!("Total entries: {}", library.entries().len());
+    println!("Total strings: {}", library.strings().len());
+    println!("Total preambles: {}", library.preambles().len());
+    println!("Total comments: {}\n", library.comments().len());
 
     // Demonstrate different validation levels
     println!("=== Validation by Level ===");
@@ -57,7 +57,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("Strict", ValidationLevel::Strict),
     ] {
         println!("\n--- {} Validation ---", level_name);
-        let invalid = db.validate(level);
+        let invalid = library.validate(level);
 
         if invalid.is_empty() {
             println!("✓ All entries are valid!");
@@ -80,10 +80,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Comprehensive validation report
     println!("\n=== Comprehensive Validation Report ===");
-    let report = db.validate_comprehensive(ValidationLevel::Standard);
+    let report = library.validate_comprehensive(ValidationLevel::Standard);
 
     if report.is_valid() {
-        println!("✓ Database is completely valid!");
+        println!("✓ Library is completely valid!");
     } else {
         let summary = report.issue_summary();
         println!("✗ Found {} total issues:", report.total_issues());
@@ -123,7 +123,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Individual entry validation examples
     println!("\n=== Individual Entry Validation ===");
 
-    for (i, entry) in db.entries().iter().enumerate() {
+    for (i, entry) in library.entries().iter().enumerate() {
         println!("\nEntry {}: {}", i, entry.key());
 
         // Quick check
@@ -152,7 +152,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Show some valid entries for comparison
     println!("\n=== Valid Entry Examples ===");
-    for entry in db.entries() {
+    for entry in library.entries() {
         if entry.validate(ValidationLevel::Standard).is_ok() {
             println!("\n✓ {} ({})", entry.key(), entry.entry_type());
             if let Some(author) = entry.get("author") {
@@ -166,10 +166,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-
-    println!("\n=== Performance Note ===");
-    println!("Validation is opt-in and has zero cost when not used.");
-    println!("Parsing performance remains unaffected: ~700 MB/s throughput maintained.");
 
     Ok(())
 }

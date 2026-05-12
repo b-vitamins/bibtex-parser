@@ -1,6 +1,6 @@
 //! Example of querying BibTeX entries
 
-use bibtex_parser::{Database, Result};
+use bibtex_parser::{Library, Result};
 
 fn main() -> Result<()> {
     let bibtex = r#"
@@ -34,11 +34,11 @@ fn main() -> Result<()> {
         }
     "#;
 
-    let db = Database::parser().parse(bibtex)?;
+    let library = Library::parser().parse(bibtex)?;
 
     // Find all articles
     println!("Articles:");
-    for entry in db.find_by_type("article") {
+    for entry in library.find_by_type("article") {
         println!(
             "  - {} by {}",
             entry.get("title").unwrap_or("Unknown"),
@@ -48,7 +48,7 @@ fn main() -> Result<()> {
 
     // Find Einstein's papers
     println!("\nEinstein's papers:");
-    for entry in db.find_by_field("author", "Einstein") {
+    for entry in library.find_by_field("author", "Einstein") {
         println!(
             "  - {} ({})",
             entry.get("title").unwrap_or("Unknown"),
@@ -58,7 +58,7 @@ fn main() -> Result<()> {
 
     // Find papers from 1950
     println!("\nPapers from 1950:");
-    for entry in db.find_by_field("year", "1950") {
+    for entry in library.find_by_field("year", "1950") {
         println!(
             "  - {} by {}",
             entry.get("title").unwrap_or("Unknown"),
@@ -68,18 +68,18 @@ fn main() -> Result<()> {
 
     // Case-insensitive field search
     println!("\nCase-insensitive author search:");
-    for entry in db.find_by_field_ignore_case("AUTHOR", "einstein") {
+    for entry in library.find_by_field_ignore_case("AUTHOR", "einstein") {
         println!("  - {}", entry.key());
     }
 
     // DOI lookup accepts common DOI URL/prefix forms
     println!("\nDOI lookup:");
-    for entry in db.find_by_doi("doi:10.5555/example") {
+    for entry in library.find_by_doi("doi:10.5555/example") {
         println!("  - {}", entry.key());
     }
 
     // Find specific entry by key
-    if let Some(entry) = db.find_by_key("hawking1988") {
+    if let Some(entry) = library.find_by_key("hawking1988") {
         println!("\nFound Hawking's book:");
         println!("  Type: {}", entry.entry_type());
         println!("  Author: {}", entry.get("author").unwrap_or("Unknown"));

@@ -1,6 +1,6 @@
-//! BibTeX writer for serializing databases
+//! BibTeX writer for serializing libraries
 
-use crate::{Database, Entry, Result, Value};
+use crate::{Block, Entry, Library, Result, Value};
 use std::io::{self, Write};
 
 /// Configuration for writing BibTeX
@@ -63,27 +63,50 @@ impl<W: Write> Writer<W> {
         self.writer
     }
 
-    /// Write a complete database
-    pub fn write_database(&mut self, db: &Database) -> io::Result<()> {
+    /// Write a complete library.
+    pub fn write_library(&mut self, library: &Library) -> io::Result<()> {
+        if self.config.sort_entries {
+            return self.write_library_sorted(library);
+        }
+
+        for (index, block) in library.blocks().into_iter().enumerate() {
+            if index > 0 {
+                writeln!(self.writer)?;
+            }
+            match block {
+                Block::Entry(entry, _) => self.write_entry(entry)?,
+                Block::String(definition) => {
+                    self.write_string(&definition.name, &definition.value)?;
+                }
+                Block::Preamble(preamble) => self.write_preamble(&preamble.value)?,
+                Block::Comment(comment) => self.write_comment(comment.text())?,
+                Block::Failed(failed) => self.writer.write_all(failed.raw.as_bytes())?,
+            }
+        }
+
+        Ok(())
+    }
+
+    fn write_library_sorted(&mut self, library: &Library) -> io::Result<()> {
         // Write preambles
-        for preamble in db.preambles() {
-            self.write_preamble(preamble)?;
+        for preamble in library.preambles() {
+            self.write_preamble(&preamble.value)?;
             writeln!(self.writer)?;
         }
 
         // Write strings
-        let mut strings: Vec<_> = db.strings().iter().collect();
+        let mut strings: Vec<_> = library.strings().iter().collect();
         if self.config.sort_entries {
-            strings.sort_by_key(|(k, _)| *k);
+            strings.sort_by(|a, b| a.name.cmp(&b.name));
         }
 
-        for (name, value) in strings {
-            self.write_string(name, value)?;
+        for definition in strings {
+            self.write_string(&definition.name, &definition.value)?;
             writeln!(self.writer)?;
         }
 
         // Write entries
-        let mut entries = db.entries().iter().collect::<Vec<_>>();
+        let mut entries = library.entries().iter().collect::<Vec<_>>();
         if self.config.sort_entries {
             entries.sort_by(|a, b| a.key.cmp(&b.key));
         }
@@ -153,6 +176,20 @@ impl<W: Write> Writer<W> {
         Ok(())
     }
 
+    /// Write a comment.
+    fn write_comment(&mut self, text: &str) -> io::Result<()> {
+        let trimmed = text.trim_start();
+        if trimmed.starts_with('%') || trimmed.starts_with('@') {
+            self.writer.write_all(text.as_bytes())?;
+            if !text.ends_with('\n') {
+                writeln!(self.writer)?;
+            }
+        } else {
+            writeln!(self.writer, "@comment{{{text}}}")?;
+        }
+        Ok(())
+    }
+
     /// Write a value
     fn write_value(&mut self, value: &Value) -> io::Result<()> {
         match value {
@@ -191,21 +228,21 @@ fn escape_quotes(s: &str) -> String {
     s.replace('"', "\\\"")
 }
 
-/// Convenience function to write a database to a string
+/// Convenience function to write a library to a string.
 #[must_use = "Check the result to detect serialization errors"]
-pub fn to_string(db: &Database) -> Result<String> {
+pub fn to_string(library: &Library) -> Result<String> {
     let mut buf = Vec::new();
     let mut writer = Writer::new(&mut buf);
-    writer.write_database(db)?;
+    writer.write_library(library)?;
     Ok(String::from_utf8(buf).expect("valid UTF-8"))
 }
 
-/// Convenience function to write a database to a file
+/// Convenience function to write a library to a file.
 #[must_use = "Check the result to detect IO or serialization errors"]
-pub fn to_file(db: &Database, path: impl AsRef<std::path::Path>) -> Result<()> {
+pub fn to_file(library: &Library, path: impl AsRef<std::path::Path>) -> Result<()> {
     let file = std::fs::File::create(path)?;
     let mut writer = Writer::new(file);
-    writer.write_database(db)?;
+    writer.write_library(library)?;
     Ok(())
 }
 

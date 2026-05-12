@@ -288,8 +288,8 @@ static LATEX_SYMBOLS: phf::Map<&'static str, &'static str> = phf_map! {
 ///
 /// # Performance
 ///
-/// Uses a fast path for strings without LaTeX sequences to maintain
-/// the parser's 650-700 MB/s throughput when the feature is enabled.
+/// Uses a fast path for strings without LaTeX sequences to avoid
+/// unnecessary scanning and allocation.
 #[must_use]
 pub fn latex_to_unicode(input: &str) -> String {
     // Fast path: if no backslashes or tildes, no LaTeX to convert
@@ -297,18 +297,10 @@ pub fn latex_to_unicode(input: &str) -> String {
         return input.to_string();
     }
 
-    // if input.contains("incomplete") {
-    //     eprintln!("DEBUG: Input string: {:?}", input);
-    //     eprintln!("DEBUG: Input bytes: {:?}", input.as_bytes());
-    // }
-
     let mut result = String::with_capacity(input.len());
     let mut chars = input.char_indices();
 
     while let Some((pos, ch)) = chars.next() {
-        // if input.contains("incomplete") && (pos < 15) {
-        //     eprintln!("DEBUG: Processing pos {} char {:?} ({})", pos, ch, ch as u8);
-        // }
         if ch == '\\' {
             // Look for the longest matching pattern starting at this position
             let remaining = &input[pos..];
@@ -345,11 +337,6 @@ pub fn latex_to_unicode(input: &str) -> String {
             }
 
             if let Some((pattern, replacement)) = best_match {
-                // Found a match - add the replacement and skip past the pattern
-                // if input.contains("incomplete") {
-                //     eprintln!("DEBUG: Found pattern '{}' (len {}) -> '{}' at pos {}", pattern, pattern.len(), replacement, pos);
-                //     eprintln!("DEBUG: Will skip {} characters", pattern.len() - 1);
-                // }
                 result.push_str(replacement);
 
                 // Skip the matched characters
@@ -370,17 +357,10 @@ pub fn latex_to_unicode(input: &str) -> String {
                 result.push(ch);
             }
         } else {
-            // if input.contains("incomplete") && (pos < 15) {
-            //     eprintln!("DEBUG: Adding char {:?} to result", ch);
-            // }
             result.push(ch);
         }
     }
 
-    // if input.contains("incomplete") {
-    //     eprintln!("DEBUG: Result string: {:?}", result);
-    //     eprintln!("DEBUG: Result bytes: {:?}", result.as_bytes());
-    // }
     result
 }
 

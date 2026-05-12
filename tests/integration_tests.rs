@@ -1,5 +1,5 @@
 use bibtex_parser::{
-    normalize_doi, parse_bibtex, parse_names, Database, EntryType, ParsedItem, ValidationError,
+    normalize_doi, parse_bibtex, parse_names, EntryType, Library, ParsedItem, ValidationError,
     ValidationLevel, ValidationSeverity, Value,
 };
 use pretty_assertions::assert_eq;
@@ -8,7 +8,7 @@ use std::borrow::Cow;
 #[test]
 fn test_parse_simple_file() {
     let input = include_str!("fixtures/simple.bib");
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
 
     assert_eq!(db.entries().len(), 2);
     assert_eq!(db.strings().len(), 2);
@@ -33,7 +33,7 @@ fn test_parse_simple_file() {
 #[test]
 fn test_parse_complex_file() {
     let input = include_str!("fixtures/complex.bib");
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
 
     // Should handle various entry types
     let articles = db.find_by_type("article");
@@ -54,7 +54,7 @@ fn test_parse_complex_file() {
 #[test]
 fn test_malformed_file_errors() {
     let input = include_str!("fixtures/malformed.bib");
-    let result = Database::parser().parse(input);
+    let result = Library::parser().parse(input);
 
     assert!(result.is_err());
 
@@ -78,11 +78,11 @@ fn test_round_trip() {
   year = 2023
 }"#;
 
-    let db = Database::parser().parse(original).unwrap();
+    let db = Library::parser().parse(original).unwrap();
     let output = bibtex_parser::to_string(&db).unwrap();
 
     // Parse the output again
-    let db2 = Database::parser().parse(&output).unwrap();
+    let db2 = Library::parser().parse(&output).unwrap();
 
     // Should have same content
     assert_eq!(db.entries().len(), db2.entries().len());
@@ -105,7 +105,7 @@ fn test_variable_expansion() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     assert_eq!(entry.get("author"), Some("John Doe, MIT"));
@@ -119,7 +119,7 @@ fn test_case_insensitive_entry_types() {
         @ArTiClE{test3, title = "Test 3"}
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     assert_eq!(db.entries().len(), 3);
 
     for entry in db.entries() {
@@ -135,7 +135,7 @@ fn test_find_by_field() {
         @article{bohr1913, author = "Bohr", year = 1913}
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
 
     let einstein_papers = db.find_by_field("author", "Einstein");
     assert_eq!(einstein_papers.len(), 2);
@@ -173,7 +173,7 @@ fn test_extended_biblatex_entry_types_and_validation_aliases() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
 
     assert_eq!(db.entries()[0].entry_type(), &EntryType::Online);
     assert_eq!(db.entries()[1].entry_type(), &EntryType::Software);
@@ -207,7 +207,7 @@ fn test_entry_field_doi_and_name_helpers() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     assert!(entry.field_ignore_case("author").is_some());
@@ -233,7 +233,7 @@ fn test_entry_field_doi_and_name_helpers() {
 }
 
 #[test]
-fn test_database_case_insensitive_and_doi_search_helpers() {
+fn test_library_case_insensitive_and_doi_search_helpers() {
     let input = r#"
         @article{Smith2024,
             author = "Jane Smith",
@@ -254,23 +254,25 @@ fn test_database_case_insensitive_and_doi_search_helpers() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let library = Library::parser().parse(input).unwrap();
 
-    assert!(db.contains_key("Smith2024"));
+    assert!(library.contains_key("Smith2024"));
     assert_eq!(
-        db.find_by_key_ignore_case("SMITH2024").unwrap().key(),
+        library.find_by_key_ignore_case("SMITH2024").unwrap().key(),
         "Smith2024"
     );
     assert_eq!(
-        db.find_by_field_ignore_case("AUTHOR", "jane smith").len(),
+        library
+            .find_by_field_ignore_case("AUTHOR", "jane smith")
+            .len(),
         2
     );
-    assert_eq!(db.find_by_doi("doi:10.5555/ABC").len(), 2);
+    assert_eq!(library.find_by_doi("doi:10.5555/ABC").len(), 2);
 
-    let duplicate_keys = db.find_duplicate_keys_ignore_case();
+    let duplicate_keys = library.find_duplicate_keys_ignore_case();
     assert_eq!(duplicate_keys, vec!["smith2024".to_string()]);
 
-    let duplicate_dois = db.find_duplicate_dois();
+    let duplicate_dois = library.find_duplicate_dois();
     assert_eq!(duplicate_dois.len(), 1);
     assert_eq!(duplicate_dois[0].0, "10.5555/abc");
     assert_eq!(duplicate_dois[0].1.len(), 2);
@@ -310,7 +312,7 @@ fn test_parenthesis_delimiters() {
         @comment(This is a comment with parentheses)
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
 
     // Verify entries parsed correctly
     assert_eq!(db.entries().len(), 2);
@@ -330,8 +332,8 @@ fn test_parenthesis_delimiters() {
 
     // Verify string definitions
     assert_eq!(db.strings().len(), 2);
-    assert!(db.strings().contains_key("ieee"));
-    assert!(db.strings().contains_key("acm"));
+    assert!(db.string("ieee").is_some());
+    assert!(db.string("acm").is_some());
 
     // Verify preambles
     assert_eq!(db.preambles().len(), 1);
@@ -351,7 +353,7 @@ fn test_mixed_delimiters_within_entry() {
         )
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     assert_eq!(db.entries().len(), 1);
 
     let entry = &db.entries()[0];
@@ -375,7 +377,7 @@ fn test_multiple_preambles_and_comments() {
         @comment{This is a comment with braces}
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
 
     // Verify preambles
     assert_eq!(db.preambles().len(), 2);
@@ -388,12 +390,12 @@ fn test_multiple_preambles_and_comments() {
 fn test_parenthesis_error_handling() {
     // Test mismatched delimiters
     let input = r#"@article(test, author = "John"})"#;
-    let result = Database::parser().parse(input);
+    let result = Library::parser().parse(input);
     assert!(result.is_err());
 
     // Test missing closing delimiter
     let input = r#"@article(test, author = "John""#;
-    let result = Database::parser().parse(input);
+    let result = Library::parser().parse(input);
     assert!(result.is_err());
 }
 
@@ -406,7 +408,7 @@ fn test_month_abbreviations_basic() {
             year = 2024
         }
     "#;
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     // Month abbreviation should expand to full name
@@ -433,7 +435,7 @@ fn test_all_month_abbreviations() {
 
     for (abbrev, full_name) in &months {
         let input = format!(r#"@article{{test, month = {}}}"#, abbrev);
-        let db = Database::parser().parse(&input).unwrap();
+        let db = Library::parser().parse(&input).unwrap();
         let entry = &db.entries()[0];
 
         assert_eq!(
@@ -452,7 +454,7 @@ fn test_month_abbreviations_case_insensitive() {
 
     for variation in &variations {
         let input = format!(r#"@article{{test, month = {}}}"#, variation);
-        let db = Database::parser().parse(&input).unwrap();
+        let db = Library::parser().parse(&input).unwrap();
         let entry = &db.entries()[0];
 
         assert_eq!(
@@ -472,7 +474,7 @@ fn test_user_strings_override_month_constants() {
             month = jan
         }
     "#;
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     // User-defined string should override month constant
@@ -486,7 +488,7 @@ fn test_month_in_concatenation() {
             note = "Published in " # jan # " 2024"
         }
     "#;
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     // Month should expand in concatenation
@@ -501,7 +503,7 @@ fn test_month_in_complex_concatenation() {
             note = "Published " # jan # " " # year # " in IEEE"
         }
     "#;
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     // Both month constant and user string should work in same concatenation
@@ -519,7 +521,7 @@ fn test_undefined_variable_with_user_strings_errors() {
     "#;
 
     // Should error for undefined variables when user strings exist
-    let result = Database::parser().parse(input);
+    let result = Library::parser().parse(input);
     assert!(result.is_err());
 
     let error = result.unwrap_err();
@@ -540,7 +542,7 @@ fn test_month_with_user_string_precedence() {
         @article{test4, month = apr}         # Should use month constant
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
 
     assert_eq!(db.entries()[0].get("month"), Some("January")); // month constant
     assert_eq!(db.entries()[1].get("month"), Some("Custom February")); // user string
@@ -561,7 +563,7 @@ fn test_month_constants_performance() {
 
     // This should parse quickly without performance regression
     let start = std::time::Instant::now();
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let duration = start.elapsed();
 
     assert_eq!(db.entries().len(), 5);
@@ -592,7 +594,7 @@ fn test_case_insensitive_field_access() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     // Test case-sensitive access (should match exact case)
@@ -646,7 +648,7 @@ fn test_case_insensitive_with_string_variables() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     // Variables should work with case-insensitive access
@@ -682,7 +684,7 @@ fn test_case_insensitive_validation() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     // The is_valid() method should work with case-insensitive checking
@@ -707,7 +709,7 @@ fn test_case_sensitive_vs_insensitive_performance() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     // Measure case-sensitive access time
@@ -740,7 +742,7 @@ fn test_case_sensitive_vs_insensitive_performance() {
 #[test]
 fn test_field_name_eq_ignore_case() {
     let input = r#"@article{test, Author = "John Doe"}"#;
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
     let field = &entry.fields[0];
 
@@ -764,7 +766,7 @@ fn test_percent_line_comments() {
         % Final comment at the end
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let comments = db.comments();
 
     // Should have 2 % comments (% comments inside entries are not valid BibTeX)
@@ -786,7 +788,7 @@ fn test_percent_line_comments() {
 fn test_percent_comment_not_consumed_by_whitespace() {
     let input = "   % Comment with leading whitespace\n@article{test, title=\"Test Title\"}";
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     assert_eq!(db.comments().len(), 1);
     assert!(db.comments()[0].contains("Comment with leading whitespace"));
     assert_eq!(db.entries().len(), 1);
@@ -801,7 +803,7 @@ fn test_mixed_comment_types() {
         @article{test, title="Test"}
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     assert!(db.comments().len() >= 3);
 
     // Verify all three types of comments are captured
@@ -824,7 +826,7 @@ fn test_percent_comment_variations() {
         % Comment after entry
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let comments = db.comments();
 
     // Should capture all percent comments including empty ones
@@ -841,7 +843,7 @@ fn test_percent_comment_variations() {
 fn test_percent_comment_in_complex_bibtex() {
     // Use the complex fixture which already has a % comment
     let input = include_str!("fixtures/complex.bib");
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
 
     // The complex.bib file has "% Another inline comment" on line 38
     let comments = db.comments();
@@ -876,7 +878,7 @@ fn test_digit_string_fallback() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     assert_eq!(db.entries().len(), 1);
 
     let entry = &db.entries()[0];
@@ -985,7 +987,7 @@ fn test_mixed_value_types() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     // All should parse successfully and return appropriate string representations
@@ -1063,7 +1065,7 @@ fn test_string_variable_vs_literal_digit() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     assert_eq!(entry.get_as_string("year"), Some("2024".to_string()));
@@ -1132,7 +1134,7 @@ fn test_edge_case_digit_strings() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     // All should parse as string literals
@@ -1190,7 +1192,7 @@ fn test_digit_string_in_concatenation() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     assert_eq!(
@@ -1236,7 +1238,7 @@ fn test_backward_compatibility_pure_numbers() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     // All should be parsed as Number type
@@ -1483,11 +1485,11 @@ fn test_raw_api_string_definitions() {
 }
 
 #[test]
-fn test_raw_api_vs_database_api() {
+fn test_raw_api_vs_library_api() {
     let input = r#"
         @string{conference = "VLDB"}
         @article{test,
-            title = "Database " # conference,
+            title = "Library " # conference,
             year = 2024
         }
     "#;
@@ -1495,8 +1497,8 @@ fn test_raw_api_vs_database_api() {
     // Parse with raw API
     let raw_items = parse_bibtex(input).unwrap();
 
-    // Parse with Database API
-    let db = Database::parser().parse(input).unwrap();
+    // Parse with Library API
+    let library = Library::parser().parse(input).unwrap();
 
     // Raw API should have unexpanded variables
     let raw_entry = raw_items
@@ -1515,15 +1517,15 @@ fn test_raw_api_vs_database_api() {
     match &raw_title.value {
         Value::Concat(parts) => {
             assert_eq!(parts.len(), 2);
-            assert_eq!(parts[0], Value::Literal(Cow::Borrowed("Database ")));
+            assert_eq!(parts[0], Value::Literal(Cow::Borrowed("Library ")));
             assert!(matches!(parts[1], Value::Variable(_)));
         }
         _ => panic!("Expected concatenated value with variable reference"),
     }
 
-    // Database API should have expanded variables
-    let db_entry = &db.entries()[0];
-    assert_eq!(db_entry.get("title"), Some("Database VLDB"));
+    // Library API should have expanded variables
+    let library_entry = &library.entries()[0];
+    assert_eq!(library_entry.get("title"), Some("Library VLDB"));
 }
 
 #[test]
@@ -1643,8 +1645,8 @@ fn test_raw_api_complex_file() {
     assert!(preamble_count > 0);
     assert!(comment_count > 0);
 
-    // Compare with Database API to ensure same parsing capability
-    let db = Database::parser().parse(input).unwrap();
+    // Compare with Library API to ensure same parsing capability
+    let db = Library::parser().parse(input).unwrap();
     assert_eq!(entry_count, db.entries().len());
     assert_eq!(string_count, db.strings().len());
     assert_eq!(preamble_count, db.preambles().len());
@@ -1697,8 +1699,8 @@ fn test_raw_api_month_constants() {
         _ => panic!("Expected variable reference for month constant"),
     }
 
-    // Compare with Database API which should expand month constants
-    let db = Database::parser().parse(input).unwrap();
+    // Compare with Library API which should expand month constants
+    let db = Library::parser().parse(input).unwrap();
     let db_entry = &db.entries()[0];
     assert_eq!(db_entry.get("month"), Some("January"));
 }
@@ -1709,7 +1711,7 @@ fn test_raw_api_performance() {
     let input = r#"
         @string{conference = "VLDB"}
         @string{year = "2024"}
-        @preamble{"Database Conference Proceedings"}
+        @preamble{"Library Conference Proceedings"}
     "#
     .repeat(100)
         + &"@article{test, title = \"Performance Test\", year = 2024}".repeat(1000);
@@ -1785,7 +1787,7 @@ fn test_validation_levels() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     // Should pass all validation levels
@@ -1803,7 +1805,7 @@ fn test_missing_required_fields() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     let result = entry.validate(ValidationLevel::Minimal);
@@ -1835,7 +1837,7 @@ fn test_validation_warnings() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     let result = entry.validate(ValidationLevel::Strict);
@@ -1860,21 +1862,21 @@ fn test_backward_compatible_is_valid() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     assert!(db.entries()[0].is_valid());
     assert!(!db.entries()[1].is_valid());
 }
 
 #[test]
-fn test_database_validation() {
+fn test_library_validation() {
     let input = r#"
         @article{valid, author="A", title="T", journal="J", year=2024}
         @article{invalid, author="A", title="T"}
         @article{valid2, author="B", title="T2", journal="J2", year=2024}
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
-    let invalid = db.validate(ValidationLevel::Minimal);
+    let library = Library::parser().parse(input).unwrap();
+    let invalid = library.validate(ValidationLevel::Minimal);
 
     assert_eq!(invalid.len(), 1);
     assert_eq!(invalid[0].0, 1); // Index of invalid entry
@@ -1889,7 +1891,7 @@ fn test_duplicate_keys() {
         @article{dup, title="Second"}
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let duplicates = db.find_duplicate_keys();
 
     assert_eq!(duplicates.len(), 1);
@@ -1905,7 +1907,7 @@ fn test_comprehensive_validation_report() {
         @misc{empty_entry, title="Empty Entry"}
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let report = db.validate_comprehensive(ValidationLevel::Standard);
 
     assert!(!report.is_valid());
@@ -1950,7 +1952,7 @@ fn test_validation_field_formats() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     let result = entry.validate(ValidationLevel::Strict);
@@ -1988,7 +1990,7 @@ fn test_validation_book_author_editor() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
 
     // First book should have error about missing author/editor
     let result1 = db.entries()[0].validate(ValidationLevel::Standard);
@@ -2019,7 +2021,7 @@ fn test_validation_empty_fields() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     let result = entry.validate(ValidationLevel::Standard);
@@ -2052,7 +2054,7 @@ fn test_validation_crossref() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
 
     // Valid crossref should pass strict validation
     let result1 = db.entries()[0].validate(ValidationLevel::Strict);
@@ -2078,7 +2080,7 @@ fn test_validation_case_insensitive_field_checking() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     // Should pass all validation levels with case-insensitive field checking
@@ -2100,7 +2102,7 @@ fn test_validation_standard_vs_strict() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     // Standard should pass (only basic checks)
@@ -2125,7 +2127,7 @@ fn test_validation_year_checks() {
         @article{string_year, author="A", title="T", journal="J", year="not-a-year"}
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
 
     // Future year should have warning
     let result1 = db.entries()[0].validate(ValidationLevel::Standard);
@@ -2167,7 +2169,7 @@ fn test_validation_pages_format() {
         @article{bad_pages2, author="A", title="T", journal="J", year=2024, pages="twelve"}
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
 
     // Good page formats should pass
     for i in 0..4 {
@@ -2203,7 +2205,7 @@ fn test_validation_performance() {
     "#
     .repeat(100);
 
-    let db = Database::parser().parse(&input).unwrap();
+    let db = Library::parser().parse(&input).unwrap();
 
     // Measure validation time
     let start = std::time::Instant::now();
@@ -2243,7 +2245,7 @@ fn test_issue_summary() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let report = db.validate_comprehensive(ValidationLevel::Strict);
 
     let summary = report.issue_summary();
@@ -2257,7 +2259,7 @@ fn test_validation_zero_cost_when_not_used() {
     let input = "@article{test, author=\"A\", title=\"T\", journal=\"J\", year=2024}".repeat(1000);
 
     let start = std::time::Instant::now();
-    let db = Database::parser().parse(&input).unwrap();
+    let db = Library::parser().parse(&input).unwrap();
     let parse_duration = start.elapsed();
 
     // Parsing should still be fast
@@ -2283,7 +2285,7 @@ fn test_latex_to_unicode_basic_accents() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     // Test unicode conversion
@@ -2316,7 +2318,7 @@ fn test_latex_to_unicode_case_insensitive() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     // Test case-insensitive unicode conversion
@@ -2348,7 +2350,7 @@ fn test_latex_to_unicode_all_field_types() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     // Test get_as_unicode_string variants (handles all value types)
@@ -2393,7 +2395,7 @@ fn test_latex_to_unicode_all_fields() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     let unicode_fields = entry.fields_unicode();
@@ -2446,7 +2448,7 @@ fn test_latex_to_unicode_comprehensive_accents() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     assert_eq!(entry.get_unicode("acute"), Some("áéíóú".to_string()));
@@ -2470,7 +2472,7 @@ fn test_latex_to_unicode_greek_letters() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     assert_eq!(
@@ -2502,7 +2504,7 @@ fn test_latex_to_unicode_mathematical_symbols() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     assert_eq!(
@@ -2532,7 +2534,7 @@ fn test_latex_to_unicode_symbols_and_punctuation() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     assert_eq!(
@@ -2570,7 +2572,7 @@ fn test_latex_to_unicode_mixed_content() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     // Complex scientific text with mixed LaTeX
@@ -2603,7 +2605,7 @@ fn test_latex_to_unicode_no_conversion() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     // Plain text should be unchanged (fast path)
@@ -2637,7 +2639,7 @@ fn test_latex_to_unicode_edge_cases() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     // Incomplete/unknown sequences should be left unchanged
@@ -2687,7 +2689,7 @@ fn test_latex_to_unicode_performance_regression() {
     .repeat(100);
 
     let start = std::time::Instant::now();
-    let db = Database::parser().parse(&input).unwrap();
+    let db = Library::parser().parse(&input).unwrap();
     let parse_time = start.elapsed();
 
     // Parsing should still be fast even with unicode feature enabled
@@ -2729,7 +2731,7 @@ fn test_latex_to_unicode_with_string_expansion() {
         }
     "#;
 
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     // String expansion happens before unicode conversion
@@ -2751,7 +2753,7 @@ fn test_latex_to_unicode_with_string_expansion() {
 fn test_latex_to_unicode_doctest_examples() {
     // Test examples from the documentation
     let input1 = r#"@article{test, author = "Jos\'e Garc\'ia"}"#;
-    let db1 = Database::parser().parse(input1).unwrap();
+    let db1 = Library::parser().parse(input1).unwrap();
     let entry1 = &db1.entries()[0];
     assert_eq!(
         entry1.get_unicode("author"),
@@ -2759,7 +2761,7 @@ fn test_latex_to_unicode_doctest_examples() {
     );
 
     let input2 = r#"@article{test, TITLE = "M\\\"uller's work"}"#;
-    let db2 = Database::parser().parse(input2).unwrap();
+    let db2 = Library::parser().parse(input2).unwrap();
     let entry2 = &db2.entries()[0];
     assert_eq!(
         entry2.get_unicode_ignore_case("title"),
@@ -2772,7 +2774,7 @@ fn test_latex_to_unicode_doctest_examples() {
 #[test]
 fn test_latex_to_unicode_methods_not_available() {
     let input = r#"@article{test, author = "Jos\'e"}"#;
-    let db = Database::parser().parse(input).unwrap();
+    let db = Library::parser().parse(input).unwrap();
     let entry = &db.entries()[0];
 
     // These methods should not exist when feature is disabled
@@ -2784,4 +2786,123 @@ fn test_latex_to_unicode_methods_not_available() {
 
     // Regular methods should still work
     assert_eq!(entry.get("author"), Some("Jos\\'e"));
+}
+
+#[test]
+fn test_library_blocks_and_source_capture() {
+    let input = r#"
+        % leading comment
+        @string{venue = "VLDB"}
+        @article{a2024, title = venue}
+    "#;
+
+    let library = Library::parser().capture_source().parse(input).unwrap();
+    let blocks = library.blocks();
+
+    assert_eq!(library.entries().len(), 1);
+    assert_eq!(library.strings().len(), 1);
+    assert_eq!(blocks.len(), 3);
+
+    match blocks[1] {
+        bibtex_parser::Block::String(definition) => {
+            assert_eq!(definition.name(), "venue");
+            assert!(definition.source.is_some());
+        }
+        _ => panic!("expected string block"),
+    }
+
+    match blocks[2] {
+        bibtex_parser::Block::Entry(entry, source) => {
+            assert_eq!(entry.key(), "a2024");
+            assert_eq!(entry.get("title"), Some("VLDB"));
+            assert!(source.is_some());
+        }
+        _ => panic!("expected entry block"),
+    }
+}
+
+#[test]
+fn test_tolerant_parse_retains_failed_blocks() {
+    let input = r#"
+        @article{ok2024, title = "Good", year = 2024}
+        @article{broken, title = "Missing close"
+        @book{book2024, title = "Recovered", year = 2024}
+    "#;
+
+    let library = Library::parser()
+        .tolerant()
+        .capture_source()
+        .parse(input)
+        .unwrap();
+
+    assert_eq!(library.entries().len(), 2);
+    assert_eq!(library.failed_blocks().len(), 1);
+    assert!(library.failed_blocks()[0].raw.contains("broken"));
+    assert!(library.failed_blocks()[0].source.is_some());
+    assert_eq!(library.entries()[1].key(), "book2024");
+}
+
+#[test]
+fn test_typed_transforms_and_entry_editing() {
+    let input = r#"
+        @article{z2024,
+            journaltitle = "Journal",
+            date = 2024,
+            doi = "https://doi.org/10.1000/XYZ.",
+            month = "January",
+            keywords = "rust; parsing, bibtex"
+        }
+    "#;
+
+    let mut library = Library::parse(input).unwrap();
+    library.normalize_doi_fields();
+    library.normalize_months(bibtex_parser::MonthStyle::Abbrev);
+    library.normalize_fields(bibtex_parser::FieldNormalizeOptions {
+        name_case: bibtex_parser::FieldNameCase::Lowercase,
+        biblatex_aliases: true,
+    });
+
+    let entry = &mut library.entries_mut()[0];
+    assert_eq!(entry.doi(), Some("10.1000/xyz".to_string()));
+    assert_eq!(entry.get("month"), Some("jan"));
+    assert_eq!(entry.journal(), Some("Journal".to_string()));
+    assert_eq!(entry.year(), Some("2024".to_string()));
+    assert_eq!(
+        entry.keywords(),
+        vec![
+            "rust".to_string(),
+            "parsing".to_string(),
+            "bibtex".to_string()
+        ]
+    );
+
+    entry.set_literal("note", "edited");
+    assert_eq!(entry.get("note"), Some("edited"));
+    assert_eq!(entry.rename_field("note", "annotation"), 1);
+    assert_eq!(entry.remove("annotation").len(), 1);
+}
+
+#[test]
+fn test_writer_preserves_block_order_by_default() {
+    let input = r#"
+        @comment{front}
+        @string{venue = "VLDB"}
+        @article{a, title = venue}
+        @preamble{"plain preamble"}
+        @book{b, title = "Book"}
+    "#;
+
+    let library = Library::parse(input).unwrap();
+    let output = bibtex_parser::to_string(&library).unwrap();
+
+    let comment = output.find("@comment{front}").unwrap();
+    let string = output.find("@string{venue").unwrap();
+    let article = output.find("@article{a").unwrap();
+    let preamble = output.find("@preamble").unwrap();
+    let book = output.find("@book{b").unwrap();
+
+    assert!(comment < string);
+    assert!(string < article);
+    assert!(article < preamble);
+    assert!(preamble < book);
 }

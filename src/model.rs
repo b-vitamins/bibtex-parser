@@ -276,6 +276,97 @@ impl<'a> Entry<'a> {
         self.fields.push(field);
     }
 
+    /// Set a field value, replacing the first matching field or appending it.
+    pub fn set(&mut self, name: &'a str, value: Value<'a>) {
+        if let Some(field) = self.fields.iter_mut().find(|field| field.name == name) {
+            field.value = value;
+        } else {
+            self.fields.push(Field::new(name, value));
+        }
+    }
+
+    /// Set a field to a string literal.
+    pub fn set_literal(&mut self, name: &'a str, value: &'a str) {
+        self.set(name, Value::Literal(Cow::Borrowed(value)));
+    }
+
+    /// Remove all fields whose name matches exactly.
+    pub fn remove(&mut self, name: &str) -> Vec<Field<'a>> {
+        let mut removed = Vec::new();
+        let mut index = 0;
+        while index < self.fields.len() {
+            if self.fields[index].name == name {
+                removed.push(self.fields.remove(index));
+            } else {
+                index += 1;
+            }
+        }
+        removed
+    }
+
+    /// Rename all fields whose name matches exactly.
+    pub fn rename_field(&mut self, old: &str, new: &'a str) -> usize {
+        let mut renamed = 0;
+        for field in &mut self.fields {
+            if field.name == old {
+                field.name = Cow::Borrowed(new);
+                renamed += 1;
+            }
+        }
+        renamed
+    }
+
+    /// Return the title field as a string.
+    #[must_use]
+    pub fn title(&self) -> Option<String> {
+        self.get_any_as_string_ignore_case(&["title"])
+    }
+
+    /// Return the year field as a string.
+    #[must_use]
+    pub fn year(&self) -> Option<String> {
+        self.get_any_as_string_ignore_case(&["year"])
+    }
+
+    /// Return the date field as a string.
+    #[must_use]
+    pub fn date(&self) -> Option<String> {
+        self.get_any_as_string_ignore_case(&["date"])
+    }
+
+    /// Return the journal field, accepting BibLaTeX's `journaltitle` alias.
+    #[must_use]
+    pub fn journal(&self) -> Option<String> {
+        self.get_any_as_string_ignore_case(&["journal", "journaltitle"])
+    }
+
+    /// Return the book title field as a string.
+    #[must_use]
+    pub fn booktitle(&self) -> Option<String> {
+        self.get_any_as_string_ignore_case(&["booktitle"])
+    }
+
+    /// Return the URL field as a string.
+    #[must_use]
+    pub fn url(&self) -> Option<String> {
+        self.get_any_as_string_ignore_case(&["url"])
+    }
+
+    /// Return keywords split on commas or semicolons.
+    #[must_use]
+    pub fn keywords(&self) -> Vec<String> {
+        self.get_any_as_string_ignore_case(&["keywords", "keyword"])
+            .map(|keywords| {
+                keywords
+                    .split([',', ';'])
+                    .map(str::trim)
+                    .filter(|keyword| !keyword.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Validate the entry according to the specified level
     /// Returns Ok(()) if valid, or Err with a list of validation errors
     pub fn validate(&self, level: ValidationLevel) -> Result<(), Vec<ValidationError>> {
@@ -492,10 +583,10 @@ impl<'a> Entry<'a> {
     /// ```
     /// # #[cfg(feature = "latex_to_unicode")]
     /// # {
-    /// # use bibtex_parser::Database;
+    /// # use bibtex_parser::Library;
     /// let bibtex = r#"@article{test, author = "Jos\'e Garc\'ia"}"#;
-    /// let db = Database::parser().parse(bibtex).unwrap();
-    /// let entry = &db.entries()[0];
+    /// let library = Library::parser().parse(bibtex).unwrap();
+    /// let entry = &library.entries()[0];
     /// assert_eq!(entry.get_unicode("author"), Some("José García".to_string()));
     /// # }
     /// ```
@@ -516,10 +607,10 @@ impl<'a> Entry<'a> {
     /// ```
     /// # #[cfg(feature = "latex_to_unicode")]
     /// # {
-    /// # use bibtex_parser::Database;
+    /// # use bibtex_parser::Library;
     /// let bibtex = r#"@article{test, TITLE = "M\\\"uller's work"}"#;
-    /// let db = Database::parser().parse(bibtex).unwrap();
-    /// let entry = &db.entries()[0];
+    /// let library = Library::parser().parse(bibtex).unwrap();
+    /// let entry = &library.entries()[0];
     /// assert_eq!(entry.get_unicode_ignore_case("title"), Some("Müller's work".to_string()));
     /// # }
     /// ```
@@ -562,14 +653,14 @@ impl<'a> Entry<'a> {
     /// ```
     /// # #[cfg(feature = "latex_to_unicode")]
     /// # {
-    /// # use bibtex_parser::Database;
+    /// # use bibtex_parser::Library;
     /// let bibtex = r#"@article{test,
     ///     author = "Jos\'e Garc\'ia",
     ///     title = "\\alpha and \\beta particles",
     ///     year = 2024
     /// }"#;
-    /// let db = Database::parser().parse(bibtex).unwrap();
-    /// let entry = &db.entries()[0];
+    /// let library = Library::parser().parse(bibtex).unwrap();
+    /// let entry = &library.entries()[0];
     /// let unicode_fields = entry.fields_unicode();
     ///
     /// let author = unicode_fields.iter()

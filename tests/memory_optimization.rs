@@ -43,7 +43,7 @@ mod tests {
             @article{test3, title = "Test 3", author = "Author 3", year = 2023}
         "#;
 
-        let db = Database::parser().parse(input).unwrap();
+        let db = Library::parser().parse(input).unwrap();
 
         // Field vectors should stay bounded without pathological over-allocation.
         for entry in db.entries() {
@@ -131,7 +131,7 @@ mod tests {
             @article{test, title = first # ", " # second}
         "#;
 
-        let db = Database::parser().parse(input).unwrap();
+        let db = Library::parser().parse(input).unwrap();
         let entry = &db.entries()[0];
 
         // Concat should still work correctly with boxed Vec

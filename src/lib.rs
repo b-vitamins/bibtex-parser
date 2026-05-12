@@ -1,38 +1,87 @@
 #![deny(clippy::all)]
 //! # bibtex-parser
 //!
-//! A fast, modern BibTeX parser with excellent error handling and zero-copy parsing.
+//! Fast BibTeX parsing with a Rust-first [`Library`] API.
+//!
+//! `bibtex-parser` is built for applications that need both throughput and a
+//! practical user-facing API: strict parsing by default, explicit tolerant
+//! recovery when a corpus is messy, string and month expansion, comments and
+//! preambles, validation, query/edit helpers, and configurable writing.
 //!
 //! ## Features
 //!
-//! - Zero-copy parsing for optimal performance
-//! - Excellent error messages with source locations
-//! - Support for all standard BibTeX entry types
-//! - String variable expansion
-//! - Comment preservation
-//! - Streaming support for large files
+//! - Borrowed values where possible for low-allocation parsing.
+//! - String variables, concatenation, and standard month constants.
+//! - Entries, strings, preambles, comments, and tolerant failures in source order.
+//! - Opt-in source-span capture.
+//! - DOI normalization, duplicate detection, validation, sorting, and field normalization.
+//! - Configurable writer for formatting and file output.
+//! - Optional `parallel` feature for parsing multiple files concurrently.
+//! - Optional `latex_to_unicode` feature for LaTeX accent conversion helpers.
 //!
-//! ## Example
+//! ## Parse
 //!
 //! ```
-//! use bibtex_parser::{Database, Entry};
+//! use bibtex_parser::Library;
 //!
 //! let input = r#"
-//!     @article{einstein1905,
-//!         author = "Albert Einstein",
-//!         title = "Zur Elektrodynamik bewegter Körper",
-//!         journal = "Annalen der Physik",
-//!         year = 1905
+//!     @string{venue = "VLDB"}
+//!     @article{paper,
+//!         author = "Jane Doe and John Smith",
+//!         title = "Fast BibTeX",
+//!         journal = venue,
+//!         year = 2026
 //!     }
 //! "#;
 //!
-//! let db = Database::parser().parse(input)?;
-//! assert_eq!(db.entries().len(), 1);
+//! let library = Library::parse(input)?;
+//! let entry = library.find_by_key("paper").unwrap();
 //!
-//! let entry = &db.entries()[0];
-//! assert_eq!(entry.key(), "einstein1905");
-//! assert_eq!(entry.get("author"), Some("Albert Einstein"));
-//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! assert_eq!(entry.get("journal"), Some("VLDB"));
+//! assert_eq!(entry.year(), Some("2026".to_string()));
+//! assert_eq!(entry.authors().len(), 2);
+//! # Ok::<(), bibtex_parser::Error>(())
+//! ```
+//!
+//! ## Tolerant Recovery
+//!
+//! ```
+//! use bibtex_parser::{Block, Library};
+//!
+//! let library = Library::parser()
+//!     .tolerant()
+//!     .capture_source()
+//!     .parse(r#"
+//!         @article{ok, title = "Good"}
+//!         @article{bad, title = "Missing close"
+//!         @book{recovered, title = "Recovered"}
+//!     "#)?;
+//!
+//! assert_eq!(library.entries().len(), 2);
+//! assert_eq!(library.failed_blocks().len(), 1);
+//!
+//! let has_failure_span = library.blocks().iter().any(|block| {
+//!     matches!(block, Block::Failed(failed) if failed.source.is_some())
+//! });
+//! assert!(has_failure_span);
+//! # Ok::<(), bibtex_parser::Error>(())
+//! ```
+//!
+//! ## Write
+//!
+//! ```
+//! use bibtex_parser::{Library, Writer, WriterConfig};
+//!
+//! let library = Library::parse(r#"@article{paper, title = "Fast BibTeX"}"#)?;
+//! let mut output = Vec::new();
+//! let config = WriterConfig {
+//!     align_values: true,
+//!     ..Default::default()
+//! };
+//!
+//! Writer::with_config(&mut output, config).write_library(&library)?;
+//! assert!(String::from_utf8(output).unwrap().contains("@article{paper"));
+//! # Ok::<(), bibtex_parser::Error>(())
 //! ```
 
 #![forbid(unsafe_code)]
@@ -61,31 +110,37 @@ pub mod latex_unicode;
 mod database;
 mod writer;
 
-pub use database::{Database, DatabaseBuilder, IssueSummary, ParseOptions, ValidationReport};
-pub use error::{Error, Result};
+pub use database::{
+    Block, Comment, FailedBlock, FieldNameCase, FieldNormalizeOptions, IssueSummary, Library,
+    LibraryBuilder, LibraryStats, MonthStyle, Parser, Preamble, SortOptions, StringDefinition,
+    ValidationReport,
+};
+pub use error::{Error, Result, SourceSpan};
 pub use model::{
     normalize_doi, parse_names, Entry, EntryType, Field, PersonName, ValidationError,
     ValidationLevel, ValidationSeverity, Value,
 };
 pub use parser::{parse_bibtex, ParsedItem};
-pub use writer::{to_file, to_string, Writer};
+pub use writer::{to_file, to_string, Writer, WriterConfig};
 
 /// Re-export of common parser functions
 pub mod prelude {
     pub use crate::{
-        normalize_doi, parse_bibtex, parse_names, Database, DatabaseBuilder, Entry, EntryType,
-        Error, Field, IssueSummary, ParseOptions, ParsedItem, PersonName, Result, ValidationError,
-        ValidationLevel, ValidationReport, ValidationSeverity, Value,
+        normalize_doi, parse_bibtex, parse_names, Block, Comment, Entry, EntryType, Error,
+        FailedBlock, Field, FieldNameCase, FieldNormalizeOptions, IssueSummary, Library,
+        LibraryBuilder, LibraryStats, MonthStyle, ParsedItem, Parser, PersonName, Preamble, Result,
+        SortOptions, SourceSpan, StringDefinition, ValidationError, ValidationLevel,
+        ValidationReport, ValidationSeverity, Value, Writer, WriterConfig,
     };
 }
 
-/// Parse a BibTeX database from a string
-pub fn parse(input: &str) -> Result<Database<'_>> {
-    Database::parser().parse(input)
+/// Parse a BibTeX library from a string.
+pub fn parse(input: &str) -> Result<Library<'_>> {
+    Library::parser().parse(input)
 }
 
-/// Parse a BibTeX database from a file
-pub fn parse_file(path: impl AsRef<std::path::Path>) -> Result<Database<'static>> {
+/// Parse a BibTeX library from a file.
+pub fn parse_file(path: impl AsRef<std::path::Path>) -> Result<Library<'static>> {
     let content = std::fs::read_to_string(path)?;
-    parse(&content).map(database::Database::into_owned)
+    parse(&content).map(Library::into_owned)
 }
