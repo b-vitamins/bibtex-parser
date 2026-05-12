@@ -1,6 +1,7 @@
 //! BibTeX writer for serializing libraries
 
-use crate::{Block, Entry, Library, Result, Value};
+use crate::{Block, Entry, Library, ParsedBlock, ParsedDocument, ParsedEntry, Result, Value};
+use std::borrow::Cow;
 use std::io::{self, Write};
 
 /// Configuration for writing BibTeX
@@ -16,6 +17,30 @@ pub struct WriterConfig {
     pub sort_entries: bool,
     /// Whether to sort fields within entries (default: false)
     pub sort_fields: bool,
+    /// Raw-backed document writing behavior.
+    pub raw_write_mode: RawWriteMode,
+    /// Trailing comma behavior for structured entry writing.
+    pub trailing_comma: TrailingComma,
+    /// Separator written between document blocks.
+    pub entry_separator: String,
+}
+
+/// Raw-backed document writing behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RawWriteMode {
+    /// Reuse retained raw text where possible.
+    Preserve,
+    /// Ignore retained raw text and write normalized structured data.
+    Normalize,
+}
+
+/// Trailing comma behavior for structured entry writing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrailingComma {
+    /// Omit a trailing comma after the final field.
+    Omit,
+    /// Add a trailing comma after the final field.
+    Always,
 }
 
 impl Default for WriterConfig {
@@ -26,6 +51,9 @@ impl Default for WriterConfig {
             max_line_length: 80,
             sort_entries: false,
             sort_fields: false,
+            raw_write_mode: RawWriteMode::Preserve,
+            trailing_comma: TrailingComma::Omit,
+            entry_separator: "\n".to_string(),
         }
     }
 }
@@ -81,6 +109,58 @@ impl<W: Write> Writer<W> {
                 Block::Preamble(preamble) => self.write_preamble(&preamble.value)?,
                 Block::Comment(comment) => self.write_comment(comment.text())?,
                 Block::Failed(failed) => self.writer.write_all(failed.raw.as_bytes())?,
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Write a parsed document, reusing retained raw blocks when configured.
+    pub fn write_document(&mut self, document: &ParsedDocument) -> io::Result<()> {
+        for (index, block) in document.blocks().iter().copied().enumerate() {
+            if index > 0 {
+                self.writer
+                    .write_all(self.config.entry_separator.as_bytes())?;
+            }
+
+            match block {
+                ParsedBlock::Entry(entry_index) => {
+                    self.write_parsed_entry(&document.entries()[entry_index])?;
+                }
+                ParsedBlock::String(string_index) => {
+                    let string = &document.strings()[string_index];
+                    if self.config.raw_write_mode == RawWriteMode::Preserve {
+                        if let Some(raw) = &string.raw {
+                            self.writer.write_all(raw.as_bytes())?;
+                            continue;
+                        }
+                    }
+                    self.write_string(&string.name, &string.value.value)?;
+                }
+                ParsedBlock::Preamble(preamble_index) => {
+                    let preamble = &document.preambles()[preamble_index];
+                    if self.config.raw_write_mode == RawWriteMode::Preserve {
+                        if let Some(raw) = &preamble.raw {
+                            self.writer.write_all(raw.as_bytes())?;
+                            continue;
+                        }
+                    }
+                    self.write_preamble(&preamble.value.value)?;
+                }
+                ParsedBlock::Comment(comment_index) => {
+                    let comment = &document.comments()[comment_index];
+                    if self.config.raw_write_mode == RawWriteMode::Preserve {
+                        if let Some(raw) = &comment.raw {
+                            self.writer.write_all(raw.as_bytes())?;
+                            continue;
+                        }
+                    }
+                    self.write_comment(&comment.text)?;
+                }
+                ParsedBlock::Failed(failed_index) => {
+                    self.writer
+                        .write_all(document.failed_blocks()[failed_index].raw.as_bytes())?;
+                }
             }
         }
 
@@ -149,7 +229,7 @@ impl<W: Write> Writer<W> {
             write!(self.writer, " = ")?;
             self.write_value(&field.value)?;
 
-            if i < fields.len() - 1 {
+            if i < fields.len() - 1 || self.config.trailing_comma == TrailingComma::Always {
                 writeln!(self.writer, ",")?;
             } else {
                 writeln!(self.writer)?;
@@ -158,6 +238,17 @@ impl<W: Write> Writer<W> {
 
         writeln!(self.writer, "}}")?;
         Ok(())
+    }
+
+    fn write_parsed_entry(&mut self, entry: &ParsedEntry) -> io::Result<()> {
+        if self.config.raw_write_mode == RawWriteMode::Preserve {
+            if let Some(raw) = patched_entry_raw(entry) {
+                self.writer.write_all(raw.as_bytes())?;
+                return Ok(());
+            }
+        }
+
+        self.write_entry(&entry.clone().into_entry())
     }
 
     /// Write a string definition
@@ -228,12 +319,55 @@ fn escape_quotes(s: &str) -> String {
     s.replace('"', "\\\"")
 }
 
+fn patched_entry_raw<'entry>(entry: &'entry ParsedEntry<'_>) -> Option<Cow<'entry, str>> {
+    let raw = entry.raw.as_deref()?;
+    let source = entry.source?;
+    let mut replacements = entry
+        .fields
+        .iter()
+        .filter(|field| field.value.raw.is_none())
+        .filter_map(|field| {
+            let value_source = field.value_source?;
+            let start = value_source.byte_start.checked_sub(source.byte_start)?;
+            let end = value_source.byte_end.checked_sub(source.byte_start)?;
+            Some((start, end, field.value.value.to_bibtex_source()))
+        })
+        .collect::<Vec<_>>();
+
+    if replacements.is_empty() {
+        return Some(Cow::Borrowed(raw));
+    }
+
+    replacements.sort_by_key(|(start, _, _)| *start);
+    let mut output = String::with_capacity(raw.len());
+    let mut cursor = 0;
+    for (start, end, replacement) in replacements {
+        if start < cursor || end > raw.len() {
+            return None;
+        }
+        output.push_str(&raw[cursor..start]);
+        output.push_str(&replacement);
+        cursor = end;
+    }
+    output.push_str(&raw[cursor..]);
+    Some(Cow::Owned(output))
+}
+
 /// Convenience function to write a library to a string.
 #[must_use = "Check the result to detect serialization errors"]
 pub fn to_string(library: &Library) -> Result<String> {
     let mut buf = Vec::new();
     let mut writer = Writer::new(&mut buf);
     writer.write_library(library)?;
+    Ok(String::from_utf8(buf).expect("valid UTF-8"))
+}
+
+/// Convenience function to write a parsed document to a string.
+#[must_use = "Check the result to detect serialization errors"]
+pub fn document_to_string(document: &ParsedDocument) -> Result<String> {
+    let mut buf = Vec::new();
+    let mut writer = Writer::new(&mut buf);
+    writer.write_document(document)?;
     Ok(String::from_utf8(buf).expect("valid UTF-8"))
 }
 

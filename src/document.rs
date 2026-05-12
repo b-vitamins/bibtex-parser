@@ -968,6 +968,12 @@ impl<'a> ParsedDocument<'a> {
         &self.entries
     }
 
+    /// Return mutable parsed entries.
+    #[must_use]
+    pub fn entries_mut(&mut self) -> &mut [ParsedEntry<'a>] {
+        &mut self.entries
+    }
+
     /// Return parsed string definitions.
     #[must_use]
     pub fn strings(&self) -> &[ParsedString<'a>] {
