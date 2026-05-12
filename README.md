@@ -81,6 +81,29 @@ fn main() -> Result<()> {
 }
 ```
 
+## Semantic Helpers
+
+```rust
+use bibtex_parser::{Library, ResourceKind, Result};
+
+fn main() -> Result<()> {
+    let library = Library::parse(r#"
+        @article{paper,
+            author = "Jane Doe and {Research Group}",
+            date = "2026-05-13",
+            doi = "https://doi.org/10.1000/XYZ."
+        }
+    "#)?;
+
+    let entry = &library.entries()[0];
+    assert_eq!(entry.authors()[1].literal.as_deref(), Some("Research Group"));
+    assert_eq!(entry.date_parts().unwrap().unwrap().month, Some(5));
+    assert_eq!(entry.resource_fields()[0].kind, ResourceKind::Doi);
+    assert_eq!(entry.doi(), Some("10.1000/xyz".to_string()));
+    Ok(())
+}
+```
+
 ## Tolerant Parsing
 
 Strict parsing is the default. Tolerant parsing is opt-in and keeps malformed blocks separate from valid entries.

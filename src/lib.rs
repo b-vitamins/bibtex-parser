@@ -150,7 +150,9 @@ pub use document::{
 };
 pub use error::{Error, Result, SourceId, SourceSpan};
 pub use model::{
-    normalize_doi, parse_names, Entry, EntryType, Field, PersonName, ValidationError,
+    canonical_biblatex_field_alias, classify_resource_field, normalize_biblatex_field_name,
+    normalize_doi, normalize_field_name_ascii, parse_date_parts, parse_names, DateParseError,
+    DateParts, Entry, EntryType, Field, PersonName, ResourceField, ResourceKind, ValidationError,
     ValidationLevel, ValidationSeverity, Value,
 };
 pub use parser::{parse_bibtex, ParsedItem};
@@ -163,16 +165,19 @@ pub use writer::{
 /// Re-export of common parser functions
 pub mod prelude {
     pub use crate::{
-        document_to_string, normalize_doi, parse_bibtex, parse_names, selected_entries_to_string,
-        Block, Comment, Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticTarget, Entry,
+        canonical_biblatex_field_alias, classify_resource_field, document_to_string,
+        normalize_biblatex_field_name, normalize_doi, normalize_field_name_ascii, parse_bibtex,
+        parse_date_parts, parse_names, selected_entries_to_string, Block, Comment, DateParseError,
+        DateParts, Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticTarget, Entry,
         EntryDelimiter, EntryType, Error, ExpansionOptions, FailedBlock, Field, FieldNameCase,
         FieldNormalizeOptions, IssueSummary, Library, LibraryBuilder, LibraryStats, MonthStyle,
         ParseStatus, ParseSummary, ParsedBlock, ParsedComment, ParsedDocument, ParsedEntry,
         ParsedEntryStatus, ParsedFailedBlock, ParsedField, ParsedItem, ParsedPreamble,
         ParsedSource, ParsedString, ParsedValue, Parser, PersonName, Preamble, RawWriteMode,
-        Result, SortOptions, SourceId, SourceMap, SourceSpan, StringDefinition, TrailingComma,
-        UnresolvedVariablePolicy, ValidationError, ValidationLevel, ValidationReport,
-        ValidationSeverity, Value, ValueDelimiter, Writer, WriterConfig,
+        ResourceField, ResourceKind, Result, SortOptions, SourceId, SourceMap, SourceSpan,
+        StringDefinition, TrailingComma, UnresolvedVariablePolicy, ValidationError,
+        ValidationLevel, ValidationReport, ValidationSeverity, Value, ValueDelimiter, Writer,
+        WriterConfig,
     };
 }
 

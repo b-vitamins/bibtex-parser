@@ -8,8 +8,9 @@
 use crate::database::BlockKind;
 use crate::database::RawBuildItem;
 use crate::{
-    Comment, Entry, EntryType, FailedBlock, Field, Library, Preamble, SourceId, SourceMap,
-    SourceSpan, StringDefinition, Value,
+    normalize_doi, Comment, DateParseError, DateParts, Entry, EntryType, FailedBlock, Field,
+    Library, PersonName, Preamble, ResourceField, SourceId, SourceMap, SourceSpan,
+    StringDefinition, Value,
 };
 use std::borrow::Cow;
 use std::fmt;
@@ -560,6 +561,71 @@ impl<'a> ParsedEntry<'a> {
             self.raw = None;
         }
         removed
+    }
+
+    /// Return the first field matching `name`, ignoring ASCII case.
+    #[must_use]
+    pub fn field_ignore_case(&self, name: &str) -> Option<&ParsedField<'a>> {
+        self.fields
+            .iter()
+            .find(|field| field.name.eq_ignore_ascii_case(name))
+    }
+
+    /// Return a field value as ordinary text, ignoring ASCII case.
+    #[must_use]
+    pub fn get_as_string_ignore_case(&self, name: &str) -> Option<String> {
+        self.field_ignore_case(name)
+            .map(|field| field.value.plain_text())
+    }
+
+    /// Return the normalized DOI, if the entry has a recognizable DOI field.
+    #[must_use]
+    pub fn doi(&self) -> Option<String> {
+        self.get_as_string_ignore_case("doi")
+            .and_then(|doi| normalize_doi(&doi))
+    }
+
+    /// Parse the `author` field into structured BibTeX names.
+    #[must_use]
+    pub fn authors(&self) -> Vec<PersonName> {
+        self.get_as_string_ignore_case("author")
+            .map_or_else(Vec::new, |authors| crate::parse_names(&authors))
+    }
+
+    /// Parse the `editor` field into structured BibTeX names.
+    #[must_use]
+    pub fn editors(&self) -> Vec<PersonName> {
+        self.get_as_string_ignore_case("editor")
+            .map_or_else(Vec::new, |editors| crate::parse_names(&editors))
+    }
+
+    /// Parse the `translator` field into structured BibTeX names.
+    #[must_use]
+    pub fn translators(&self) -> Vec<PersonName> {
+        self.get_as_string_ignore_case("translator")
+            .map_or_else(Vec::new, |translators| crate::parse_names(&translators))
+    }
+
+    /// Parse a specific date-like field into date parts.
+    #[must_use]
+    pub fn date_parts_for(
+        &self,
+        field: &str,
+    ) -> Option<std::result::Result<DateParts, DateParseError>> {
+        self.get_as_string_ignore_case(field)
+            .map(|value| crate::parse_date_parts(&value))
+    }
+
+    /// Return the best available issued date parts for this entry.
+    #[must_use]
+    pub fn date_parts(&self) -> Option<std::result::Result<DateParts, DateParseError>> {
+        self.clone().into_entry().date_parts()
+    }
+
+    /// Return classified resource and identifier fields in source order.
+    #[must_use]
+    pub fn resource_fields(&self) -> Vec<ResourceField> {
+        self.clone().into_entry().resource_fields()
     }
 }
 

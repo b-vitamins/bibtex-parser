@@ -1,8 +1,8 @@
 //! BibTeX library representation
 
 use crate::{
-    normalize_doi, Entry, Error, ParsedDocument, ParsedSource, Result, SourceId, SourceMap,
-    SourceSpan, ValidationError, ValidationLevel, Value,
+    canonical_biblatex_field_alias, normalize_doi, Entry, Error, ParsedDocument, ParsedSource,
+    Result, SourceId, SourceMap, SourceSpan, ValidationError, ValidationLevel, Value,
 };
 use ahash::AHashMap;
 use memchr::memchr;
@@ -1834,7 +1834,7 @@ impl<'a> Library<'a> {
         for entry in &mut self.entries {
             for field in &mut entry.fields {
                 let mut name = if options.biblatex_aliases {
-                    canonical_field_alias(&field.name)
+                    canonical_biblatex_field_alias(&field.name)
                         .unwrap_or_else(|| field.name.as_ref())
                         .to_string()
                 } else {
@@ -2188,20 +2188,6 @@ const fn month_abbreviation(month: i64) -> &'static str {
         11 => "nov",
         12 => "dec",
         _ => "",
-    }
-}
-
-fn canonical_field_alias(name: &str) -> Option<&'static str> {
-    if name.eq_ignore_ascii_case("journaltitle") {
-        Some("journal")
-    } else if name.eq_ignore_ascii_case("date") {
-        Some("year")
-    } else if name.eq_ignore_ascii_case("institution") {
-        Some("school")
-    } else if name.eq_ignore_ascii_case("location") {
-        Some("address")
-    } else {
-        None
     }
 }
 

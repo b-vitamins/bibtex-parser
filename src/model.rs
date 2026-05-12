@@ -84,6 +84,8 @@ impl fmt::Display for ValidationError {
 /// while preserving the exact token text from the source value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PersonName {
+    /// Exact source text for this name segment, trimmed of surrounding whitespace.
+    pub raw: String,
     /// Given names and initials.
     pub first: String,
     /// Lowercase particles such as `von`, `van`, `de`, or `der`.
@@ -92,12 +94,26 @@ pub struct PersonName {
     pub last: String,
     /// Junior part such as `Jr.` in `Last, Jr., First`.
     pub jr: String,
+    /// Given-name tokens.
+    pub given: Vec<String>,
+    /// Family-name tokens.
+    pub family: Vec<String>,
+    /// Prefix or particle tokens.
+    pub prefix: Vec<String>,
+    /// Suffix tokens.
+    pub suffix: Vec<String>,
+    /// Literal organization or preserved braced name.
+    pub literal: Option<String>,
 }
 
 impl PersonName {
     /// Return the display form used by most bibliography styles.
     #[must_use]
     pub fn display_name(&self) -> String {
+        if let Some(literal) = &self.literal {
+            return literal.clone();
+        }
+
         let mut parts = Vec::new();
         if !self.first.is_empty() {
             parts.push(self.first.as_str());
@@ -122,7 +138,25 @@ impl PersonName {
     /// Return `true` when every name component is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.first.is_empty() && self.von.is_empty() && self.last.is_empty() && self.jr.is_empty()
+        self.raw.is_empty()
+            && self.first.is_empty()
+            && self.von.is_empty()
+            && self.last.is_empty()
+            && self.jr.is_empty()
+            && self.literal.is_none()
+    }
+
+    /// Return `true` when the name is a braced literal or organization name.
+    #[must_use]
+    pub const fn is_literal(&self) -> bool {
+        self.literal.is_some()
+    }
+
+    /// Return the display name after LaTeX-to-Unicode conversion.
+    #[cfg(feature = "latex_to_unicode")]
+    #[must_use]
+    pub fn unicode_display_name(&self) -> String {
+        crate::latex_unicode::latex_to_unicode(&self.display_name())
     }
 }
 
@@ -137,6 +171,195 @@ pub fn parse_names(input: &str) -> Vec<PersonName> {
         .map(parse_single_name)
         .filter(|name| !name.is_empty())
         .collect()
+}
+
+/// Parsed bibliography date parts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DateParts {
+    /// Four-digit year.
+    pub year: i32,
+    /// One-based month, when present.
+    pub month: Option<u8>,
+    /// One-based day of month, when present.
+    pub day: Option<u8>,
+}
+
+impl DateParts {
+    /// Return `true` when both month and day are present.
+    #[must_use]
+    pub const fn is_complete(&self) -> bool {
+        self.month.is_some() && self.day.is_some()
+    }
+}
+
+/// Explicit date parse failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DateParseError {
+    /// Input was empty after trimming BibTeX delimiters.
+    Empty,
+    /// Year was missing or not a four-digit number.
+    InvalidYear,
+    /// Month was present but outside `1..=12` or unrecognized.
+    InvalidMonth,
+    /// Day was present but invalid for the parsed year and month.
+    InvalidDay,
+    /// Input used a shape outside the supported common bibliography forms.
+    UnsupportedFormat,
+}
+
+impl fmt::Display for DateParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => f.write_str("empty date"),
+            Self::InvalidYear => f.write_str("invalid date year"),
+            Self::InvalidMonth => f.write_str("invalid date month"),
+            Self::InvalidDay => f.write_str("invalid date day"),
+            Self::UnsupportedFormat => f.write_str("unsupported date format"),
+        }
+    }
+}
+
+impl std::error::Error for DateParseError {}
+
+/// Common resource or identifier field kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ResourceKind {
+    /// Local file attachment field.
+    File,
+    /// URL field.
+    Url,
+    /// DOI field.
+    Doi,
+    /// `PubMed` identifier.
+    Pmid,
+    /// `PubMed Central` identifier.
+    Pmcid,
+    /// ISBN field.
+    Isbn,
+    /// ISSN field.
+    Issn,
+    /// Generic eprint field.
+    Eprint,
+    /// arXiv identifier.
+    Arxiv,
+    /// Cross-reference citation key.
+    Crossref,
+}
+
+impl ResourceKind {
+    /// Return a stable lowercase kind name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::File => "file",
+            Self::Url => "url",
+            Self::Doi => "doi",
+            Self::Pmid => "pmid",
+            Self::Pmcid => "pmcid",
+            Self::Isbn => "isbn",
+            Self::Issn => "issn",
+            Self::Eprint => "eprint",
+            Self::Arxiv => "arxiv",
+            Self::Crossref => "crossref",
+        }
+    }
+}
+
+/// Classified resource or identifier field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceField {
+    /// Classified field kind.
+    pub kind: ResourceKind,
+    /// Original field name spelling.
+    pub field_name: String,
+    /// Plain text value.
+    pub value: String,
+    /// Normalized value when the kind has a stable local normalization.
+    pub normalized: Option<String>,
+}
+
+/// Parse a common bibliography date shape into parts.
+///
+/// Supported input shapes are `YYYY`, `YYYY-MM`, and `YYYY-MM-DD`.
+/// Month names and BibTeX month abbreviations are accepted by entry helpers
+/// when a separate `month` field is combined with a `year` field.
+pub fn parse_date_parts(input: &str) -> std::result::Result<DateParts, DateParseError> {
+    let cleaned = trim_bibtex_scalar(input);
+    if cleaned.is_empty() {
+        return Err(DateParseError::Empty);
+    }
+
+    let parts = cleaned.split('-').collect::<Vec<_>>();
+    match parts.as_slice() {
+        [year] => Ok(DateParts {
+            year: parse_year(year)?,
+            month: None,
+            day: None,
+        }),
+        [year, month] => {
+            let year = parse_year(year)?;
+            let month = parse_month_number(month).ok_or(DateParseError::InvalidMonth)?;
+            Ok(DateParts {
+                year,
+                month: Some(month),
+                day: None,
+            })
+        }
+        [year, month, day] => {
+            let year = parse_year(year)?;
+            let month = parse_month_number(month).ok_or(DateParseError::InvalidMonth)?;
+            let day = parse_day_number(day, year, month)?;
+            Ok(DateParts {
+                year,
+                month: Some(month),
+                day: Some(day),
+            })
+        }
+        _ => Err(DateParseError::UnsupportedFormat),
+    }
+}
+
+/// Normalize a field name to ASCII lowercase.
+#[must_use]
+pub fn normalize_field_name_ascii(name: &str) -> String {
+    name.trim().to_ascii_lowercase()
+}
+
+/// Return the crate's built-in BibLaTeX-to-BibTeX field alias, if any.
+#[must_use]
+pub fn canonical_biblatex_field_alias(name: &str) -> Option<&'static str> {
+    match normalize_field_name_ascii(name).as_str() {
+        "journaltitle" => Some("journal"),
+        "date" => Some("year"),
+        "institution" => Some("school"),
+        "location" => Some("address"),
+        _ => None,
+    }
+}
+
+/// Normalize a field name with ASCII lowercase and built-in BibLaTeX aliases.
+#[must_use]
+pub fn normalize_biblatex_field_name(name: &str) -> String {
+    canonical_biblatex_field_alias(name)
+        .map_or_else(|| normalize_field_name_ascii(name), ToOwned::to_owned)
+}
+
+/// Classify a common resource or identifier field name.
+#[must_use]
+pub fn classify_resource_field(name: &str) -> Option<ResourceKind> {
+    match normalize_field_name_ascii(name).as_str() {
+        "file" => Some(ResourceKind::File),
+        "url" => Some(ResourceKind::Url),
+        "doi" => Some(ResourceKind::Doi),
+        "pmid" => Some(ResourceKind::Pmid),
+        "pmcid" => Some(ResourceKind::Pmcid),
+        "isbn" => Some(ResourceKind::Isbn),
+        "issn" => Some(ResourceKind::Issn),
+        "eprint" => Some(ResourceKind::Eprint),
+        "arxiv" => Some(ResourceKind::Arxiv),
+        "crossref" => Some(ResourceKind::Crossref),
+        _ => None,
+    }
 }
 
 /// A BibTeX entry (article, book, etc.)
@@ -263,6 +486,68 @@ impl<'a> Entry<'a> {
     pub fn editors(&self) -> Vec<PersonName> {
         self.get_as_string_ignore_case("editor")
             .map_or_else(Vec::new, |editors| parse_names(&editors))
+    }
+
+    /// Parse the `translator` field into structured BibTeX names.
+    #[must_use]
+    pub fn translators(&self) -> Vec<PersonName> {
+        self.get_as_string_ignore_case("translator")
+            .map_or_else(Vec::new, |translators| parse_names(&translators))
+    }
+
+    /// Parse a specific date-like field into date parts.
+    #[must_use]
+    pub fn date_parts_for(
+        &self,
+        field: &str,
+    ) -> Option<std::result::Result<DateParts, DateParseError>> {
+        self.get_as_string_ignore_case(field)
+            .map(|value| parse_date_parts(&value))
+    }
+
+    /// Return the best available issued date parts for this entry.
+    ///
+    /// `date`, `issued`, `eventdate`, `origdate`, and `urldate` are checked
+    /// before falling back to `year` plus an optional `month` field.
+    #[must_use]
+    pub fn date_parts(&self) -> Option<std::result::Result<DateParts, DateParseError>> {
+        for field in &["date", "issued", "eventdate", "origdate", "urldate"] {
+            if let Some(value) = self.get_as_string_ignore_case(field) {
+                return Some(parse_date_parts(&value));
+            }
+        }
+
+        let year = self.get_as_string_ignore_case("year")?;
+        let mut parts = match parse_date_parts(&year) {
+            Ok(parts) => parts,
+            Err(error) => return Some(Err(error)),
+        };
+        if let Some(month) = self.get_as_string_ignore_case("month") {
+            match parse_month_number(&month) {
+                Some(month) => parts.month = Some(month),
+                None => return Some(Err(DateParseError::InvalidMonth)),
+            }
+        }
+        Some(Ok(parts))
+    }
+
+    /// Return classified resource and identifier fields in source order.
+    #[must_use]
+    pub fn resource_fields(&self) -> Vec<ResourceField> {
+        let archive_prefix = self
+            .get_as_string_ignore_case("archiveprefix")
+            .or_else(|| self.get_as_string_ignore_case("eprinttype"));
+
+        self.fields
+            .iter()
+            .filter_map(|field| {
+                resource_field_from_parts(
+                    &field.name,
+                    field.value.to_plain_string(),
+                    archive_prefix.as_deref(),
+                )
+            })
+            .collect()
     }
 
     /// Get all fields
@@ -1283,6 +1568,181 @@ pub fn normalize_doi(input: &str) -> Option<String> {
     }
 }
 
+fn resource_field_from_parts(
+    field_name: &str,
+    value: String,
+    archive_prefix: Option<&str>,
+) -> Option<ResourceField> {
+    let mut kind = classify_resource_field(field_name)?;
+    if kind == ResourceKind::Eprint
+        && archive_prefix.is_some_and(|prefix| prefix.eq_ignore_ascii_case("arxiv"))
+    {
+        kind = ResourceKind::Arxiv;
+    }
+    let normalized = normalize_resource_value(kind, &value);
+    Some(ResourceField {
+        kind,
+        field_name: field_name.to_string(),
+        value,
+        normalized,
+    })
+}
+
+fn normalize_resource_value(kind: ResourceKind, value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    match kind {
+        ResourceKind::Doi => normalize_doi(trimmed),
+        ResourceKind::Pmid => normalize_ascii_digits(trimmed),
+        ResourceKind::Pmcid => Some(normalize_pmcid(trimmed)),
+        ResourceKind::Isbn => normalize_isbn(trimmed),
+        ResourceKind::Issn => normalize_issn(trimmed),
+        ResourceKind::Arxiv => Some(normalize_arxiv(trimmed)),
+        ResourceKind::File | ResourceKind::Url | ResourceKind::Eprint | ResourceKind::Crossref => {
+            Some(trimmed.to_string())
+        }
+    }
+}
+
+fn normalize_ascii_digits(input: &str) -> Option<String> {
+    let compact = input.trim();
+    compact
+        .chars()
+        .all(|ch| ch.is_ascii_digit())
+        .then(|| compact.to_string())
+}
+
+fn normalize_pmcid(input: &str) -> String {
+    let compact = input
+        .trim()
+        .trim_start_matches("pmcid:")
+        .trim_start_matches("PMCID:")
+        .trim();
+    if compact
+        .get(..3)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("pmc"))
+    {
+        compact.to_ascii_uppercase()
+    } else {
+        format!("PMC{compact}")
+    }
+}
+
+fn normalize_isbn(input: &str) -> Option<String> {
+    let compact = input
+        .chars()
+        .filter(|ch| !matches!(ch, '-' | ' '))
+        .collect::<String>()
+        .to_ascii_uppercase();
+    is_valid_isbn_shape(&compact).then_some(compact)
+}
+
+fn normalize_issn(input: &str) -> Option<String> {
+    let compact = input
+        .chars()
+        .filter(|ch| !matches!(ch, '-' | ' '))
+        .collect::<String>()
+        .to_ascii_uppercase();
+    (compact.len() == 8
+        && compact
+            .chars()
+            .enumerate()
+            .all(|(index, ch)| ch.is_ascii_digit() || (index == 7 && ch == 'X')))
+    .then_some(compact)
+}
+
+fn normalize_arxiv(input: &str) -> String {
+    input
+        .trim()
+        .trim_start_matches("arXiv:")
+        .trim_start_matches("arxiv:")
+        .trim()
+        .to_string()
+}
+
+fn trim_bibtex_scalar(input: &str) -> &str {
+    let mut value = input.trim();
+    loop {
+        let trimmed = value.trim();
+        if trimmed.len() >= 2
+            && ((trimmed.starts_with('{') && trimmed.ends_with('}'))
+                || (trimmed.starts_with('"') && trimmed.ends_with('"')))
+        {
+            value = trimmed[1..trimmed.len() - 1].trim();
+        } else {
+            return trimmed;
+        }
+    }
+}
+
+fn parse_year(input: &str) -> std::result::Result<i32, DateParseError> {
+    let input = input.trim();
+    if input.len() != 4 || !input.chars().all(|ch| ch.is_ascii_digit()) {
+        return Err(DateParseError::InvalidYear);
+    }
+    input
+        .parse::<i32>()
+        .map_err(|_| DateParseError::InvalidYear)
+}
+
+fn parse_month_number(input: &str) -> Option<u8> {
+    let normalized = trim_bibtex_scalar(input).to_ascii_lowercase();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    if let Ok(month) = normalized.parse::<u8>() {
+        return (1..=12).contains(&month).then_some(month);
+    }
+
+    match normalized.as_str() {
+        "jan" | "january" => Some(1),
+        "feb" | "february" => Some(2),
+        "mar" | "march" => Some(3),
+        "apr" | "april" => Some(4),
+        "may" => Some(5),
+        "jun" | "june" => Some(6),
+        "jul" | "july" => Some(7),
+        "aug" | "august" => Some(8),
+        "sep" | "sept" | "september" => Some(9),
+        "oct" | "october" => Some(10),
+        "nov" | "november" => Some(11),
+        "dec" | "december" => Some(12),
+        _ => None,
+    }
+}
+
+fn parse_day_number(input: &str, year: i32, month: u8) -> std::result::Result<u8, DateParseError> {
+    let input = input.trim();
+    if input.is_empty() || input.len() > 2 || !input.chars().all(|ch| ch.is_ascii_digit()) {
+        return Err(DateParseError::InvalidDay);
+    }
+    let day = input
+        .parse::<u8>()
+        .map_err(|_| DateParseError::InvalidDay)?;
+    (1..=days_in_month(year, month))
+        .contains(&day)
+        .then_some(day)
+        .ok_or(DateParseError::InvalidDay)
+}
+
+const fn days_in_month(year: i32, month: u8) -> u8 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 0,
+    }
+}
+
+const fn is_leap_year(year: i32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
 fn is_valid_isbn_shape(isbn: &str) -> bool {
     let compact: String = isbn.chars().filter(|c| !matches!(c, '-' | ' ')).collect();
 
@@ -1357,51 +1817,60 @@ fn starts_name_separator(input: &str, index: usize) -> bool {
 }
 
 fn parse_single_name(input: &str) -> PersonName {
+    let raw = input.trim();
+    if let Some(literal) = braced_literal_name(raw) {
+        return person_name(
+            raw,
+            String::new(),
+            String::new(),
+            literal.clone(),
+            String::new(),
+            Some(literal),
+        );
+    }
+
     let parts = split_top_level_commas(input);
     match parts.as_slice() {
         [last] => parse_first_von_last(last),
         [last, first] => {
             let (von, last) = split_von_last(last);
-            PersonName {
-                first: normalize_name_part(first),
+            person_name(
+                raw,
+                normalize_name_part(first),
                 von,
                 last,
-                jr: String::new(),
-            }
+                String::new(),
+                None,
+            )
         }
         [last, jr, first, ..] => {
             let (von, last) = split_von_last(last);
-            PersonName {
-                first: normalize_name_part(first),
+            person_name(
+                raw,
+                normalize_name_part(first),
                 von,
                 last,
-                jr: normalize_name_part(jr),
-            }
+                normalize_name_part(jr),
+                None,
+            )
         }
-        [] => PersonName {
-            first: String::new(),
-            von: String::new(),
-            last: String::new(),
-            jr: String::new(),
-        },
+        [] => empty_person_name(raw),
     }
 }
 
 fn parse_first_von_last(input: &str) -> PersonName {
+    let raw = input.trim();
     let words = split_name_words(input);
     match words.len() {
-        0 => PersonName {
-            first: String::new(),
-            von: String::new(),
-            last: String::new(),
-            jr: String::new(),
-        },
-        1 => PersonName {
-            first: String::new(),
-            von: String::new(),
-            last: normalize_name_part(words[0]),
-            jr: String::new(),
-        },
+        0 => empty_person_name(raw),
+        1 => person_name(
+            raw,
+            String::new(),
+            String::new(),
+            normalize_name_part(words[0]),
+            String::new(),
+            None,
+        ),
         _ => {
             let von_start = words
                 .iter()
@@ -1428,14 +1897,54 @@ fn parse_first_von_last(input: &str) -> PersonName {
                 },
             );
 
-            PersonName {
-                first,
-                von,
-                last,
-                jr: String::new(),
-            }
+            person_name(raw, first, von, last, String::new(), None)
         }
     }
+}
+
+fn person_name(
+    raw: &str,
+    first: String,
+    von: String,
+    last: String,
+    jr: String,
+    literal: Option<String>,
+) -> PersonName {
+    let given = split_component_tokens(&first);
+    let family = split_component_tokens(&last);
+    let prefix = split_component_tokens(&von);
+    let suffix = split_component_tokens(&jr);
+    PersonName {
+        raw: raw.to_string(),
+        first,
+        von,
+        last,
+        jr,
+        given,
+        family,
+        prefix,
+        suffix,
+        literal,
+    }
+}
+
+fn empty_person_name(raw: &str) -> PersonName {
+    person_name(
+        raw,
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        None,
+    )
+}
+
+fn split_component_tokens(input: &str) -> Vec<String> {
+    split_name_words(input)
+        .into_iter()
+        .map(normalize_name_part)
+        .filter(|part| !part.is_empty())
+        .collect()
 }
 
 fn split_von_last(input: &str) -> (String, String) {
@@ -1535,6 +2044,29 @@ fn normalize_name_part(input: &str) -> String {
     } else {
         trimmed.to_string()
     }
+}
+
+fn braced_literal_name(input: &str) -> Option<String> {
+    let trimmed = input.trim();
+    if trimmed.len() < 2 || !trimmed.starts_with('{') || !trimmed.ends_with('}') {
+        return None;
+    }
+
+    let mut depth = 0usize;
+    for (index, ch) in trimmed.char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 && index != trimmed.len() - 1 {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    (depth == 0).then(|| normalize_name_part(trimmed))
 }
 
 fn starts_with_lowercase_letter(input: &str) -> bool {
