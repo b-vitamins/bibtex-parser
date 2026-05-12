@@ -227,7 +227,7 @@ bibtex-parser = { version = "0.1", features = ["parallel", "latex_to_unicode"] }
 
 ## Performance
 
-The repository includes Criterion benchmarks for parser throughput, common library operations, and memory-oriented workloads. Exact numbers depend on CPU, compiler, governor, and thermal state, so measure on the machine that matters for your workload.
+The repository includes Criterion benchmarks for parser throughput, tolerant parsing, source-preserving parsing, streaming, writing, corpus parsing, common library operations, and memory-oriented workloads. Exact numbers depend on CPU, compiler, governor, and thermal state, so measure on the machine that matters for your workload. Release gates are listed in [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).
 
 ```sh
 cargo bench --bench performance -- throughput/bibtex-parser

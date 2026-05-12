@@ -172,6 +172,15 @@ fn bench_parser_comparison(c: &mut Criterion) {
         });
     });
 
+    group.bench_function("bibtex-parser-source-preserving", |b| {
+        let parser = Library::parser().preserve_raw();
+        b.iter(|| {
+            let document = parser.parse_document(black_box(TUGBOAT_BIB)).unwrap();
+            black_box(&document);
+            assert!(!document.entries().is_empty());
+        });
+    });
+
     group.bench_function("bibtex-parser-streaming", |b| {
         use bibtex_parser::{ParseEvent, ParseFlow};
 
@@ -203,6 +212,42 @@ fn bench_parser_comparison(c: &mut Criterion) {
 
     // biblatex comparison
     bench_biblatex(&mut group);
+
+    group.finish();
+}
+
+fn bench_writing(c: &mut Criterion) {
+    use bibtex_parser::{document_to_string, to_string, Library};
+
+    let library = Library::parser().parse(TUGBOAT_BIB).unwrap();
+    let document = Library::parser()
+        .preserve_raw()
+        .parse_document(TUGBOAT_BIB)
+        .unwrap();
+
+    let mut group = c.benchmark_group("writing");
+    group.measurement_time(Duration::from_secs(12));
+    group.warm_up_time(Duration::from_secs(5));
+    group.sample_size(120);
+    group.throughput(Throughput::Bytes(TUGBOAT_BIB.len() as u64));
+
+    stabilize_system();
+
+    group.bench_function("library_to_string", |b| {
+        b.iter(|| {
+            let output = to_string(black_box(&library)).unwrap();
+            black_box(&output);
+            assert!(!output.is_empty());
+        });
+    });
+
+    group.bench_function("raw_document_to_string", |b| {
+        b.iter(|| {
+            let output = document_to_string(black_box(&document)).unwrap();
+            black_box(&output);
+            assert_eq!(output.len(), TUGBOAT_BIB.len());
+        });
+    });
 
     group.finish();
 }
@@ -595,7 +640,7 @@ criterion_group! {
         .significance_level(0.02)
         .confidence_level(0.98)
         .noise_threshold(0.03);
-    targets = bench_parser_comparison, bench_critical_operations, bench_memory_efficiency, bench_corpus_parsing
+    targets = bench_parser_comparison, bench_critical_operations, bench_memory_efficiency, bench_corpus_parsing, bench_writing
 }
 
 criterion_main!(benches);
