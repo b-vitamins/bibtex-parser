@@ -425,6 +425,9 @@ impl Parser {
                 entry_index += 1;
             }
         }
+        if self.tolerant {
+            document.recover_partial_entries(&source_map);
+        }
         Ok(document)
     }
 

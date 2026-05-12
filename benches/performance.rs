@@ -161,6 +161,17 @@ fn bench_parser_comparison(c: &mut Criterion) {
         });
     });
 
+    group.bench_function("bibtex-parser-tolerant", |b| {
+        b.iter(|| {
+            let db = Library::parser()
+                .tolerant()
+                .parse(black_box(TUGBOAT_BIB))
+                .unwrap();
+            black_box(&db);
+            assert!(!db.entries().is_empty());
+        });
+    });
+
     // serde_bibtex comparison - all modes
     bench_serde_bibtex_ignore(&mut group);
     bench_serde_bibtex_borrow(&mut group);

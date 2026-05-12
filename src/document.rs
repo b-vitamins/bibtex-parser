@@ -604,6 +604,71 @@ impl<'a> ParsedDocument<'a> {
         }
     }
 
+    pub(crate) fn recover_partial_entries(&mut self, source_map: &SourceMap<'a>) {
+        let old_entries = std::mem::take(&mut self.entries);
+        let old_failed_blocks = std::mem::take(&mut self.failed_blocks);
+        let old_blocks = std::mem::take(&mut self.blocks);
+        let mut new_entries = Vec::with_capacity(old_entries.len());
+        let mut new_failed_blocks = Vec::new();
+        let mut new_blocks = Vec::with_capacity(old_blocks.len());
+
+        for block in old_blocks {
+            match block {
+                ParsedBlock::Entry(index) => {
+                    let new_index = new_entries.len();
+                    if let Some(entry) = old_entries.get(index) {
+                        new_entries.push(entry.clone());
+                        new_blocks.push(ParsedBlock::Entry(new_index));
+                    }
+                }
+                ParsedBlock::Failed(index) => {
+                    let Some(failed) = old_failed_blocks.get(index) else {
+                        continue;
+                    };
+                    let new_index = new_entries.len();
+                    if let Some(partial) = recover_partial_entry(failed, source_map, new_index) {
+                        new_entries.push(partial);
+                        new_blocks.push(ParsedBlock::Entry(new_index));
+                    } else {
+                        let failed_index = new_failed_blocks.len();
+                        new_failed_blocks.push(failed.clone());
+                        new_blocks.push(ParsedBlock::Failed(failed_index));
+                    }
+                }
+                ParsedBlock::String(index) => new_blocks.push(ParsedBlock::String(index)),
+                ParsedBlock::Preamble(index) => new_blocks.push(ParsedBlock::Preamble(index)),
+                ParsedBlock::Comment(index) => new_blocks.push(ParsedBlock::Comment(index)),
+            }
+        }
+
+        self.entries = new_entries;
+        self.failed_blocks = new_failed_blocks;
+        self.blocks = new_blocks;
+        self.rebuild_diagnostics_and_status();
+    }
+
+    fn rebuild_diagnostics_and_status(&mut self) {
+        self.diagnostics.clear();
+        self.diagnostics.extend(
+            self.entries
+                .iter()
+                .flat_map(|entry| entry.diagnostics.iter().cloned()),
+        );
+        self.diagnostics.extend(
+            self.failed_blocks
+                .iter()
+                .flat_map(|failed| failed.diagnostics.iter().cloned()),
+        );
+
+        self.status = if self.diagnostics.is_empty() {
+            ParseStatus::Ok
+        } else if self.entries.is_empty() && self.strings.is_empty() && self.preambles.is_empty() {
+            ParseStatus::Failed
+        } else {
+            ParseStatus::Partial
+        };
+    }
+
     pub(crate) fn failed_from_error(
         sources: Vec<ParsedSource<'a>>,
         source_map: &SourceMap<'a>,
@@ -823,6 +888,200 @@ fn diagnostic_for_raw_failure(
         source,
     );
     diagnostic.snippet = snippet;
+    diagnostic
+}
+
+fn recover_partial_entry<'a>(
+    failed: &ParsedFailedBlock<'a>,
+    source_map: &SourceMap<'a>,
+    entry_index: usize,
+) -> Option<ParsedEntry<'a>> {
+    let raw: &'a str = match &failed.raw {
+        Cow::Borrowed(raw) => raw,
+        Cow::Owned(_) => return None,
+    };
+    let absolute_start = failed.source?.byte_start;
+    let header = parse_partial_header(raw, source_map, absolute_start)?;
+    let fields = recover_partial_fields(
+        raw,
+        source_map,
+        absolute_start,
+        header.field_start,
+        header.closing,
+    );
+    if fields.is_empty() {
+        return None;
+    }
+
+    let diagnostic = diagnostic_for_partial_entry(entry_index, failed, source_map);
+
+    Some(ParsedEntry {
+        ty: header.ty,
+        key: header.key,
+        fields,
+        status: ParsedEntryStatus::Partial,
+        source: failed.source,
+        entry_type_source: header.entry_type_source,
+        key_source: header.key_source,
+        raw: None,
+        diagnostics: vec![diagnostic],
+    })
+}
+
+struct PartialHeader<'a> {
+    ty: EntryType<'a>,
+    key: Cow<'a, str>,
+    entry_type_source: Option<SourceSpan>,
+    key_source: Option<SourceSpan>,
+    field_start: usize,
+    closing: u8,
+}
+
+fn parse_partial_header<'a>(
+    raw: &'a str,
+    source_map: &SourceMap<'a>,
+    absolute_start: usize,
+) -> Option<PartialHeader<'a>> {
+    let bytes = raw.as_bytes();
+    let mut pos = bytes.iter().position(|byte| *byte == b'@')? + 1;
+
+    let entry_type_start = pos;
+    pos += scan_identifier(&bytes[pos..]);
+    if pos == entry_type_start {
+        return None;
+    }
+    let ty = EntryType::parse(&raw[entry_type_start..pos]);
+    let entry_type_source =
+        Some(source_map.span(absolute_start + entry_type_start, absolute_start + pos));
+
+    pos = skip_ascii_whitespace(bytes, pos);
+    let closing = match *bytes.get(pos)? {
+        b'{' => b'}',
+        b'(' => b')',
+        _ => return None,
+    };
+    pos += 1;
+    pos = skip_ascii_whitespace(bytes, pos);
+
+    let key_start = pos;
+    pos += scan_identifier(&bytes[pos..]);
+    if pos == key_start {
+        return None;
+    }
+    let key = Cow::Borrowed(&raw[key_start..pos]);
+    let key_source = Some(source_map.span(absolute_start + key_start, absolute_start + pos));
+
+    pos = skip_ascii_whitespace(bytes, pos);
+    if bytes.get(pos) != Some(&b',') {
+        return None;
+    }
+
+    Some(PartialHeader {
+        ty,
+        key,
+        entry_type_source,
+        key_source,
+        field_start: pos + 1,
+        closing,
+    })
+}
+
+fn recover_partial_fields<'a>(
+    raw: &'a str,
+    source_map: &SourceMap<'a>,
+    absolute_start: usize,
+    mut pos: usize,
+    closing: u8,
+) -> Vec<ParsedField<'a>> {
+    let bytes = raw.as_bytes();
+    let mut fields = Vec::new();
+
+    loop {
+        pos = skip_ascii_whitespace(bytes, pos);
+        let Some(&byte) = bytes.get(pos) else {
+            break;
+        };
+        if byte == closing || byte == b'@' {
+            break;
+        }
+
+        let field_start = pos;
+        let name_start = pos;
+        pos += scan_identifier(&bytes[pos..]);
+        if pos == name_start {
+            break;
+        }
+        let name_end = pos;
+        let name = Cow::Borrowed(&raw[name_start..name_end]);
+
+        pos = skip_ascii_whitespace(bytes, pos);
+        if bytes.get(pos) != Some(&b'=') {
+            break;
+        }
+        pos += 1;
+        pos = skip_ascii_whitespace(bytes, pos);
+
+        let value_start = pos;
+        let tail = &raw[value_start..];
+        let mut value_input = tail;
+        let Ok(value) = crate::parser::value::parse_value_field(&mut value_input) else {
+            break;
+        };
+        let consumed = tail.len() - value_input.len();
+        let value_end = trim_ascii_whitespace_end(bytes, value_start, value_start + consumed);
+        let boundary = value_start + consumed;
+        let field_end = match bytes.get(boundary) {
+            Some(b',') => boundary + 1,
+            Some(byte) if *byte == closing => boundary,
+            Some(_) | None => boundary,
+        };
+
+        fields.push(ParsedField {
+            name,
+            value: ParsedValue {
+                value,
+                raw: None,
+                source: Some(
+                    source_map.span(absolute_start + value_start, absolute_start + value_end),
+                ),
+                expanded: None,
+            },
+            raw: None,
+            source: Some(source_map.span(absolute_start + field_start, absolute_start + field_end)),
+            name_source: Some(
+                source_map.span(absolute_start + name_start, absolute_start + name_end),
+            ),
+            value_source: Some(
+                source_map.span(absolute_start + value_start, absolute_start + value_end),
+            ),
+        });
+
+        match bytes.get(boundary) {
+            Some(b',') => pos = boundary + 1,
+            Some(byte) if *byte == closing => break,
+            _ => break,
+        }
+    }
+
+    fields
+}
+
+fn diagnostic_for_partial_entry(
+    entry_index: usize,
+    failed: &ParsedFailedBlock<'_>,
+    source_map: &SourceMap<'_>,
+) -> Diagnostic {
+    let absolute_start = failed.source.map_or(0, |source| source.byte_start);
+    let mut diagnostic = diagnostic_for_raw_failure(
+        entry_index,
+        &failed.raw,
+        failed.error.clone(),
+        failed.source,
+        Some(source_map),
+        absolute_start,
+        None,
+    );
+    diagnostic.target = DiagnosticTarget::Entry(entry_index);
     diagnostic
 }
 

@@ -55,7 +55,7 @@ fn parsed_document_preserves_library_relationship_and_block_order() {
 #[test]
 fn parsed_document_exposes_failed_blocks_and_diagnostics() {
     let input = r#"
-@article{bad, title = "Missing close"
+@article{, title = "Missing key"}
 @book{ok, title = "Recovered"}
 "#;
 
@@ -71,14 +71,14 @@ fn parsed_document_exposes_failed_blocks_and_diagnostics() {
     assert_eq!(document.failed_blocks().len(), 1);
     assert_eq!(document.diagnostics().len(), 1);
     assert_eq!(document.failed_blocks()[0].diagnostics.len(), 1);
-    assert!(document.failed_blocks()[0].raw.contains("@article{bad"));
+    assert!(document.failed_blocks()[0].raw.contains("@article{,"));
     assert_eq!(
         document.diagnostics()[0].severity,
         DiagnosticSeverity::Error
     );
     assert_eq!(
         document.diagnostics()[0].code,
-        DiagnosticCode::UNCLOSED_ENTRY
+        DiagnosticCode::MISSING_ENTRY_KEY
     );
     assert_eq!(
         document.diagnostics()[0].target,

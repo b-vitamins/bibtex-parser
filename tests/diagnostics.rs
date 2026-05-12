@@ -1,13 +1,12 @@
 use bibtex_parser::{DiagnosticCode, DiagnosticSeverity, DiagnosticTarget, ParseStatus, Parser};
 
-fn first_code(input: &str) -> DiagnosticCode {
+fn first_diagnostic(input: &str) -> (DiagnosticCode, DiagnosticTarget) {
     let document = Parser::new().tolerant().parse_document(input).unwrap();
     assert_eq!(document.status(), ParseStatus::Partial);
-    assert_eq!(
-        document.diagnostics()[0].target,
-        DiagnosticTarget::FailedBlock(0)
-    );
-    document.diagnostics()[0].code.clone()
+    (
+        document.diagnostics()[0].code.clone(),
+        document.diagnostics()[0].target.clone(),
+    )
 }
 
 #[test]
@@ -17,47 +16,57 @@ fn diagnostic_code_inventory_is_stable() {
         (
             format!("@article{{, title = \"A\"}}{ok}"),
             DiagnosticCode::MISSING_ENTRY_KEY,
+            DiagnosticTarget::FailedBlock(0),
         ),
         (
             format!("@article{{bad, title \"A\"}}{ok}"),
             DiagnosticCode::MISSING_FIELD_SEPARATOR,
+            DiagnosticTarget::FailedBlock(0),
         ),
         (
             format!("@article{{bad, = \"A\"}}{ok}"),
             DiagnosticCode::EXPECTED_FIELD_NAME,
+            DiagnosticTarget::FailedBlock(0),
         ),
         (
             format!("@article{{bad, title = , year = 2020}}{ok}"),
             DiagnosticCode::EMPTY_FIELD_VALUE,
+            DiagnosticTarget::FailedBlock(0),
         ),
         (
             format!("@article{{bad, title = # \"A\"}}{ok}"),
             DiagnosticCode::EXPECTED_VALUE_ATOM,
+            DiagnosticTarget::FailedBlock(0),
         ),
         (
             format!("@article{{bad, title = \"A\" year = 2020}}{ok}"),
             DiagnosticCode::BAD_FIELD_BOUNDARY,
+            DiagnosticTarget::Entry(0),
         ),
         (
             format!("@article{{bad, title = \"A\" # , year = 2020}}{ok}"),
             DiagnosticCode::BAD_VALUE_BOUNDARY,
+            DiagnosticTarget::FailedBlock(0),
         ),
         (
             format!("@article{{bad, title = \"A\"\n{ok}"),
             DiagnosticCode::UNCLOSED_ENTRY,
+            DiagnosticTarget::Entry(0),
         ),
         (
             format!("@article{{bad, title = {{A\n{ok}"),
             DiagnosticCode::UNCLOSED_BRACED_VALUE,
+            DiagnosticTarget::FailedBlock(0),
         ),
         (
             format!("@article{{bad, title = \"A\n{ok}"),
             DiagnosticCode::UNCLOSED_QUOTED_VALUE,
+            DiagnosticTarget::FailedBlock(0),
         ),
     ];
 
-    for (input, expected) in cases {
-        assert_eq!(first_code(&input), expected);
+    for (input, expected_code, expected_target) in cases {
+        assert_eq!(first_diagnostic(&input), (expected_code, expected_target));
     }
 }
 
