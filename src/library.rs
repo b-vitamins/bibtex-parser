@@ -2723,14 +2723,15 @@ mod tests {
             assert_eq!(db3.entries().len(), 1);
 
             // Multi-file parallel processing
-            let path1 = "/tmp/test1.bib";
-            let path2 = "/tmp/test2.bib";
-            write(path1, "@article{a1, title=\"A\"}").unwrap();
-            write(path2, "@article{a2, title=\"B\"}").unwrap();
+            let dir = std::env::temp_dir();
+            let path1 = dir.join(format!("bibtex-parser-test1-{}.bib", std::process::id()));
+            let path2 = dir.join(format!("bibtex-parser-test2-{}.bib", std::process::id()));
+            write(&path1, "@article{a1, title=\"A\"}").unwrap();
+            write(&path2, "@article{a2, title=\"B\"}").unwrap();
 
             let db4 = Library::parser()
                 .threads(2)
-                .parse_files(&[path1, path2])
+                .parse_files(&[path1.as_path(), path2.as_path()])
                 .unwrap();
             assert_eq!(db4.entries().len(), 2);
 

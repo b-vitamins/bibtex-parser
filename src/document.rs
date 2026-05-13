@@ -1612,7 +1612,7 @@ fn expand_value_with_options(
         Value::Number(number) => Ok(number.to_string()),
         Value::Concat(parts) => {
             let mut expanded = String::new();
-            for part in parts {
+            for part in parts.iter() {
                 expanded.push_str(&expand_value_with_options(part, strings, options, stack)?);
             }
             Ok(expanded)

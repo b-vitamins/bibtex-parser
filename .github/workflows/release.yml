@@ -176,7 +176,7 @@ jobs:
   publish-crate:
     name: Publish to crates.io
     runs-on: ubuntu-latest
-    needs: [validate]
+    needs: [validate, sdist, linux-wheels, windows-wheels, macos-wheels]
     if: needs.validate.outputs.is_tag == 'true'
     environment: crates-io
     steps:

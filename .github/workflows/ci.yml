@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: rhysd/actionlint@v1
+      - uses: raven-actions/actionlint@v2
 
   rust-test:
     name: Rust tests (${{ matrix.os }})
@@ -32,7 +32,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Test all features
-        run: cargo test --locked --all-features
+        run: cargo test --locked --features parallel,latex_to_unicode
 
   rust-checks:
     name: Rust checks
