@@ -27,8 +27,24 @@ impl<'a> SourceMap<'a> {
     /// Create a source map with a document-local source identifier and optional name.
     #[must_use]
     pub fn new(source: Option<SourceId>, name: Option<Cow<'a, str>>, input: &'a str) -> Self {
-        let mut line_starts = Vec::new();
-        let mut line_ascii = Vec::new();
+        let line_capacity = estimate_line_capacity(input.len());
+        if input.is_ascii() {
+            let mut line_starts = Vec::with_capacity(line_capacity);
+            line_starts.push(0);
+            line_starts.extend(memchr::memchr_iter(b'\n', input.as_bytes()).map(|index| index + 1));
+            let line_ascii = vec![true; line_starts.len()];
+
+            return Self {
+                source,
+                name,
+                input,
+                line_starts,
+                line_ascii,
+            };
+        }
+
+        let mut line_starts = Vec::with_capacity(line_capacity);
+        let mut line_ascii = Vec::with_capacity(line_capacity);
         let mut current_line_ascii = true;
         line_starts.push(0);
         for (index, byte) in input.bytes().enumerate() {
@@ -196,6 +212,10 @@ impl<'a> SourceMap<'a> {
 
         Some(snippet.chars().take(max_chars).collect())
     }
+}
+
+fn estimate_line_capacity(input_len: usize) -> usize {
+    (input_len / 64).clamp(1, 1_000_000)
 }
 
 pub(crate) struct SourceCursor<'map, 'source> {
