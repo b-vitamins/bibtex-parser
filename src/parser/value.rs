@@ -50,7 +50,7 @@ fn parse_concatenated_value<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
 fn parse_concatenated_value_field<'a>(input: &mut &'a str) -> PResult<'a, Value<'a>> {
     let first = parse_single_value(input)?;
 
-    if lexer::skip_whitespace_peek(input) != Some(b'#') {
+    if !consume_concat_separator_field(input) {
         return Ok(first);
     }
 
@@ -59,14 +59,10 @@ fn parse_concatenated_value_field<'a>(input: &mut &'a str) -> PResult<'a, Value<
     parts.push(first);
 
     loop {
-        // Consume '#'
-        *input = &input[1..];
-        lexer::skip_whitespace(input);
-
         let part = parse_single_value(input)?;
         parts.push(part);
 
-        if lexer::skip_whitespace_peek(input) != Some(b'#') {
+        if !consume_concat_separator_field(input) {
             break;
         }
     }
@@ -90,6 +86,32 @@ fn consume_concat_separator(input: &mut &str) -> bool {
     lexer::skip_whitespace(&mut probe);
     *input = probe;
     true
+}
+
+/// Consume optional trailing whitespace and a field-value concatenation marker.
+///
+/// Unlike `consume_concat_separator`, this variant keeps the field parser's
+/// contract: trailing whitespace is consumed even when no `#` follows.
+#[inline]
+fn consume_concat_separator_field(input: &mut &str) -> bool {
+    match input.as_bytes().first() {
+        Some(b'#') => {
+            *input = &input[1..];
+            lexer::skip_whitespace(input);
+            true
+        }
+        Some(b' ' | b'\t' | b'\n' | b'\r') => {
+            lexer::skip_whitespace(input);
+            if input.as_bytes().first() == Some(&b'#') {
+                *input = &input[1..];
+                lexer::skip_whitespace(input);
+                true
+            } else {
+                false
+            }
+        }
+        Some(_) | None => false,
+    }
 }
 
 /// Parse a single value component
