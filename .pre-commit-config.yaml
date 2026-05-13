@@ -1,0 +1,30 @@
+repos:
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --all -- --check
+        language: system
+        pass_filenames: false
+        files: ^(src|tests|examples|benches)/.*\.rs$|^(Cargo|rustfmt)\.toml$
+
+      - id: actionlint
+        name: actionlint
+        entry: actionlint
+        language: system
+        pass_filenames: false
+        files: ^\.github/workflows/.*\.ya?ml$
+
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --locked --all-targets --all-features -- -D warnings
+        language: system
+        pass_filenames: false
+        stages: [manual]
+
+      - id: cargo-test
+        name: cargo test
+        entry: cargo test --locked --all-features
+        language: system
+        pass_filenames: false
+        stages: [manual]

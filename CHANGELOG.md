@@ -4,6 +4,24 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+## 0.2.1 - 2026-05-13
+
+### Fixed
+
+- Restored compatibility with the advertised Rust 1.75 minimum supported Rust
+  version in value expansion.
+- Made a parallel parser unit test use the platform temporary directory instead
+  of a Unix-only path.
+- Updated CI workflow linting to use a maintained action reference.
+- Kept cross-platform Rust test jobs on Rust-facing features; Python extension
+  linking remains covered by the wheel jobs.
+
+### Changed
+
+- Added repository agent instructions covering SemVer, Conventional Commits,
+  pre-commit checks, release gates, and package naming.
+- Added a local pre-commit configuration and Guix manifest support for it.
+
 ## 0.2.0 - 2026-05-13
 
 ### Added

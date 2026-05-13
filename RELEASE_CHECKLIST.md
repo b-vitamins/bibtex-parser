@@ -86,9 +86,9 @@ After the final release-prep commit is on `master`:
 
 ```sh
 git pull --ff-only origin master
-git tag -a v0.2.0 -m "Release v0.2.0"
+git tag -a vX.Y.Z -m "Release vX.Y.Z"
 git push origin master
-git push origin v0.2.0
+git push origin vX.Y.Z
 ```
 
 Pushing the tag runs `.github/workflows/release.yml`. The workflow:
@@ -108,7 +108,7 @@ Pushing the tag runs `.github/workflows/release.yml`. The workflow:
 cargo search bibtex-parser
 python3 -m venv /tmp/citerra-release-check
 /tmp/citerra-release-check/bin/python -m pip install --upgrade pip
-/tmp/citerra-release-check/bin/python -m pip install citerra==0.2.0
+/tmp/citerra-release-check/bin/python -m pip install citerra==X.Y.Z
 /tmp/citerra-release-check/bin/python - <<'PY'
 import citerra
 

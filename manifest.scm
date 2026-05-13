@@ -5,6 +5,7 @@
    "pkg-config"
    "python"
    "maturin"
+   "pre-commit"
    "python-pytest"
    "python-rich"
    "actionlint"

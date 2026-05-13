@@ -460,13 +460,13 @@ cargo bench --bench performance --all-features -- --noplot throughput
 | --- | ---: | ---: | ---: | --- |
 | `serde_bibtex` ignore | 0.7.1 | 2.411 ms | 1.04 GiB/s | Parses and discards data |
 | `serde_bibtex` selected struct | 0.7.1 | 4.143 ms | 621.9 MiB/s | Deserializes selected fields |
-| `bibtex-parser` strict `Library` | 0.2.0 | 5.234 ms | 492.3 MiB/s | Entries, fields, strings, comments, preambles |
+| `bibtex-parser` strict `Library` | 0.2.1 | 5.234 ms | 492.3 MiB/s | Entries, fields, strings, comments, preambles |
 | `serde_bibtex` borrowed entries | 0.7.1 | 6.872 ms | 374.9 MiB/s | Borrowed parsed entries |
-| `bibtex-parser` tolerant `Library` | 0.2.0 | 7.015 ms | 367.3 MiB/s | Recovery and failed-block tracking |
+| `bibtex-parser` tolerant `Library` | 0.2.1 | 7.015 ms | 367.3 MiB/s | Recovery and failed-block tracking |
 | `biblatex` raw bibliography | 0.11.0 | 10.839 ms | 237.7 MiB/s | Raw BibLaTeX bibliography |
 | `serde_bibtex` owned entries | 0.7.1 | 13.469 ms | 191.3 MiB/s | Owned entries with month macros |
-| `bibtex-parser` streaming events | 0.2.0 | 21.943 ms | 117.4 MiB/s | Source-order callback events |
-| `bibtex-parser` source-preserving document | 0.2.0 | 31.862 ms | 80.9 MiB/s | Raw text, source locations, diagnostics model |
+| `bibtex-parser` streaming events | 0.2.1 | 21.943 ms | 117.4 MiB/s | Source-order callback events |
+| `bibtex-parser` source-preserving document | 0.2.1 | 31.862 ms | 80.9 MiB/s | Raw text, source locations, diagnostics model |
 | `nom-bibtex` | 0.6.0 | 34.334 ms | 75.0 MiB/s | Parsed bibliography |
 
 Reproduce the Rust writing table:
@@ -477,8 +477,8 @@ cargo bench --bench performance --all-features -- --noplot writing
 
 | Rust writer mode | Version | Median time | Throughput |
 | --- | ---: | ---: | ---: |
-| Raw-preserving document write | 0.2.0 | 1.816 ms | 1.39 GiB/s |
-| Normalized `Library` write | 0.2.0 | 5.325 ms | 483.8 MiB/s |
+| Raw-preserving document write | 0.2.1 | 1.816 ms | 1.39 GiB/s |
+| Normalized `Library` write | 0.2.1 | 5.325 ms | 483.8 MiB/s |
 
 The Python comparison used the local `citerra` wheel plus `bibtexparser` 1.4.4,
 `bibtexparser` 2.0.0b9, and `pybtex` 0.26.1. The comparison script uses
@@ -491,16 +491,16 @@ python python/benchmarks/compare_parsers.py tests/fixtures/tugboat.bib --write
 
 | Python parser / mode | Version | Median parse time | Throughput | Relative time |
 | --- | ---: | ---: | ---: | ---: |
-| `citerra` structured parse | 0.2.0 | 0.058 s | 44.3 MiB/s | 1.0x |
-| `citerra` source-preserving parse | 0.2.0 | 0.065 s | 39.9 MiB/s | 1.1x |
+| `citerra` structured parse | 0.2.1 | 0.058 s | 44.3 MiB/s | 1.0x |
+| `citerra` source-preserving parse | 0.2.1 | 0.065 s | 39.9 MiB/s | 1.1x |
 | `bibtexparser` parse | 2.0.0b9 | 0.372 s | 6.9 MiB/s | 6.4x |
 | `pybtex` parse | 0.26.1 | 0.859 s | 3.0 MiB/s | 14.8x |
 | `bibtexparser` parse | 1.4.4 | 10.483 s | 0.2 MiB/s | 180.1x |
 
 | Python writer / mode | Version | Median write time | Throughput | Relative time |
 | --- | ---: | ---: | ---: | ---: |
-| `citerra` raw-preserving write | 0.2.0 | 0.003 s | 953.2 MiB/s | 1.0x |
-| `citerra` normalized write | 0.2.0 | 0.014 s | 181.3 MiB/s | 5.3x |
+| `citerra` raw-preserving write | 0.2.1 | 0.003 s | 953.2 MiB/s | 1.0x |
+| `citerra` normalized write | 0.2.1 | 0.014 s | 181.3 MiB/s | 5.3x |
 | `bibtexparser` write | 1.4.4 | 0.106 s | 24.3 MiB/s | 39.2x |
 | `bibtexparser` write | 2.0.0b9 | 0.493 s | 5.2 MiB/s | 182.2x |
 | `pybtex` write | 0.26.1 | 3.942 s | 0.7 MiB/s | 1458.5x |
