@@ -1272,9 +1272,17 @@ fn parse_document_with_options(
         parser = parser.expand_values();
     }
 
-    let document = if !options.tolerant && !options.capture_source && !options.preserve_raw {
-        parser.parse_compact_document(source.map(Cow::Owned), text)
-    } else if let Some(source) = source {
+    if !options.tolerant && !options.capture_source && !options.preserve_raw {
+        let mut document = parser
+            .parse_compact_document_owned(source, text)
+            .map_err(map_error)?;
+        if options.latex_to_unicode {
+            apply_latex_to_unicode(&mut document)?;
+        }
+        return Ok(PyDocument { inner: document });
+    }
+
+    let document = if let Some(source) = source {
         parser.parse_source(source, text)
     } else {
         parser.parse_document(text)
