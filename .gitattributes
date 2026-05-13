@@ -1,0 +1,3 @@
+# Keep large BibTeX fixture data from dominating GitHub language statistics.
+assets/*.bib linguist-generated
+tests/fixtures/*.bib linguist-generated

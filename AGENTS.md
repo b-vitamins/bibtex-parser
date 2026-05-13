@@ -17,7 +17,9 @@ These instructions apply to this repository.
 - A tagged release should not be approved for publication while branch CI has
   known failures on the same commit or an already-required follow-up fix.
 - If GitHub environment approvals are required, approve `crates-io` and `pypi`
-  only after release validation and artifact-build jobs have passed.
+  only after release validation and artifact-build jobs have passed. Package
+  publication jobs should use `deployment: false` so releases do not create
+  GitHub deployment records.
 
 ## Commit Hygiene
 
@@ -78,6 +80,7 @@ These instructions apply to this repository.
 
 ## Python Package Naming
 
+- GitHub repository name: `citerra`.
 - Rust crate name: `bibtex-parser`.
 - Rust import path: `bibtex_parser`.
 - Python distribution name: `citerra`.

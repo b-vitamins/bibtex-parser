@@ -4,6 +4,21 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+## 0.2.3 - 2026-05-13
+
+### Changed
+
+- Made `citerra` the GitHub and PyPI-facing README while keeping `RUST.md` as
+  the crates.io README for the `bibtex-parser` Rust crate.
+- Removed stale repository-only files and renamed the release checklist to
+  `RELEASE.md`.
+- Simplified benchmark presentation so non-equivalent throughput baselines and
+  writer timings are described separately from parser-output comparison tables.
+- Added GitHub Linguist attributes so BibTeX fixtures do not dominate the
+  repository language statistics.
+- Updated release publishing to keep protected environment checks without
+  creating GitHub deployment records for package publication jobs.
+
 ## 0.2.2 - 2026-05-13
 
 ### Changed

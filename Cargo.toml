@@ -1,24 +1,23 @@
 [package]
 name = "bibtex-parser"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 rust-version = "1.75"
 authors = ["Ayan Das <bvits@riseup.net>"]
 description = "BibTeX parser for Rust"
 documentation = "https://docs.rs/bibtex-parser"
-repository = "https://github.com/b-vitamins/bibtex-parser"
-homepage = "https://github.com/b-vitamins/bibtex-parser"
-readme = "README.md"
+repository = "https://github.com/b-vitamins/citerra"
+homepage = "https://github.com/b-vitamins/citerra"
+readme = "RUST.md"
 keywords = ["bibtex", "parser", "latex", "bibliography", "citation"]
 categories = ["parser-implementations", "text-processing"]
 license = "MIT OR Apache-2.0"
 include = [
     "/Cargo.toml",
-    "/README.md",
+    "/RUST.md",
     "/LICENSE",
     "/CHANGELOG.md",
-    "/PYTHON.md",
-    "/RELEASE_CHECKLIST.md",
+    "/RELEASE.md",
     "/src/**",
     "/examples/**",
     "/benches/**",

@@ -9,15 +9,12 @@ release.
 - Create a GitHub environment named `crates-io`.
 - Add `CARGO_REGISTRY_TOKEN` to the `crates-io` environment secrets.
 - Create a GitHub environment named `pypi`.
-- Configure PyPI Trusted Publishing for:
-  - owner: `b-vitamins`
-  - repository: `bibtex-parser`
-  - workflow: `release.yml`
-  - environment: `pypi`
+- Add `PYPI_API_TOKEN` to the `pypi` environment secrets.
 - Confirm the PyPI project name is `citerra`.
 
-The release workflow uses PyPI Trusted Publishing through OIDC. It does not
-need a PyPI password or long-lived PyPI token when the publisher is configured.
+The release workflow uses environment-scoped publishing tokens. Package
+publication jobs set `deployment: false` so GitHub environment approvals do not
+create repository deployment records.
 
 ## Pre-Release Local Gates
 
@@ -77,7 +74,7 @@ artifacts, editor files, or generated benchmark reports.
 - `Cargo.toml` and `pyproject.toml` must have the same version.
 - `Cargo.lock` must reflect the package version.
 - `CHANGELOG.md` must have an entry for the release.
-- `README.md` install snippets must reference the intended minor version.
+- `README.md` and `RUST.md` install snippets must reference the intended minor version.
 - The tag must be exactly `vX.Y.Z` for package version `X.Y.Z`.
 
 ## Release

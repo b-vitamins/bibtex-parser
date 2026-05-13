@@ -4,9 +4,9 @@ build-backend = "maturin"
 
 [project]
 name = "citerra"
-version = "0.2.2"
+version = "0.2.3"
 description = "BibTeX parser for Python"
-readme = "PYTHON.md"
+readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT OR Apache-2.0" }
 authors = [{ name = "Ayan Das", email = "bvits@riseup.net" }]
@@ -30,10 +30,10 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/b-vitamins/bibtex-parser"
-Repository = "https://github.com/b-vitamins/bibtex-parser"
-Documentation = "https://github.com/b-vitamins/bibtex-parser/blob/master/PYTHON.md"
-Changelog = "https://github.com/b-vitamins/bibtex-parser/blob/master/CHANGELOG.md"
+Homepage = "https://github.com/b-vitamins/citerra"
+Repository = "https://github.com/b-vitamins/citerra"
+Documentation = "https://github.com/b-vitamins/citerra#readme"
+Changelog = "https://github.com/b-vitamins/citerra/blob/master/CHANGELOG.md"
 
 [tool.maturin]
 bindings = "pyo3"
