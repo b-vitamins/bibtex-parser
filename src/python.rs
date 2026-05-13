@@ -12,11 +12,11 @@
 )]
 
 use crate::{
-    document_to_string, normalize_doi, parse_date_parts, parse_names, DateParseError, DateParts,
-    Diagnostic, DiagnosticSeverity, DiagnosticTarget, EntryType, ParsedBlock, ParsedComment,
-    ParsedDocument, ParsedEntry, ParsedEntryStatus, ParsedFailedBlock, ParsedField, ParsedPreamble,
-    ParsedString, Parser, RawWriteMode, ResourceField, SourceSpan, TrailingComma, ValidationLevel,
-    ValidationSeverity, Value, Writer, WriterConfig,
+    document_to_string, normalize_doi, parse_date_parts, parse_names, selected_entries_to_string,
+    DateParseError, DateParts, Diagnostic, DiagnosticSeverity, DiagnosticTarget, EntryType,
+    ParsedBlock, ParsedComment, ParsedDocument, ParsedEntry, ParsedEntryStatus, ParsedFailedBlock,
+    ParsedField, ParsedPreamble, ParsedString, Parser, RawWriteMode, ResourceField, SourceSpan,
+    TrailingComma, ValidationLevel, ValidationSeverity, Value, Writer, WriterConfig,
 };
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -337,6 +337,11 @@ impl PyDocument {
     #[pyo3(signature = (config=None))]
     fn write(&self, config: Option<&PyWriterConfig>) -> PyResult<String> {
         write_document(&self.inner, config.map(PyWriterConfig::to_rust))
+    }
+
+    fn write_selected(&self, keys: Vec<String>) -> PyResult<String> {
+        let borrowed = keys.iter().map(String::as_str).collect::<Vec<_>>();
+        selected_entries_to_string(&self.inner, &borrowed).map_err(map_error)
     }
 
     #[pyo3(signature = (level="standard"))]

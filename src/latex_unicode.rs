@@ -349,7 +349,9 @@ pub fn latex_to_unicode(input: &str) -> String {
             }
         } else if ch == '~' {
             // Check if this is a standalone tilde (not part of \~)
-            if pos == 0 || !input[..pos].ends_with('\\') {
+            if is_url_path_tilde(input, pos) {
+                result.push(ch);
+            } else if pos == 0 || !input[..pos].ends_with('\\') {
                 // Non-breaking space
                 result.push(' ');
             } else {
@@ -362,6 +364,14 @@ pub fn latex_to_unicode(input: &str) -> String {
     }
 
     result
+}
+
+fn is_url_path_tilde(input: &str, pos: usize) -> bool {
+    let before = &input[..pos];
+    let token_start = before
+        .rfind(char::is_whitespace)
+        .map_or(0, |index| index + 1);
+    before[token_start..].contains("://")
 }
 
 #[cfg(test)]
@@ -443,6 +453,10 @@ mod tests {
     fn test_tildes() {
         // Standalone tildes become spaces
         assert_eq!(latex_to_unicode("word~word"), "word word");
+        assert_eq!(
+            latex_to_unicode("https://example.org/~user/paper.pdf"),
+            "https://example.org/~user/paper.pdf"
+        );
         // LaTeX tildes are accents
         assert_eq!(latex_to_unicode("\\~n"), "ñ");
         // Mixed

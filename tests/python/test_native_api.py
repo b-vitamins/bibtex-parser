@@ -98,6 +98,42 @@ def test_semantic_text_deindents_wrapped_lines_but_keeps_raw_value() -> None:
     )
 
 
+def test_plain_record_helpers_cover_rebuild_and_selected_entry_workflows() -> None:
+    document = bibtex_parser.parse(
+        """@comment{keep}
+@article{b, title = {Second}, year = {2024}}
+@article{a, title = {First}, year = {2023}}"""
+    )
+
+    records = bibtex_parser.document_to_dicts(document)
+    assert records[0]["ENTRYTYPE"] == "article"
+    assert records[0]["ID"] == "b"
+    assert records[0]["title"] == "Second"
+
+    rebuilt = bibtex_parser.document_from_entries(
+        records,
+        comments=["keep"],
+        field_order=["year", "title"],
+        sort_by=["ID"],
+        trailing_comma=True,
+    )
+    output = rebuilt.write()
+
+    assert rebuilt.keys() == ["a", "b"]
+    assert "@comment{keep}" in output
+    assert "year = {2023}," in output
+    assert output.index("@article{a,") < output.index("@article{b,")
+    assert output.index("year = {2023}") < output.index("title = {First}")
+    assert document.write_selected(["a"]).strip().startswith("@article{a,")
+    assert "@article{b," not in document.write_selected(["a"])
+
+    latex_output = bibtex_parser.write_entries(
+        [{"ENTRYTYPE": "article", "ID": "latex", "title": "Jos\\'e and \\alpha"}]
+    )
+    assert "Jos\\'e and \\alpha" in latex_output
+    assert bibtex_parser.parse(latex_output).entry("latex").get("title") == "Jos\\'e and \\alpha"
+
+
 def test_helpers_are_native_and_typed() -> None:
     assert bibtex_parser.normalize_doi("https://doi.org/10.1000/XYZ.") == "10.1000/xyz"
     assert bibtex_parser.parse_date("2026-05-13").month == 5
