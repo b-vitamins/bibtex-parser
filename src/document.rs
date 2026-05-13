@@ -526,7 +526,7 @@ impl<'a> ParsedField<'a> {
     #[must_use]
     pub fn into_owned(self) -> ParsedField<'static> {
         ParsedField {
-            name: Cow::Owned(self.name.into_owned()),
+            name: owned_field_name(self.name),
             value: self.value.into_owned(),
             raw: self.raw.map(|raw| Cow::Owned(raw.into_owned())),
             source: self.source,
@@ -537,7 +537,7 @@ impl<'a> ParsedField<'a> {
 
     pub(crate) fn from_owned_field(field: Field<'a>) -> ParsedField<'static> {
         ParsedField {
-            name: Cow::Owned(field.name.into_owned()),
+            name: owned_field_name(field.name),
             value: ParsedValue::from_owned_value(field.value, None, None),
             raw: None,
             source: None,
@@ -645,7 +645,7 @@ impl<'a> ParsedEntry<'a> {
                 let name_source = span_cursor.span(location.name.0, location.name.1);
                 let value_source = span_cursor.span(location.value.0, location.value.1);
                 ParsedField {
-                    name: Cow::Owned(field.name.into_owned()),
+                    name: owned_field_name(field.name),
                     value: ParsedValue::from_owned_value(
                         field.value,
                         Some(value_source),
@@ -914,6 +914,57 @@ impl<'a> ParsedEntry<'a> {
             diagnostics: self.diagnostics,
         }
     }
+}
+
+fn owned_field_name(name: Cow<'_, str>) -> Cow<'static, str> {
+    static_field_name(&name).map_or_else(|| Cow::Owned(name.into_owned()), Cow::Borrowed)
+}
+
+fn static_field_name(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "abstract" => "abstract",
+        "address" => "address",
+        "archiveprefix" => "archiveprefix",
+        "author" => "author",
+        "booktitle" => "booktitle",
+        "chapter" => "chapter",
+        "copyright" => "copyright",
+        "crossref" => "crossref",
+        "date" => "date",
+        "doi" => "doi",
+        "edition" => "edition",
+        "editor" => "editor",
+        "eprint" => "eprint",
+        "eventdate" => "eventdate",
+        "file" => "file",
+        "institution" => "institution",
+        "isbn" => "isbn",
+        "issn" => "issn",
+        "journal" => "journal",
+        "keywords" => "keywords",
+        "language" => "language",
+        "month" => "month",
+        "note" => "note",
+        "number" => "number",
+        "organization" => "organization",
+        "origdate" => "origdate",
+        "pages" => "pages",
+        "pmcid" => "pmcid",
+        "pmid" => "pmid",
+        "primaryclass" => "primaryclass",
+        "publisher" => "publisher",
+        "school" => "school",
+        "series" => "series",
+        "timestamp" => "timestamp",
+        "title" => "title",
+        "translator" => "translator",
+        "type" => "type",
+        "url" => "url",
+        "urldate" => "urldate",
+        "volume" => "volume",
+        "year" => "year",
+        _ => return None,
+    })
 }
 
 fn nth_field_index(fields: &[ParsedField<'_>], name: &str, occurrence: usize) -> Option<usize> {
