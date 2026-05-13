@@ -16,7 +16,7 @@ parsing, and configurable serialization.
 
 Measured on `tests/fixtures/tugboat.bib`: 2,701,551 bytes, 73,993 lines, and
 3,644 entries. Hardware was AMD Ryzen 5 5600G, 6 cores / 12 threads. Measured
-on 2026-05-13 with Rust `1.93.0`; throughput is input-size normalized.
+on 2026-05-14 with Rust `1.93.0`; throughput is input-size normalized.
 
 The table compares parser modes that return reusable bibliography data.
 Throughput-only baselines that intentionally do less work are noted below the
@@ -24,22 +24,22 @@ table rather than listed as peers.
 
 | Rust parser / mode | Version | Median time | Throughput | Output retained |
 | --- | ---: | ---: | ---: | --- |
-| `bibtex-parser` strict `Library` | 0.2.3 | 5.234 ms | 492.3 MiB/s | Entries, fields, strings, comments, preambles |
-| `serde_bibtex` borrowed entries | 0.7.1 | 6.872 ms | 374.9 MiB/s | Borrowed entries |
-| `bibtex-parser` tolerant `Library` | 0.2.3 | 7.015 ms | 367.3 MiB/s | Recovery and failed-block tracking |
-| `biblatex` raw bibliography | 0.11.0 | 10.839 ms | 237.7 MiB/s | Raw BibLaTeX bibliography |
-| `serde_bibtex` owned entries | 0.7.1 | 13.469 ms | 191.3 MiB/s | Owned entries with month macros |
-| `bibtex-parser` streaming events | 0.2.3 | 21.943 ms | 117.4 MiB/s | Source-order callback events |
-| `bibtex-parser` source-preserving document | 0.2.3 | 31.862 ms | 80.9 MiB/s | Raw text, source locations, diagnostics model |
-| `nom-bibtex` | 0.6.0 | 34.334 ms | 75.0 MiB/s | Parsed bibliography |
+| `bibtex-parser` strict `Library` | 0.2.3 | 3.424 ms | 752.4 MiB/s | Entries, fields, strings, comments, preambles |
+| `bibtex-parser` tolerant `Library` | 0.2.3 | 4.166 ms | 618.4 MiB/s | Recovery and failed-block tracking |
+| `serde_bibtex` borrowed entries | 0.7.1 | 7.011 ms | 367.5 MiB/s | Borrowed entries |
+| `serde_bibtex` owned entries | 0.7.1 | 8.718 ms | 295.5 MiB/s | Owned entries with month macros |
+| `biblatex` raw bibliography | 0.11.0 | 9.529 ms | 270.4 MiB/s | Raw BibLaTeX bibliography |
+| `bibtex-parser` streaming events | 0.2.3 | 15.596 ms | 165.2 MiB/s | Source-order callback events |
+| `bibtex-parser` source-preserving document | 0.2.3 | 22.944 ms | 112.3 MiB/s | Raw text, source locations, diagnostics model |
+| `nom-bibtex` | 0.6.0 | 25.297 ms | 101.9 MiB/s | Parsed bibliography |
 
 Two narrower `serde_bibtex` baselines were also measured: parse-and-discard at
-1.04 GiB/s and selected-field deserialization at 621.9 MiB/s. Those rows are
+1.03 GiB/s and selected-field deserialization at 635.1 MiB/s. Those rows are
 useful throughput baselines, but they do not return the same document surface
 as a full parser mode.
 
-The writer benchmark measured raw-preserving document output at 1.39 GiB/s and
-normalized `Library` output at 483.8 MiB/s.
+The writer benchmark measured raw-preserving document output at 1.49 GiB/s and
+normalized `Library` output at 423.2 MiB/s.
 
 Reproduction commands are listed in [Reproducing Benchmarks](#reproducing-benchmarks).
 
@@ -304,13 +304,13 @@ library operations, and memory-oriented workloads.
 Run the parser table:
 
 ```sh
-cargo bench --bench performance --all-features -- --noplot throughput
+guix shell -m manifest.scm -- env CC=gcc cargo bench --bench performance --all-features -- --noplot throughput
 ```
 
 Run the writing table:
 
 ```sh
-cargo bench --bench performance --all-features -- --noplot writing
+guix shell -m manifest.scm -- env CC=gcc cargo bench --bench performance --all-features -- --noplot writing
 ```
 
 Python benchmark notes are in [README.md](README.md).
