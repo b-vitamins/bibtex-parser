@@ -12,16 +12,17 @@
 )]
 
 use crate::{
-    document_to_string, normalize_doi, parse_date_parts, parse_names, selected_entries_to_string,
-    DateParseError, DateParts, Diagnostic, DiagnosticSeverity, DiagnosticTarget, EntryType,
-    ParsedBlock, ParsedComment, ParsedDocument, ParsedEntry, ParsedEntryStatus, ParsedFailedBlock,
-    ParsedField, ParsedPreamble, ParsedString, Parser, RawWriteMode, ResourceField, SourceSpan,
-    TrailingComma, ValidationLevel, ValidationSeverity, Value, Writer, WriterConfig,
+    normalize_doi, parse_date_parts, parse_names, DateParseError, DateParts, Diagnostic,
+    DiagnosticSeverity, DiagnosticTarget, EntryType, ParsedBlock, ParsedComment, ParsedDocument,
+    ParsedEntry, ParsedEntryStatus, ParsedFailedBlock, ParsedField, ParsedPreamble, ParsedString,
+    Parser, RawWriteMode, ResourceField, SourceSpan, TrailingComma, ValidationLevel,
+    ValidationSeverity, Value, Writer, WriterConfig,
 };
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList, PyModule, PyType};
 use std::borrow::Cow;
+use std::sync::Arc;
 
 pyo3::create_exception!(_native, BibtexParserError, pyo3::exceptions::PyException);
 
@@ -167,6 +168,23 @@ impl PyParser {
 #[derive(Debug, Clone)]
 struct PyDocument {
     inner: ParsedDocument<'static>,
+    raw_source: Option<Arc<str>>,
+}
+
+impl PyDocument {
+    fn new(inner: ParsedDocument<'static>, raw_source: Option<Arc<str>>) -> Self {
+        Self { inner, raw_source }
+    }
+
+    fn materialize_raw_source(&mut self) {
+        if let Some(source) = self.raw_source.take() {
+            self.inner.apply_raw_from_source(&source);
+        }
+    }
+
+    fn raw_slice(&self, span: Option<SourceSpan>) -> Option<String> {
+        raw_source_slice(self.raw_source.as_ref(), span)
+    }
 }
 
 #[pymethods]
@@ -188,31 +206,34 @@ impl PyDocument {
 
     #[getter]
     fn comments(&self) -> Vec<PyComment> {
+        let raw_source = self.raw_source.clone();
         self.inner
             .comments()
             .iter()
             .cloned()
-            .map(PyComment::from)
+            .map(|comment| PyComment::new(comment, raw_source.clone()))
             .collect()
     }
 
     #[getter]
     fn preambles(&self) -> Vec<PyPreamble> {
+        let raw_source = self.raw_source.clone();
         self.inner
             .preambles()
             .iter()
             .cloned()
-            .map(PyPreamble::from)
+            .map(|preamble| PyPreamble::new(preamble, raw_source.clone()))
             .collect()
     }
 
     #[getter]
     fn strings(&self) -> Vec<PyStringDefinition> {
+        let raw_source = self.raw_source.clone();
         self.inner
             .strings()
             .iter()
             .cloned()
-            .map(PyStringDefinition::from)
+            .map(|string| PyStringDefinition::new(string, raw_source.clone()))
             .collect()
     }
 
@@ -294,10 +315,12 @@ impl PyDocument {
     }
 
     fn rename_key(&mut self, old: &str, new: String) -> bool {
+        self.materialize_raw_source();
         self.inner.rename_key(old, Cow::Owned(new))
     }
 
     fn set_entry_type(&mut self, key: &str, entry_type: &str) -> bool {
+        self.materialize_raw_source();
         let Some(entry) = self.inner.entry_mut_by_key(key) else {
             return false;
         };
@@ -306,6 +329,7 @@ impl PyDocument {
     }
 
     fn set_field(&mut self, key: &str, name: &str, value: &Bound<'_, PyAny>) -> PyResult<bool> {
+        self.materialize_raw_source();
         let parsed_value = value_from_py(value)?;
         let Some(entry) = self.inner.entry_mut_by_key(key) else {
             return Ok(false);
@@ -317,6 +341,7 @@ impl PyDocument {
     }
 
     fn add_field(&mut self, key: &str, name: &str, value: &Bound<'_, PyAny>) -> PyResult<bool> {
+        self.materialize_raw_source();
         let parsed_value = value_from_py(value)?;
         let Some(entry) = self.inner.entry_mut_by_key(key) else {
             return Ok(false);
@@ -326,18 +351,21 @@ impl PyDocument {
     }
 
     fn rename_field(&mut self, key: &str, old: &str, new: String) -> usize {
+        self.materialize_raw_source();
         self.inner
             .entry_mut_by_key(key)
             .map_or(0, |entry| entry.rename_field(old, Cow::Owned(new)))
     }
 
     fn remove_field(&mut self, key: &str, name: &str) -> usize {
+        self.materialize_raw_source();
         self.inner
             .entry_mut_by_key(key)
             .map_or(0, |entry| entry.remove_field(name))
     }
 
     fn remove_export_fields(&mut self, names: Vec<String>) -> usize {
+        self.materialize_raw_source();
         let borrowed_names = names.iter().map(String::as_str).collect::<Vec<_>>();
         self.inner.remove_export_fields(&borrowed_names)
     }
@@ -345,13 +373,13 @@ impl PyDocument {
     #[pyo3(signature = (config=None))]
     fn write(&self, py: Python<'_>, config: Option<&PyWriterConfig>) -> PyResult<String> {
         let config = config.map(PyWriterConfig::to_rust);
-        py.detach(move || write_document(&self.inner, config))
+        py.detach(move || write_document(self, config))
     }
 
     fn write_selected(&self, py: Python<'_>, keys: Vec<String>) -> PyResult<String> {
         py.detach(move || {
             let borrowed = keys.iter().map(String::as_str).collect::<Vec<_>>();
-            selected_entries_to_string(&self.inner, &borrowed).map_err(map_error)
+            selected_entries_to_string(self, &borrowed).map_err(map_error)
         })
     }
 
@@ -394,6 +422,7 @@ impl PyDocument {
     }
 
     fn latex_to_unicode(&mut self) -> PyResult<()> {
+        self.materialize_raw_source();
         apply_latex_to_unicode(&mut self.inner)
     }
 
@@ -436,13 +465,21 @@ impl PyEntry {
         py: Python<'_>,
         on_entry: impl FnOnce(&ParsedEntry<'static>) -> R,
     ) -> PyResult<R> {
+        self.with_document_entry(py, |_, entry| on_entry(entry))
+    }
+
+    fn with_document_entry<R>(
+        &self,
+        py: Python<'_>,
+        on_entry: impl FnOnce(&PyDocument, &ParsedEntry<'static>) -> R,
+    ) -> PyResult<R> {
         match &self.inner {
             PyEntryInner::View { document, index } => {
                 let document = document.borrow(py);
                 let entry = document.inner.entries().get(*index).ok_or_else(|| {
                     PyRuntimeError::new_err("entry view no longer points to a valid entry")
                 })?;
-                Ok(on_entry(entry))
+                Ok(on_entry(&document, entry))
             }
         }
     }
@@ -470,14 +507,26 @@ impl PyEntry {
 
     #[getter]
     fn fields(&self, py: Python<'_>) -> PyResult<Vec<PyField>> {
-        self.with_entry(py, |entry| {
-            entry.fields.iter().cloned().map(PyField::from).collect()
+        self.with_document_entry(py, |document, entry| {
+            let raw_source = document.raw_source.clone();
+            entry
+                .fields
+                .iter()
+                .cloned()
+                .map(|field| PyField::new(field, raw_source.clone()))
+                .collect()
         })
     }
 
     #[getter]
     fn raw(&self, py: Python<'_>) -> PyResult<Option<String>> {
-        self.with_entry(py, |entry| entry.raw.as_deref().map(ToOwned::to_owned))
+        self.with_document_entry(py, |document, entry| {
+            entry
+                .raw
+                .as_deref()
+                .map(ToOwned::to_owned)
+                .or_else(|| document.raw_slice(entry.source))
+        })
     }
 
     #[getter]
@@ -490,8 +539,11 @@ impl PyEntry {
     }
 
     fn field(&self, py: Python<'_>, name: &str) -> PyResult<Option<PyField>> {
-        self.with_entry(py, |entry| {
-            entry.field_ignore_case(name).cloned().map(PyField::from)
+        self.with_document_entry(py, |document, entry| {
+            entry
+                .field_ignore_case(name)
+                .cloned()
+                .map(|field| PyField::new(field, document.raw_source.clone()))
         })
     }
 
@@ -561,6 +613,13 @@ impl PyEntry {
 #[derive(Debug, Clone)]
 struct PyField {
     inner: ParsedField<'static>,
+    raw_source: Option<Arc<str>>,
+}
+
+impl PyField {
+    fn new(inner: ParsedField<'static>, raw_source: Option<Arc<str>>) -> Self {
+        Self { inner, raw_source }
+    }
 }
 
 #[pymethods]
@@ -579,12 +638,21 @@ impl PyField {
 
     #[getter]
     fn raw(&self) -> Option<String> {
-        self.inner.raw.as_deref().map(ToOwned::to_owned)
+        self.inner
+            .raw
+            .as_deref()
+            .map(ToOwned::to_owned)
+            .or_else(|| raw_source_slice(self.raw_source.as_ref(), self.inner.source))
     }
 
     #[getter]
     fn raw_value(&self) -> Option<String> {
-        self.inner.value.raw.as_deref().map(ToOwned::to_owned)
+        self.inner
+            .value
+            .raw
+            .as_deref()
+            .map(ToOwned::to_owned)
+            .or_else(|| raw_source_slice(self.raw_source.as_ref(), self.inner.value_source))
     }
 
     #[getter]
@@ -617,7 +685,7 @@ impl PyField {
 
 impl From<ParsedField<'static>> for PyField {
     fn from(inner: ParsedField<'static>) -> Self {
-        Self { inner }
+        Self::new(inner, None)
     }
 }
 
@@ -841,6 +909,13 @@ impl From<SourceSpan> for PySourceSpan {
 #[derive(Debug, Clone)]
 struct PyComment {
     inner: ParsedComment<'static>,
+    raw_source: Option<Arc<str>>,
+}
+
+impl PyComment {
+    fn new(inner: ParsedComment<'static>, raw_source: Option<Arc<str>>) -> Self {
+        Self { inner, raw_source }
+    }
 }
 
 #[pymethods]
@@ -852,7 +927,11 @@ impl PyComment {
 
     #[getter]
     fn raw(&self) -> Option<String> {
-        self.inner.raw.as_deref().map(ToOwned::to_owned)
+        self.inner
+            .raw
+            .as_deref()
+            .map(ToOwned::to_owned)
+            .or_else(|| raw_source_slice(self.raw_source.as_ref(), self.inner.source))
     }
 
     #[getter]
@@ -863,7 +942,7 @@ impl PyComment {
 
 impl From<ParsedComment<'static>> for PyComment {
     fn from(inner: ParsedComment<'static>) -> Self {
-        Self { inner }
+        Self::new(inner, None)
     }
 }
 
@@ -871,6 +950,13 @@ impl From<ParsedComment<'static>> for PyComment {
 #[derive(Debug, Clone)]
 struct PyPreamble {
     inner: ParsedPreamble<'static>,
+    raw_source: Option<Arc<str>>,
+}
+
+impl PyPreamble {
+    fn new(inner: ParsedPreamble<'static>, raw_source: Option<Arc<str>>) -> Self {
+        Self { inner, raw_source }
+    }
 }
 
 #[pymethods]
@@ -884,7 +970,11 @@ impl PyPreamble {
 
     #[getter]
     fn raw(&self) -> Option<String> {
-        self.inner.raw.as_deref().map(ToOwned::to_owned)
+        self.inner
+            .raw
+            .as_deref()
+            .map(ToOwned::to_owned)
+            .or_else(|| raw_source_slice(self.raw_source.as_ref(), self.inner.source))
     }
 
     #[getter]
@@ -895,7 +985,7 @@ impl PyPreamble {
 
 impl From<ParsedPreamble<'static>> for PyPreamble {
     fn from(inner: ParsedPreamble<'static>) -> Self {
-        Self { inner }
+        Self::new(inner, None)
     }
 }
 
@@ -903,6 +993,13 @@ impl From<ParsedPreamble<'static>> for PyPreamble {
 #[derive(Debug, Clone)]
 struct PyStringDefinition {
     inner: ParsedString<'static>,
+    raw_source: Option<Arc<str>>,
+}
+
+impl PyStringDefinition {
+    fn new(inner: ParsedString<'static>, raw_source: Option<Arc<str>>) -> Self {
+        Self { inner, raw_source }
+    }
 }
 
 #[pymethods]
@@ -921,7 +1018,11 @@ impl PyStringDefinition {
 
     #[getter]
     fn raw(&self) -> Option<String> {
-        self.inner.raw.as_deref().map(ToOwned::to_owned)
+        self.inner
+            .raw
+            .as_deref()
+            .map(ToOwned::to_owned)
+            .or_else(|| raw_source_slice(self.raw_source.as_ref(), self.inner.source))
     }
 
     #[getter]
@@ -932,7 +1033,7 @@ impl PyStringDefinition {
 
 impl From<ParsedString<'static>> for PyStringDefinition {
     fn from(inner: ParsedString<'static>) -> Self {
-        Self { inner }
+        Self::new(inner, None)
     }
 }
 
@@ -1248,7 +1349,7 @@ fn write(
     config: Option<&PyWriterConfig>,
 ) -> PyResult<String> {
     let config = config.map(PyWriterConfig::to_rust);
-    py.detach(move || write_document(&document.inner, config))
+    py.detach(move || write_document(document, config))
 }
 
 #[pyfunction(name = "_document_to_dicts")]
@@ -1313,10 +1414,25 @@ fn parse_document_with_options(
                 .parse_source_document_owned(source, text)
                 .map_err(map_error)?
         };
+        let raw_source = if options.preserve_raw {
+            Some(Arc::<str>::from(text))
+        } else {
+            None
+        };
         if options.latex_to_unicode {
+            if let Some(source) = &raw_source {
+                document.apply_raw_from_source(source);
+            }
             apply_latex_to_unicode(&mut document)?;
         }
-        return Ok(PyDocument { inner: document });
+        return Ok(PyDocument::new(
+            document,
+            if options.latex_to_unicode {
+                None
+            } else {
+                raw_source
+            },
+        ));
     }
 
     let document = if let Some(source) = source {
@@ -1329,22 +1445,33 @@ fn parse_document_with_options(
     if options.latex_to_unicode {
         apply_latex_to_unicode(&mut document)?;
     }
-    Ok(PyDocument { inner: document })
+    Ok(PyDocument::new(document, None))
 }
 
-fn write_document(
-    document: &ParsedDocument<'static>,
-    config: Option<WriterConfig>,
-) -> PyResult<String> {
-    if let Some(config) = config {
-        let mut buffer = Vec::new();
-        Writer::with_config(&mut buffer, config)
-            .write_document(document)
-            .map_err(map_error)?;
-        String::from_utf8(buffer).map_err(|error| PyRuntimeError::new_err(error.to_string()))
-    } else {
-        document_to_string(document).map_err(map_error)
+fn write_document(document: &PyDocument, config: Option<WriterConfig>) -> PyResult<String> {
+    let mut buffer = Vec::new();
+    let raw_source = document.raw_source.as_deref();
+    match config {
+        Some(config) => Writer::with_config(&mut buffer, config)
+            .write_document_with_raw_source(&document.inner, raw_source)
+            .map_err(map_error)?,
+        None => Writer::new(&mut buffer)
+            .write_document_with_raw_source(&document.inner, raw_source)
+            .map_err(map_error)?,
     }
+    String::from_utf8(buffer).map_err(|error| PyRuntimeError::new_err(error.to_string()))
+}
+
+fn selected_entries_to_string(document: &PyDocument, keys: &[&str]) -> PyResult<String> {
+    let mut buffer = Vec::new();
+    Writer::new(&mut buffer)
+        .write_selected_entries_with_raw_source(
+            &document.inner,
+            keys,
+            document.raw_source.as_deref(),
+        )
+        .map_err(map_error)?;
+    String::from_utf8(buffer).map_err(|error| PyRuntimeError::new_err(error.to_string()))
 }
 
 fn document_to_dicts_for_py<'py>(
@@ -1410,6 +1537,14 @@ fn latex_to_unicode(input: &str) -> PyResult<String> {
 
 fn unicode_text(value: &Value<'_>) -> PyResult<String> {
     latex_to_unicode(&value.to_plain_string())
+}
+
+fn raw_source_slice(source: Option<&Arc<str>>, span: Option<SourceSpan>) -> Option<String> {
+    let source = source?;
+    let span = span?;
+    source
+        .get(span.byte_start..span.byte_end)
+        .map(ToOwned::to_owned)
 }
 
 fn map_error(error: impl std::error::Error) -> PyErr {

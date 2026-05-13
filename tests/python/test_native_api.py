@@ -98,6 +98,21 @@ def test_semantic_text_deindents_wrapped_lines_but_keeps_raw_value() -> None:
     )
 
 
+def test_unmodified_document_writes_preserved_source_text() -> None:
+    text = """@article{paper,
+  title   = "Exact Spacing",
+  year = 2026,
+}
+% trailing comment
+"""
+
+    document = citerra.parse(text)
+
+    assert document.entry("paper").raw == text.split("\n% trailing comment")[0]
+    assert document.entry("paper").field("title").raw == 'title   = "Exact Spacing",'
+    assert citerra.dumps(document) == text
+
+
 def test_structured_parse_can_skip_source_capture_and_project_records() -> None:
     text = """@string{venue = "VLDB"}
 @article{paper, title = venue, month = jan, year = 2026}"""

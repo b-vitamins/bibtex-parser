@@ -1624,6 +1624,47 @@ impl<'a> ParsedDocument<'a> {
     }
 }
 
+impl ParsedDocument<'static> {
+    pub(crate) fn apply_raw_from_source(&mut self, source: &str) {
+        for entry in &mut self.entries {
+            if entry.raw.is_none() {
+                entry.raw = owned_source_slice(source, entry.source);
+            }
+            for field in &mut entry.fields {
+                if field.raw.is_none() {
+                    field.raw = owned_source_slice(source, field.source);
+                }
+                if field.value.raw.is_none() {
+                    field.value.raw = owned_source_slice(source, field.value_source);
+                }
+            }
+        }
+
+        for string in &mut self.strings {
+            if string.raw.is_none() {
+                string.raw = owned_source_slice(source, string.source);
+            }
+        }
+        for preamble in &mut self.preambles {
+            if preamble.raw.is_none() {
+                preamble.raw = owned_source_slice(source, preamble.source);
+            }
+        }
+        for comment in &mut self.comments {
+            if comment.raw.is_none() {
+                comment.raw = owned_source_slice(source, comment.source);
+            }
+        }
+    }
+}
+
+fn owned_source_slice(source: &str, span: Option<SourceSpan>) -> Option<Cow<'static, str>> {
+    let span = span?;
+    source
+        .get(span.byte_start..span.byte_end)
+        .map(|raw| Cow::Owned(raw.to_string()))
+}
+
 fn expand_value_with_options(
     value: &Value<'_>,
     strings: &[ParsedString<'_>],

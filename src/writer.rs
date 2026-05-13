@@ -117,6 +117,14 @@ impl<W: Write> Writer<W> {
 
     /// Write a parsed document, reusing retained raw blocks when configured.
     pub fn write_document(&mut self, document: &ParsedDocument) -> io::Result<()> {
+        self.write_document_with_raw_source(document, None)
+    }
+
+    pub(crate) fn write_document_with_raw_source(
+        &mut self,
+        document: &ParsedDocument,
+        raw_source: Option<&str>,
+    ) -> io::Result<()> {
         for (index, block) in document.blocks().iter().copied().enumerate() {
             if index > 0 {
                 self.writer
@@ -125,12 +133,17 @@ impl<W: Write> Writer<W> {
 
             match block {
                 ParsedBlock::Entry(entry_index) => {
-                    self.write_parsed_entry(&document.entries()[entry_index])?;
+                    self.write_parsed_entry_with_raw_source(
+                        &document.entries()[entry_index],
+                        raw_source,
+                    )?;
                 }
                 ParsedBlock::String(string_index) => {
                     let string = &document.strings()[string_index];
                     if self.config.raw_write_mode == RawWriteMode::Preserve {
-                        if let Some(raw) = &string.raw {
+                        if let Some(raw) =
+                            raw_text_with_source(string.raw.as_deref(), raw_source, string.source)
+                        {
                             self.writer.write_all(raw.as_bytes())?;
                             continue;
                         }
@@ -140,7 +153,11 @@ impl<W: Write> Writer<W> {
                 ParsedBlock::Preamble(preamble_index) => {
                     let preamble = &document.preambles()[preamble_index];
                     if self.config.raw_write_mode == RawWriteMode::Preserve {
-                        if let Some(raw) = &preamble.raw {
+                        if let Some(raw) = raw_text_with_source(
+                            preamble.raw.as_deref(),
+                            raw_source,
+                            preamble.source,
+                        ) {
                             self.writer.write_all(raw.as_bytes())?;
                             continue;
                         }
@@ -150,7 +167,9 @@ impl<W: Write> Writer<W> {
                 ParsedBlock::Comment(comment_index) => {
                     let comment = &document.comments()[comment_index];
                     if self.config.raw_write_mode == RawWriteMode::Preserve {
-                        if let Some(raw) = &comment.raw {
+                        if let Some(raw) =
+                            raw_text_with_source(comment.raw.as_deref(), raw_source, comment.source)
+                        {
                             self.writer.write_all(raw.as_bytes())?;
                             continue;
                         }
@@ -176,6 +195,15 @@ impl<W: Write> Writer<W> {
         document: &ParsedDocument,
         keys: &[&str],
     ) -> io::Result<()> {
+        self.write_selected_entries_with_raw_source(document, keys, None)
+    }
+
+    pub(crate) fn write_selected_entries_with_raw_source(
+        &mut self,
+        document: &ParsedDocument,
+        keys: &[&str],
+        raw_source: Option<&str>,
+    ) -> io::Result<()> {
         let mut written = 0usize;
         for block in document.blocks().iter().copied() {
             let ParsedBlock::Entry(entry_index) = block else {
@@ -189,7 +217,7 @@ impl<W: Write> Writer<W> {
                 self.writer
                     .write_all(self.config.entry_separator.as_bytes())?;
             }
-            self.write_parsed_entry(entry)?;
+            self.write_parsed_entry_with_raw_source(entry, raw_source)?;
             written += 1;
         }
 
@@ -269,9 +297,13 @@ impl<W: Write> Writer<W> {
         Ok(())
     }
 
-    fn write_parsed_entry(&mut self, entry: &ParsedEntry) -> io::Result<()> {
+    fn write_parsed_entry_with_raw_source(
+        &mut self,
+        entry: &ParsedEntry,
+        raw_source: Option<&str>,
+    ) -> io::Result<()> {
         if self.config.raw_write_mode == RawWriteMode::Preserve {
-            if let Some(raw) = patched_entry_raw(entry) {
+            if let Some(raw) = patched_entry_raw(entry, raw_source) {
                 self.writer.write_all(raw.as_bytes())?;
                 return Ok(());
             }
@@ -348,9 +380,25 @@ fn escape_quotes(s: &str) -> String {
     s.replace('"', "\\\"")
 }
 
-fn patched_entry_raw<'entry>(entry: &'entry ParsedEntry<'_>) -> Option<Cow<'entry, str>> {
-    let raw = entry.raw.as_deref()?;
+fn raw_text_with_source<'a>(
+    raw: Option<&'a str>,
+    raw_source: Option<&'a str>,
+    span: Option<crate::SourceSpan>,
+) -> Option<&'a str> {
+    raw.or_else(|| source_slice(raw_source, span?))
+}
+
+fn source_slice(raw_source: Option<&str>, span: crate::SourceSpan) -> Option<&str> {
+    let raw_source = raw_source?;
+    raw_source.get(span.byte_start..span.byte_end)
+}
+
+fn patched_entry_raw<'entry>(
+    entry: &'entry ParsedEntry<'_>,
+    raw_source: Option<&'entry str>,
+) -> Option<Cow<'entry, str>> {
     let source = entry.source?;
+    let raw = raw_text_with_source(entry.raw.as_deref(), raw_source, Some(source))?;
     let mut replacements = Vec::new();
 
     push_token_replacement(
@@ -382,9 +430,11 @@ fn patched_entry_raw<'entry>(entry: &'entry ParsedEntry<'_>) -> Option<Cow<'entr
 
         if field.value.raw.is_none() {
             let value_source = field.value_source?;
-            let start = value_source.byte_start.checked_sub(source.byte_start)?;
-            let end = value_source.byte_end.checked_sub(source.byte_start)?;
-            replacements.push((start, end, field.value.value.to_bibtex_source()));
+            if source_slice(raw_source, value_source).is_none() {
+                let start = value_source.byte_start.checked_sub(source.byte_start)?;
+                let end = value_source.byte_end.checked_sub(source.byte_start)?;
+                replacements.push((start, end, field.value.value.to_bibtex_source()));
+            }
         }
     }
 

@@ -876,54 +876,31 @@ impl Parser {
                 crate::parser::ParsedItem::Entry(entry) => {
                     let index = entries.len();
                     entries.push(
-                        ParsedEntry::from_stream_entry(
-                            entry,
-                            source,
-                            raw,
-                            &source_map,
-                            self.document.preserve_raw,
-                        )
-                        .into_owned(),
+                        ParsedEntry::from_stream_entry(entry, source, raw, &source_map, false)
+                            .into_owned(),
                     );
                     blocks.push(ParsedBlock::Entry(index));
                 }
                 crate::parser::ParsedItem::String(name, value) => {
                     let index = strings.len();
                     strings.push(
-                        ParsedString::from_stream_definition(
-                            name,
-                            value,
-                            source,
-                            raw,
-                            self.document.preserve_raw,
-                        )
-                        .into_owned(),
+                        ParsedString::from_stream_definition(name, value, source, raw, false)
+                            .into_owned(),
                     );
                     blocks.push(ParsedBlock::String(index));
                 }
                 crate::parser::ParsedItem::Preamble(value) => {
                     let index = preambles.len();
                     preambles.push(
-                        ParsedPreamble::from_stream_preamble(
-                            value,
-                            source,
-                            raw,
-                            self.document.preserve_raw,
-                        )
-                        .into_owned(),
+                        ParsedPreamble::from_stream_preamble(value, source, raw, false)
+                            .into_owned(),
                     );
                     blocks.push(ParsedBlock::Preamble(index));
                 }
                 crate::parser::ParsedItem::Comment(text) => {
                     let index = comments.len();
                     comments.push(
-                        ParsedComment::from_stream_comment(
-                            text,
-                            source,
-                            raw,
-                            self.document.preserve_raw,
-                        )
-                        .into_owned(),
+                        ParsedComment::from_stream_comment(text, source, raw, false).into_owned(),
                     );
                     blocks.push(ParsedBlock::Comment(index));
                 }
