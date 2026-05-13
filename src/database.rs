@@ -2116,7 +2116,7 @@ impl<'a> Library<'a> {
         for entry in &mut self.entries {
             for field in &mut entry.fields {
                 if field.name.eq_ignore_ascii_case("doi") {
-                    if let Some(normalized) = normalize_doi(&value_to_plain_string(&field.value)) {
+                    if let Some(normalized) = normalize_doi(&field.value.to_plain_string()) {
                         field.value = Value::Literal(Cow::Owned(normalized));
                     }
                 }
@@ -2130,7 +2130,7 @@ impl<'a> Library<'a> {
             for field in &mut entry.fields {
                 if field.name.eq_ignore_ascii_case("month") {
                     if let Some(month) =
-                        normalize_month_value(&value_to_plain_string(&field.value), style)
+                        normalize_month_value(&field.value.to_plain_string(), style)
                     {
                         field.value = month;
                     }
@@ -2427,15 +2427,6 @@ fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
     }
 
     haystack.to_lowercase().contains(&needle.to_lowercase())
-}
-
-fn value_to_plain_string(value: &Value<'_>) -> String {
-    match value {
-        Value::Literal(text) => text.to_string(),
-        Value::Number(number) => number.to_string(),
-        Value::Variable(name) => name.to_string(),
-        Value::Concat(parts) => parts.iter().map(value_to_plain_string).collect(),
-    }
 }
 
 fn normalize_month_value(input: &str, style: MonthStyle) -> Option<Value<'static>> {

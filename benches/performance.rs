@@ -224,6 +224,27 @@ fn bench_writing(c: &mut Criterion) {
         .preserve_raw()
         .parse_document(TUGBOAT_BIB)
         .unwrap();
+    let raw_document_output = document_to_string(&document).unwrap();
+    let raw_document_reparsed = Library::parser()
+        .preserve_raw()
+        .parse_document(&raw_document_output)
+        .unwrap();
+    assert_eq!(
+        raw_document_reparsed.entries().len(),
+        document.entries().len()
+    );
+    assert_eq!(
+        raw_document_reparsed.comments().len(),
+        document.comments().len()
+    );
+    assert_eq!(
+        raw_document_reparsed.preambles().len(),
+        document.preambles().len()
+    );
+    assert_eq!(
+        raw_document_reparsed.strings().len(),
+        document.strings().len()
+    );
 
     let mut group = c.benchmark_group("writing");
     group.measurement_time(Duration::from_secs(12));
@@ -245,7 +266,7 @@ fn bench_writing(c: &mut Criterion) {
         b.iter(|| {
             let output = document_to_string(black_box(&document)).unwrap();
             black_box(&output);
-            assert_eq!(output.len(), TUGBOAT_BIB.len());
+            assert_eq!(output.len(), raw_document_output.len());
         });
     });
 

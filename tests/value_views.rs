@@ -98,6 +98,30 @@ fn public_value_text_projections_cover_core_value_shapes() {
 }
 
 #[test]
+fn semantic_value_projection_deindents_wrapped_lines_without_touching_raw_text() {
+    let input = r#"
+@article{paper,
+  title = {First line
+                  Second line
+                  Third line}
+}
+"#;
+
+    let document = Parser::new().preserve_raw().parse_document(input).unwrap();
+    let title = &document.entries()[0].fields[0].value;
+
+    assert_eq!(
+        title.raw_text(),
+        Some("{First line\n                  Second line\n                  Third line}")
+    );
+    assert_eq!(title.plain_text(), "First line\nSecond line\nThird line");
+    assert_eq!(
+        title.parsed().to_lossy_string(),
+        "First line\nSecond line\nThird line"
+    );
+}
+
+#[test]
 fn library_expansion_defaults_remain_behavior_preserving() {
     let library = Library::parse(
         r#"

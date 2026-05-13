@@ -81,6 +81,23 @@ def test_file_like_loading_and_writer_config() -> None:
     assert bibtex_parser.parse(output).keys() == ["a"]
 
 
+def test_semantic_text_deindents_wrapped_lines_but_keeps_raw_value() -> None:
+    document = bibtex_parser.parse(
+        """@article{wrapped,
+  title = {First line
+                  Second line
+                  Third line}
+}"""
+    )
+
+    entry = document.entry("wrapped")
+    assert entry.get("title") == "First line\nSecond line\nThird line"
+    assert (
+        entry.field("title").raw_value
+        == "{First line\n                  Second line\n                  Third line}"
+    )
+
+
 def test_helpers_are_native_and_typed() -> None:
     assert bibtex_parser.normalize_doi("https://doi.org/10.1000/XYZ.") == "10.1000/xyz"
     assert bibtex_parser.parse_date("2026-05-13").month == 5

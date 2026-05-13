@@ -7,6 +7,7 @@
 
 use crate::database::BlockKind;
 use crate::database::RawBuildItem;
+use crate::model::normalize_text_projection;
 use crate::{
     normalize_doi, Comment, DateParseError, DateParts, Entry, EntryType, FailedBlock, Field,
     Library, PersonName, Preamble, ResourceField, SourceId, SourceMap, SourceSpan,
@@ -1608,7 +1609,7 @@ fn expand_value_with_options(
     stack: &mut Vec<String>,
 ) -> crate::Result<String> {
     match value {
-        Value::Literal(text) => Ok(text.to_string()),
+        Value::Literal(text) => Ok(normalize_text_projection(text)),
         Value::Number(number) => Ok(number.to_string()),
         Value::Concat(parts) => {
             let mut expanded = String::new();

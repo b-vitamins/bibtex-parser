@@ -1426,7 +1426,7 @@ impl Value<'_> {
     #[must_use]
     pub fn expand(&self, strings: &AHashMap<&str, Value>) -> String {
         match self {
-            Self::Literal(s) => s.to_string(),
+            Self::Literal(s) => normalize_text_projection(s),
             Self::Number(n) => n.to_string(),
             Self::Variable(name) => strings
                 .get(name.as_ref())
@@ -1522,7 +1522,7 @@ impl fmt::Display for Value<'_> {
 
 fn value_to_lossy_string(value: &Value<'_>) -> String {
     match value {
-        Value::Literal(s) => s.to_string(),
+        Value::Literal(s) => normalize_text_projection(s),
         Value::Number(n) => n.to_string(),
         Value::Variable(v) => format!("{{{v}}}"),
         Value::Concat(parts) => parts.iter().map(value_to_lossy_string).collect(),
@@ -1531,11 +1531,45 @@ fn value_to_lossy_string(value: &Value<'_>) -> String {
 
 fn value_to_plain_string(value: &Value<'_>) -> String {
     match value {
-        Value::Literal(text) => text.to_string(),
+        Value::Literal(text) => normalize_text_projection(text),
         Value::Number(number) => number.to_string(),
         Value::Variable(name) => name.to_string(),
         Value::Concat(parts) => parts.iter().map(value_to_plain_string).collect(),
     }
+}
+
+pub(crate) fn normalize_text_projection(text: &str) -> String {
+    if !text
+        .as_bytes()
+        .iter()
+        .any(|byte| matches!(byte, b'\n' | b'\r'))
+    {
+        return text.to_string();
+    }
+
+    let mut normalized = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                normalized.push('\n');
+                while chars.peek().is_some_and(|next| matches!(next, ' ' | '\t')) {
+                    chars.next();
+                }
+            }
+            '\n' => {
+                normalized.push('\n');
+                while chars.peek().is_some_and(|next| matches!(next, ' ' | '\t')) {
+                    chars.next();
+                }
+            }
+            _ => normalized.push(ch),
+        }
+    }
+    normalized
 }
 
 /// Normalize a DOI from common raw forms into lowercase `10.x/...` form.
