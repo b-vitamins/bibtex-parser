@@ -52,6 +52,8 @@ itoa = "1.0"
 rayon = { version = "1.8", optional = true }
 phf = { version = "0.11", features = ["macros"], optional = true }
 pyo3 = { version = "0.27.2", optional = true }
+
+[target.'cfg(not(all(target_os = "linux", target_arch = "aarch64")))'.dependencies]
 mimalloc = { version = "0.1", optional = true, default-features = false }
 
 [dev-dependencies]

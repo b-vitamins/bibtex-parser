@@ -139,7 +139,10 @@ pub mod latex_unicode;
 mod library;
 mod writer;
 
-#[cfg(feature = "python-extension")]
+#[cfg(all(
+    feature = "python-extension",
+    not(all(target_os = "linux", target_arch = "aarch64"))
+))]
 #[global_allocator]
 static PYTHON_EXTENSION_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 

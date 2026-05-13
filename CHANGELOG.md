@@ -12,7 +12,7 @@ All notable changes to this project are documented here.
 - Reduced Python plain-record projection overhead for `Document.to_dicts()` and
   `document_to_dicts()`.
 - Added a Python-extension allocator path to reduce allocation overhead in
-  wheel builds.
+  supported wheel builds.
 - Avoided repeated field-name allocations for common owned field names.
 - Streamlined field-value separator checks in the parser hot path.
 
@@ -20,6 +20,8 @@ All notable changes to this project are documented here.
 
 - Refreshed Python and Rust README benchmark tables from current tugboat
   benchmark runs.
+- Kept Linux aarch64 wheel builds on the system allocator to avoid
+  cross-compiler incompatibilities.
 
 ## 0.2.3 - 2026-05-13
 
