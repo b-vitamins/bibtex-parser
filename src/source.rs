@@ -14,6 +14,7 @@ pub struct SourceMap<'a> {
     name: Option<Cow<'a, str>>,
     input: &'a str,
     line_starts: Vec<usize>,
+    line_ascii: Vec<bool>,
 }
 
 impl<'a> SourceMap<'a> {
@@ -27,18 +28,27 @@ impl<'a> SourceMap<'a> {
     #[must_use]
     pub fn new(source: Option<SourceId>, name: Option<Cow<'a, str>>, input: &'a str) -> Self {
         let mut line_starts = Vec::new();
+        let mut line_ascii = Vec::new();
+        let mut current_line_ascii = true;
         line_starts.push(0);
         for (index, byte) in input.bytes().enumerate() {
+            if byte >= 0x80 {
+                current_line_ascii = false;
+            }
             if byte == b'\n' {
+                line_ascii.push(current_line_ascii);
                 line_starts.push(index + 1);
+                current_line_ascii = true;
             }
         }
+        line_ascii.push(current_line_ascii);
 
         Self {
             source,
             name,
             input,
             line_starts,
+            line_ascii,
         }
     }
 
@@ -84,11 +94,10 @@ impl<'a> SourceMap<'a> {
             Err(index) => index - 1,
         };
         let line_start = self.line_starts[line_index];
-        let line_prefix = &self.input[line_start..byte];
-        let column = if line_prefix.is_ascii() {
+        let column = if self.line_ascii.get(line_index).copied().unwrap_or(false) {
             byte - line_start + 1
         } else {
-            line_prefix.chars().count() + 1
+            self.input[line_start..byte].chars().count() + 1
         };
         (line_index + 1, column)
     }
