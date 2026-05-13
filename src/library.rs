@@ -869,19 +869,27 @@ impl Parser {
         let mut preambles = Vec::new();
         let mut comments = Vec::new();
         let mut blocks = Vec::with_capacity(input_scan.at_count);
+        let mut span_cursor = source_map.cursor();
 
-        crate::parser::parse_bibtex_stream_with_spans(input, |item, span, raw| {
-            let source = source_map.span(span.byte_start, span.byte_end);
+        crate::parser::parse_bibtex_stream_with_entry_locations(input, |item, start, end, raw| {
+            let source = span_cursor.span(start, end);
             match item {
-                crate::parser::ParsedItem::Entry(entry) => {
+                crate::parser::LocatedParsedItem::Entry(entry) => {
                     let index = entries.len();
                     entries.push(
-                        ParsedEntry::from_stream_entry(entry, source, raw, &source_map, false)
-                            .into_owned(),
+                        ParsedEntry::from_located_stream_entry(
+                            entry,
+                            source,
+                            raw,
+                            &source_map,
+                            &mut span_cursor,
+                            false,
+                        )
+                        .into_owned(),
                     );
                     blocks.push(ParsedBlock::Entry(index));
                 }
-                crate::parser::ParsedItem::String(name, value) => {
+                crate::parser::LocatedParsedItem::String(name, value) => {
                     let index = strings.len();
                     strings.push(
                         ParsedString::from_stream_definition(name, value, source, raw, false)
@@ -889,7 +897,7 @@ impl Parser {
                     );
                     blocks.push(ParsedBlock::String(index));
                 }
-                crate::parser::ParsedItem::Preamble(value) => {
+                crate::parser::LocatedParsedItem::Preamble(value) => {
                     let index = preambles.len();
                     preambles.push(
                         ParsedPreamble::from_stream_preamble(value, source, raw, false)
@@ -897,7 +905,7 @@ impl Parser {
                     );
                     blocks.push(ParsedBlock::Preamble(index));
                 }
-                crate::parser::ParsedItem::Comment(text) => {
+                crate::parser::LocatedParsedItem::Comment(text) => {
                     let index = comments.len();
                     comments.push(
                         ParsedComment::from_stream_comment(text, source, raw, false).into_owned(),

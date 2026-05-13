@@ -7,6 +7,7 @@
 use crate::library::BlockKind;
 use crate::library::RawBuildItem;
 use crate::model::normalize_text_projection;
+use crate::source::SourceCursor;
 use crate::{
     normalize_doi, Comment, DateParseError, DateParts, Entry, EntryType, FailedBlock, Field,
     Library, PersonName, Preamble, ResourceField, SourceId, SourceMap, SourceSpan,
@@ -578,6 +579,64 @@ impl<'a> ParsedEntry<'a> {
         let mut parsed = Self::from_entry(entry, Some(source));
         parsed.apply_locations(raw, source_map, preserve_raw);
         parsed
+    }
+
+    pub(crate) fn from_located_stream_entry(
+        located: crate::parser::entry::LocatedEntry<'a>,
+        source: SourceSpan,
+        raw: &'a str,
+        source_map: &SourceMap<'a>,
+        span_cursor: &mut SourceCursor<'_, 'a>,
+        preserve_raw: bool,
+    ) -> Self {
+        let entry = located.entry;
+        let entry_type_source = span_cursor.span(located.entry_type.0, located.entry_type.1);
+        let key_source = span_cursor.span(located.key.0, located.key.1);
+        let fields = entry
+            .fields
+            .into_iter()
+            .zip(located.fields)
+            .map(|(field, location)| {
+                let field_source = span_cursor.span(location.whole.0, location.whole.1);
+                let name_source = span_cursor.span(location.name.0, location.name.1);
+                let value_source = span_cursor.span(location.value.0, location.value.1);
+                ParsedField {
+                    name: field.name,
+                    value: ParsedValue {
+                        value: field.value,
+                        raw: if preserve_raw {
+                            source_map.slice(value_source).map(Cow::Borrowed)
+                        } else {
+                            None
+                        },
+                        source: Some(value_source),
+                        expanded: None,
+                        delimiter: Some(location.value_delimiter),
+                    },
+                    raw: if preserve_raw {
+                        source_map.slice(field_source).map(Cow::Borrowed)
+                    } else {
+                        None
+                    },
+                    source: Some(field_source),
+                    name_source: Some(name_source),
+                    value_source: Some(value_source),
+                }
+            })
+            .collect();
+
+        Self {
+            ty: entry.ty,
+            key: entry.key,
+            fields,
+            status: ParsedEntryStatus::Complete,
+            source: Some(source),
+            entry_type_source: Some(entry_type_source),
+            key_source: Some(key_source),
+            delimiter: Some(located.delimiter),
+            raw: preserve_raw.then_some(Cow::Borrowed(raw)),
+            diagnostics: Vec::new(),
+        }
     }
 
     fn apply_locations(&mut self, raw: &'a str, source_map: &SourceMap<'a>, preserve_raw: bool) {

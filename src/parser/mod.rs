@@ -213,6 +213,45 @@ where
     Ok(())
 }
 
+#[inline]
+pub(crate) fn parse_bibtex_stream_with_entry_locations<'a, F>(
+    input: &'a str,
+    mut on_item: F,
+) -> Result<()>
+where
+    F: FnMut(LocatedParsedItem<'a>, usize, usize, &'a str) -> Result<()>,
+{
+    let mut remaining = input;
+
+    loop {
+        lexer::skip_whitespace(&mut remaining);
+        if remaining.is_empty() {
+            break;
+        }
+
+        let start = input.len() - remaining.len();
+        let before_item = remaining;
+        match parse_item_with_entry_locations(&mut remaining, start) {
+            Ok(item) => {
+                let end = input.len() - remaining.len();
+                on_item(item, start, end, &input[start..end])?;
+            }
+            Err(e) => {
+                let (line, column) = calculate_position(input, start);
+
+                return Err(Error::ParseError {
+                    line,
+                    column,
+                    message: format!("Failed to parse entry: {e}"),
+                    snippet: Some(get_snippet(before_item, 40)),
+                });
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// A raw parsed item from a BibTeX file before processing
 ///
 /// This represents the different types of items that can appear in a BibTeX file,
@@ -275,6 +314,13 @@ pub enum ParsedItem<'a> {
     Comment(&'a str),
 }
 
+pub(crate) enum LocatedParsedItem<'a> {
+    Entry(entry::LocatedEntry<'a>),
+    String(&'a str, crate::Value<'a>),
+    Preamble(crate::Value<'a>),
+    Comment(&'a str),
+}
+
 /// Parse a single item (entry, string, preamble, or comment) with optimized delimiter search
 #[inline]
 pub(crate) fn parse_item<'a>(input: &mut &'a str) -> PResult<'a, ParsedItem<'a>> {
@@ -309,6 +355,40 @@ pub(crate) fn parse_item<'a>(input: &mut &'a str) -> PResult<'a, ParsedItem<'a>>
             parse_comment(input).map(ParsedItem::Comment)
         }
         _ => entry::parse_entry_at(input).map(ParsedItem::Entry),
+    }
+}
+
+#[inline]
+fn parse_item_with_entry_locations<'a>(
+    input: &mut &'a str,
+    absolute_start: usize,
+) -> PResult<'a, LocatedParsedItem<'a>> {
+    let bytes = input.as_bytes();
+
+    if !bytes.is_empty() && bytes[0] != b'@' {
+        if let Some(at_pos) = delimiter::find_byte(bytes, b'@', 0) {
+            let comment = &input[..at_pos];
+            *input = &input[at_pos..];
+            return Ok(LocatedParsedItem::Comment(comment));
+        }
+        let comment = *input;
+        *input = "";
+        return Ok(LocatedParsedItem::Comment(comment));
+    }
+
+    let second = bytes.get(1).copied().unwrap_or_default();
+    match second | 0x20 {
+        b's' if starts_with_keyword(bytes, b"string") => {
+            parse_string(input).map(|(k, v)| LocatedParsedItem::String(k, v))
+        }
+        b'p' if starts_with_keyword(bytes, b"preamble") => {
+            parse_preamble(input).map(LocatedParsedItem::Preamble)
+        }
+        b'c' if starts_with_keyword(bytes, b"comment") => {
+            parse_comment(input).map(LocatedParsedItem::Comment)
+        }
+        _ => entry::parse_entry_at_with_locations(input, absolute_start)
+            .map(LocatedParsedItem::Entry),
     }
 }
 

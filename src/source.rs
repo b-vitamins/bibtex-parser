@@ -148,6 +148,13 @@ impl<'a> SourceMap<'a> {
         self.source.map_or(span, |source| span.with_source(source))
     }
 
+    pub(crate) const fn cursor(&self) -> SourceCursor<'_, 'a> {
+        SourceCursor {
+            map: self,
+            line_index: 0,
+        }
+    }
+
     /// Return a borrowed slice for a source span when it belongs to this source.
     #[must_use]
     pub fn slice(&self, span: SourceSpan) -> Option<&'a str> {
@@ -188,5 +195,102 @@ impl<'a> SourceMap<'a> {
         }
 
         Some(snippet.chars().take(max_chars).collect())
+    }
+}
+
+pub(crate) struct SourceCursor<'map, 'source> {
+    map: &'map SourceMap<'source>,
+    line_index: usize,
+}
+
+impl SourceCursor<'_, '_> {
+    pub(crate) fn span(&mut self, byte_start: usize, byte_end: usize) -> SourceSpan {
+        let byte_start = byte_start.min(self.map.input.len());
+        let byte_end = byte_end.min(self.map.input.len()).max(byte_start);
+        let start_line_index = self.line_index_at(byte_start);
+        let end_line_index = self.line_index_from(start_line_index, byte_end);
+        let column = self.column_at(start_line_index, byte_start);
+        let end_column = self.column_at(end_line_index, byte_end);
+        let span = SourceSpan::with_end(
+            byte_start,
+            byte_end,
+            start_line_index + 1,
+            column,
+            end_line_index + 1,
+            end_column,
+        );
+        self.map
+            .source
+            .map_or(span, |source| span.with_source(source))
+    }
+
+    fn line_index_at(&mut self, byte: usize) -> usize {
+        if self
+            .map
+            .line_starts
+            .get(self.line_index)
+            .is_some_and(|start| byte < *start)
+        {
+            self.line_index = self.map.line_index_for(byte);
+            return self.line_index;
+        }
+
+        while self
+            .map
+            .line_starts
+            .get(self.line_index + 1)
+            .is_some_and(|next| *next <= byte)
+        {
+            self.line_index += 1;
+        }
+
+        self.line_index
+    }
+
+    fn line_index_from(&self, mut line_index: usize, byte: usize) -> usize {
+        if self
+            .map
+            .line_starts
+            .get(line_index)
+            .is_some_and(|start| byte < *start)
+        {
+            return self.map.line_index_for(byte);
+        }
+
+        while self
+            .map
+            .line_starts
+            .get(line_index + 1)
+            .is_some_and(|next| *next <= byte)
+        {
+            line_index += 1;
+        }
+
+        line_index
+    }
+
+    fn column_at(&self, line_index: usize, byte: usize) -> usize {
+        let line_start = self.map.line_starts[line_index];
+        if self
+            .map
+            .line_ascii
+            .get(line_index)
+            .copied()
+            .unwrap_or(false)
+        {
+            byte - line_start + 1
+        } else {
+            self.map.input[line_start..byte].chars().count() + 1
+        }
+    }
+}
+
+impl SourceMap<'_> {
+    fn line_index_for(&self, byte: usize) -> usize {
+        match self.line_starts.binary_search(&byte) {
+            Ok(index) => index,
+            Err(0) => 0,
+            Err(index) => index - 1,
+        }
     }
 }

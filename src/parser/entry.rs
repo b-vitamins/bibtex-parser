@@ -2,9 +2,27 @@
 
 use super::{lexer, value, PResult};
 use crate::model::{Entry, EntryType, Field};
+use crate::{EntryDelimiter, Value, ValueDelimiter};
 use std::borrow::Cow;
 
 const DEFAULT_FIELD_CAPACITY: usize = 17;
+
+#[derive(Debug, Clone)]
+pub(crate) struct LocatedEntry<'a> {
+    pub(crate) entry: Entry<'a>,
+    pub(crate) entry_type: (usize, usize),
+    pub(crate) key: (usize, usize),
+    pub(crate) delimiter: EntryDelimiter,
+    pub(crate) fields: Vec<LocatedField>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LocatedField {
+    pub(crate) whole: (usize, usize),
+    pub(crate) name: (usize, usize),
+    pub(crate) value: (usize, usize),
+    pub(crate) value_delimiter: ValueDelimiter,
+}
 
 /// Parse a bibliography entry
 #[inline]
@@ -20,6 +38,21 @@ pub fn parse_entry_at<'a>(input: &mut &'a str) -> PResult<'a, Entry<'a>> {
         Some(b'@') => {
             *input = &input[1..];
             parse_entry_content(input)
+        }
+        _ => super::backtrack(),
+    }
+}
+
+#[inline]
+pub(crate) fn parse_entry_at_with_locations<'a>(
+    input: &mut &'a str,
+    absolute_start: usize,
+) -> PResult<'a, LocatedEntry<'a>> {
+    let root = *input;
+    match input.as_bytes().first() {
+        Some(b'@') => {
+            *input = &input[1..];
+            parse_entry_content_with_locations(input, root, absolute_start)
         }
         _ => super::backtrack(),
     }
@@ -42,6 +75,42 @@ fn parse_entry_content<'a>(input: &mut &'a str) -> PResult<'a, Entry<'a>> {
     parse_entry_body(input, entry_type, closing_delimiter)
 }
 
+#[inline]
+fn parse_entry_content_with_locations<'a>(
+    input: &mut &'a str,
+    root: &'a str,
+    absolute_start: usize,
+) -> PResult<'a, LocatedEntry<'a>> {
+    let entry_type_start = source_offset(root, input, absolute_start);
+    let entry_type_str = lexer::identifier(input)?;
+    let entry_type_end = source_offset(root, input, absolute_start);
+    let entry_type = EntryType::parse(entry_type_str);
+
+    lexer::skip_whitespace(input);
+
+    let opening = match input.as_bytes().first() {
+        Some(b'{') => b'{',
+        Some(b'(') => b'(',
+        _ => return super::backtrack(),
+    };
+    let (delimiter, closing_delimiter) = match opening {
+        b'{' => (EntryDelimiter::Braces, b'}'),
+        b'(' => (EntryDelimiter::Parentheses, b')'),
+        _ => unreachable!(),
+    };
+    *input = &input[1..];
+
+    parse_entry_body_with_locations(
+        input,
+        root,
+        absolute_start,
+        entry_type,
+        (entry_type_start, entry_type_end),
+        delimiter,
+        closing_delimiter,
+    )
+}
+
 /// Parse the body of an entry (key and fields)
 #[inline]
 fn parse_entry_body<'a>(
@@ -62,6 +131,41 @@ fn parse_entry_body<'a>(
         ty: entry_type,
         key: Cow::Borrowed(key),
         fields,
+    })
+}
+
+#[inline]
+fn parse_entry_body_with_locations<'a>(
+    input: &mut &'a str,
+    root: &'a str,
+    absolute_start: usize,
+    entry_type: EntryType<'a>,
+    entry_type_location: (usize, usize),
+    delimiter: EntryDelimiter,
+    closing_delimiter: u8,
+) -> PResult<'a, LocatedEntry<'a>> {
+    lexer::skip_whitespace(input);
+    let key_start = source_offset(root, input, absolute_start);
+    let key = lexer::identifier(input)?;
+    let key_end = source_offset(root, input, absolute_start);
+
+    lexer::skip_whitespace(input);
+    expect_byte(input, b',')?;
+
+    let (fields, field_locations) =
+        parse_fields_with_locations(input, root, absolute_start, closing_delimiter)?;
+    expect_byte(input, closing_delimiter)?;
+
+    Ok(LocatedEntry {
+        entry: Entry {
+            ty: entry_type,
+            key: Cow::Borrowed(key),
+            fields,
+        },
+        entry_type: entry_type_location,
+        key: (key_start, key_end),
+        delimiter,
+        fields: field_locations,
     })
 }
 
@@ -112,6 +216,122 @@ fn parse_fields<'a>(input: &mut &'a str, closing_delimiter: u8) -> PResult<'a, V
     }
 
     Ok(fields)
+}
+
+#[inline]
+fn parse_fields_with_locations<'a>(
+    input: &mut &'a str,
+    root: &'a str,
+    absolute_start: usize,
+    closing_delimiter: u8,
+) -> PResult<'a, (Vec<Field<'a>>, Vec<LocatedField>)> {
+    let mut fields = Vec::with_capacity(DEFAULT_FIELD_CAPACITY);
+    let mut locations = Vec::with_capacity(DEFAULT_FIELD_CAPACITY);
+    let root_bytes = root.as_bytes();
+
+    while let Some(first) = lexer::skip_whitespace_peek(input) {
+        if first == closing_delimiter {
+            break;
+        }
+
+        let field_start = source_offset(root, input, absolute_start);
+        let name_start = field_start;
+        let name = lexer::field_name(input)?;
+        let name_end = source_offset(root, input, absolute_start);
+
+        lexer::skip_whitespace(input);
+        expect_byte(input, b'=')?;
+        lexer::skip_whitespace(input);
+
+        let value_start = source_offset(root, input, absolute_start);
+        let parsed_value = value::parse_value_field(input)?;
+        let value_boundary = source_offset(root, input, absolute_start);
+        let value_end = trim_ascii_whitespace_end_absolute(
+            root_bytes,
+            absolute_start,
+            value_start,
+            value_boundary,
+        );
+        let value_delimiter = value_delimiter_from_parse(
+            &parsed_value,
+            root_bytes,
+            absolute_start,
+            value_start,
+            value_end,
+        );
+
+        let mut whole_end = value_end;
+        match input.as_bytes().first() {
+            Some(b',') => {
+                whole_end = source_offset(root, input, absolute_start) + 1;
+                *input = &input[1..];
+            }
+            Some(&b) if b == closing_delimiter => {}
+            _ => return super::backtrack(),
+        }
+
+        fields.push(Field {
+            name: Cow::Borrowed(name),
+            value: parsed_value,
+        });
+        locations.push(LocatedField {
+            whole: (field_start, whole_end),
+            name: (name_start, name_end),
+            value: (value_start, value_end),
+            value_delimiter,
+        });
+    }
+
+    let max_reasonable_capacity = (fields.len() * 2).max(8);
+    if fields.capacity() > max_reasonable_capacity {
+        fields.shrink_to_fit();
+    }
+    if locations.capacity() > max_reasonable_capacity {
+        locations.shrink_to_fit();
+    }
+
+    Ok((fields, locations))
+}
+
+#[inline]
+const fn source_offset(root: &str, input: &str, absolute_start: usize) -> usize {
+    absolute_start + root.len() - input.len()
+}
+
+#[inline]
+fn trim_ascii_whitespace_end_absolute(
+    bytes: &[u8],
+    absolute_start: usize,
+    start: usize,
+    end: usize,
+) -> usize {
+    let mut pos = end - absolute_start;
+    let start = start - absolute_start;
+    while pos > start && bytes[pos - 1].is_ascii_whitespace() {
+        pos -= 1;
+    }
+    absolute_start + pos
+}
+
+#[inline]
+fn value_delimiter_from_parse(
+    value: &Value<'_>,
+    bytes: &[u8],
+    absolute_start: usize,
+    start: usize,
+    end: usize,
+) -> ValueDelimiter {
+    if matches!(value, Value::Concat(_)) {
+        return ValueDelimiter::Concatenation;
+    }
+
+    let start = start - absolute_start;
+    let end = end - absolute_start;
+    match bytes.get(start..end).and_then(|raw| raw.first()).copied() {
+        Some(b'{') => ValueDelimiter::Braces,
+        Some(b'"') => ValueDelimiter::Quotes,
+        _ => ValueDelimiter::Bare,
+    }
 }
 
 #[cfg(test)]
