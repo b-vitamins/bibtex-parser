@@ -29,23 +29,23 @@ For a BibTeX parser, the relevant speed measurements are:
 | Raw-preserving write | Write retained source text after low-churn edits | 0.002 s, 1149.8 MiB/s |
 | Normalized write | Serialize structured data with configured formatting | 0.010 s, 259.7 MiB/s |
 
-The comparison used `citerra` 0.2.3, `bibtexparser` 1.4.4,
+The comparison used `citerra` 0.3.0, `bibtexparser` 1.4.4,
 `bibtexparser` 2.0.0b9, and `pybtex` 0.26.1. `citerra` structured parse
 disables source capture and raw preservation for the closest parser-output
 comparison. Relative time is normalized to the first row in each table.
 
 | Python parser / mode | Version | Output retained | Median parse time | Throughput | Approx. entries/s | Relative time |
 | --- | ---: | --- | ---: | ---: | ---: | ---: |
-| `citerra` structured parse | 0.2.3 | Entries, fields, strings, comments, preambles | 0.008 s | 322.2 MiB/s | 455.7k | 1.0x |
-| `citerra` source-preserving parse | 0.2.3 | Structured data, raw text, locations, diagnostics | 0.011 s | 232.8 MiB/s | 329.3k | 1.4x |
+| `citerra` structured parse | 0.3.0 | Entries, fields, strings, comments, preambles | 0.008 s | 322.2 MiB/s | 455.7k | 1.0x |
+| `citerra` source-preserving parse | 0.3.0 | Structured data, raw text, locations, diagnostics | 0.011 s | 232.8 MiB/s | 329.3k | 1.4x |
 | `bibtexparser` parse | 2.0.0b9 | Entries/library model | 0.367 s | 7.0 MiB/s | 9.9k | 45.9x |
 | `pybtex` parse | 0.26.1 | Bibliography data | 0.863 s | 3.0 MiB/s | 4.2k | 107.9x |
 | `bibtexparser` parse | 1.4.4 | Entries/database model | 10.758 s | 0.2 MiB/s | 0.34k | 1345.2x |
 
 | Python writer / mode | Version | Median write time | Throughput | Relative time |
 | --- | ---: | ---: | ---: | ---: |
-| `citerra` raw-preserving write | 0.2.3 | 0.002 s | 1149.8 MiB/s | 1.0x |
-| `citerra` normalized write | 0.2.3 | 0.010 s | 259.7 MiB/s | 4.4x |
+| `citerra` raw-preserving write | 0.3.0 | 0.002 s | 1149.8 MiB/s | 1.0x |
+| `citerra` normalized write | 0.3.0 | 0.010 s | 259.7 MiB/s | 4.4x |
 | `bibtexparser` write | 1.4.4 | 0.106 s | 24.3 MiB/s | 47.4x |
 | `bibtexparser` write | 2.0.0b9 | 0.497 s | 5.2 MiB/s | 222.0x |
 | `pybtex` write | 0.26.1 | 3.790 s | 0.7 MiB/s | 1691.3x |

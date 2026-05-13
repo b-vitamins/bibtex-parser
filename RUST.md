@@ -24,13 +24,13 @@ table rather than listed as peers.
 
 | Rust parser / mode | Version | Median time | Throughput | Output retained |
 | --- | ---: | ---: | ---: | --- |
-| `bibtex-parser` strict `Library` | 0.2.3 | 3.424 ms | 752.4 MiB/s | Entries, fields, strings, comments, preambles |
-| `bibtex-parser` tolerant `Library` | 0.2.3 | 4.166 ms | 618.4 MiB/s | Recovery and failed-block tracking |
+| `bibtex-parser` strict `Library` | 0.3.0 | 3.424 ms | 752.4 MiB/s | Entries, fields, strings, comments, preambles |
+| `bibtex-parser` tolerant `Library` | 0.3.0 | 4.166 ms | 618.4 MiB/s | Recovery and failed-block tracking |
 | `serde_bibtex` borrowed entries | 0.7.1 | 7.011 ms | 367.5 MiB/s | Borrowed entries |
 | `serde_bibtex` owned entries | 0.7.1 | 8.718 ms | 295.5 MiB/s | Owned entries with month macros |
 | `biblatex` raw bibliography | 0.11.0 | 9.529 ms | 270.4 MiB/s | Raw BibLaTeX bibliography |
-| `bibtex-parser` streaming events | 0.2.3 | 15.596 ms | 165.2 MiB/s | Source-order callback events |
-| `bibtex-parser` source-preserving document | 0.2.3 | 22.944 ms | 112.3 MiB/s | Raw text, source locations, diagnostics model |
+| `bibtex-parser` streaming events | 0.3.0 | 15.596 ms | 165.2 MiB/s | Source-order callback events |
+| `bibtex-parser` source-preserving document | 0.3.0 | 22.944 ms | 112.3 MiB/s | Raw text, source locations, diagnostics model |
 | `nom-bibtex` | 0.6.0 | 25.297 ms | 101.9 MiB/s | Parsed bibliography |
 
 Two narrower `serde_bibtex` baselines were also measured: parse-and-discard at

@@ -4,6 +4,23 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+## 0.3.0 - 2026-05-14
+
+### Performance
+
+- Reduced Python parse overhead for structured and source-preserving documents.
+- Reduced Python plain-record projection overhead for `Document.to_dicts()` and
+  `document_to_dicts()`.
+- Added a Python-extension allocator path to reduce allocation overhead in
+  wheel builds.
+- Avoided repeated field-name allocations for common owned field names.
+- Streamlined field-value separator checks in the parser hot path.
+
+### Changed
+
+- Refreshed Python and Rust README benchmark tables from current tugboat
+  benchmark runs.
+
 ## 0.2.3 - 2026-05-13
 
 ### Changed
