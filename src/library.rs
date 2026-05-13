@@ -851,6 +851,101 @@ impl Parser {
         Ok(document)
     }
 
+    pub(crate) fn parse_source_document_owned(
+        &self,
+        source_name: Option<String>,
+        input: &str,
+    ) -> Result<ParsedDocument<'static>> {
+        let source_name = source_name.map(Cow::Owned);
+        let source_id = SourceId::new(0);
+        let source_map = SourceMap::new(Some(source_id), source_name.clone(), input);
+        let sources = vec![ParsedSource {
+            id: source_id,
+            name: source_name,
+        }];
+        let input_scan = scan_input(input);
+        let mut entries = Vec::with_capacity(input_scan.at_count);
+        let mut strings = Vec::new();
+        let mut preambles = Vec::new();
+        let mut comments = Vec::new();
+        let mut blocks = Vec::with_capacity(input_scan.at_count);
+
+        crate::parser::parse_bibtex_stream_with_spans(input, |item, span, raw| {
+            let source = source_map.span(span.byte_start, span.byte_end);
+            match item {
+                crate::parser::ParsedItem::Entry(entry) => {
+                    let index = entries.len();
+                    entries.push(
+                        ParsedEntry::from_stream_entry(
+                            entry,
+                            source,
+                            raw,
+                            &source_map,
+                            self.document.preserve_raw,
+                        )
+                        .into_owned(),
+                    );
+                    blocks.push(ParsedBlock::Entry(index));
+                }
+                crate::parser::ParsedItem::String(name, value) => {
+                    let index = strings.len();
+                    strings.push(
+                        ParsedString::from_stream_definition(
+                            name,
+                            value,
+                            source,
+                            raw,
+                            self.document.preserve_raw,
+                        )
+                        .into_owned(),
+                    );
+                    blocks.push(ParsedBlock::String(index));
+                }
+                crate::parser::ParsedItem::Preamble(value) => {
+                    let index = preambles.len();
+                    preambles.push(
+                        ParsedPreamble::from_stream_preamble(
+                            value,
+                            source,
+                            raw,
+                            self.document.preserve_raw,
+                        )
+                        .into_owned(),
+                    );
+                    blocks.push(ParsedBlock::Preamble(index));
+                }
+                crate::parser::ParsedItem::Comment(text) => {
+                    let index = comments.len();
+                    comments.push(
+                        ParsedComment::from_stream_comment(
+                            text,
+                            source,
+                            raw,
+                            self.document.preserve_raw,
+                        )
+                        .into_owned(),
+                    );
+                    blocks.push(ParsedBlock::Comment(index));
+                }
+            }
+            Ok(())
+        })?;
+
+        let mut document = ParsedDocument::from_parsed_parts(
+            Library::new(),
+            sources,
+            entries,
+            strings,
+            preambles,
+            comments,
+            blocks,
+        );
+        if self.document.expand_values {
+            document.populate_expanded_values(crate::ExpansionOptions::default())?;
+        }
+        Ok(document)
+    }
+
     /// Parse multiple files in parallel
     pub fn parse_files<P: AsRef<Path> + Sync>(&self, paths: &[P]) -> Result<Library<'static>> {
         #[cfg(feature = "parallel")]

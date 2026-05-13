@@ -1303,10 +1303,16 @@ fn parse_document_with_options(
         parser = parser.expand_values();
     }
 
-    if !options.tolerant && !options.capture_source && !options.preserve_raw {
-        let mut document = parser
-            .parse_compact_document_owned(source, text)
-            .map_err(map_error)?;
+    if !options.tolerant {
+        let mut document = if !options.capture_source && !options.preserve_raw {
+            parser
+                .parse_compact_document_owned(source, text)
+                .map_err(map_error)?
+        } else {
+            parser
+                .parse_source_document_owned(source, text)
+                .map_err(map_error)?
+        };
         if options.latex_to_unicode {
             apply_latex_to_unicode(&mut document)?;
         }
