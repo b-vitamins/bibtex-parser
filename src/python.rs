@@ -18,9 +18,10 @@ use crate::{
     Parser, RawWriteMode, ResourceField, SourceSpan, TrailingComma, ValidationLevel,
     ValidationSeverity, Value, Writer, WriterConfig,
 };
+use ahash::AHashMap;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict, PyList, PyModule, PyType};
+use pyo3::types::{PyAny, PyDict, PyList, PyModule, PyString, PyType};
 use std::borrow::Cow;
 use std::sync::Arc;
 
@@ -1479,16 +1480,54 @@ fn document_to_dicts_for_py<'py>(
     document: &ParsedDocument<'_>,
 ) -> PyResult<Bound<'py, PyList>> {
     let records = PyList::empty(py);
+    let entry_type_key = PyString::new(py, "ENTRYTYPE");
+    let id_key = PyString::new(py, "ID");
+    let mut field_keys = AHashMap::new();
     for entry in document.entries() {
         let record = PyDict::new(py);
-        record.set_item("ENTRYTYPE", entry.ty.to_string())?;
-        record.set_item("ID", entry.key())?;
+        record.set_item(&entry_type_key, entry.ty.canonical_name())?;
+        record.set_item(&id_key, entry.key())?;
         for field in &entry.fields {
-            record.set_item(field.name.as_ref(), field_text(field))?;
+            let key = cached_py_string(py, &mut field_keys, field.name.as_ref());
+            set_record_field_text(&record, key.bind(py), field)?;
         }
         records.append(record)?;
     }
     Ok(records)
+}
+
+fn cached_py_string<'a>(
+    py: Python<'_>,
+    cache: &mut AHashMap<&'a str, Py<PyString>>,
+    text: &'a str,
+) -> Py<PyString> {
+    if let Some(key) = cache.get(text) {
+        return key.clone_ref(py);
+    }
+
+    let key = PyString::new(py, text).unbind();
+    cache.insert(text, key.clone_ref(py));
+    key
+}
+
+fn set_record_field_text(
+    record: &Bound<'_, PyDict>,
+    key: &Bound<'_, PyString>,
+    field: &ParsedField<'_>,
+) -> PyResult<()> {
+    if let Some(expanded) = field.value.expanded.as_deref() {
+        return record.set_item(key, expanded);
+    }
+
+    match &field.value.value {
+        Value::Literal(text) if !needs_text_projection(text) => record.set_item(key, text.as_ref()),
+        Value::Variable(name) => record.set_item(key, name.as_ref()),
+        Value::Number(number) => {
+            let mut buffer = itoa::Buffer::new();
+            record.set_item(key, buffer.format(*number))
+        }
+        Value::Concat(_) | Value::Literal(_) => record.set_item(key, field.value.plain_text()),
+    }
 }
 
 fn value_from_py(value: &Bound<'_, PyAny>) -> PyResult<Value<'static>> {
@@ -1616,4 +1655,10 @@ fn field_text(field: &ParsedField<'_>) -> String {
         .expanded
         .as_deref()
         .map_or_else(|| field.value.plain_text(), ToOwned::to_owned)
+}
+
+fn needs_text_projection(text: &str) -> bool {
+    text.as_bytes()
+        .iter()
+        .any(|byte| matches!(byte, b'\n' | b'\r'))
 }

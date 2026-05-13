@@ -466,6 +466,20 @@ impl<'a> ParsedValue<'a> {
             delimiter: self.delimiter,
         }
     }
+
+    pub(crate) fn from_owned_value(
+        value: Value<'a>,
+        source: Option<SourceSpan>,
+        delimiter: Option<ValueDelimiter>,
+    ) -> ParsedValue<'static> {
+        ParsedValue {
+            value: value.into_owned(),
+            raw: None,
+            source,
+            expanded: None,
+            delimiter,
+        }
+    }
 }
 
 /// Parsed field plus optional source-preserving metadata.
@@ -520,6 +534,17 @@ impl<'a> ParsedField<'a> {
             value_source: self.value_source,
         }
     }
+
+    pub(crate) fn from_owned_field(field: Field<'a>) -> ParsedField<'static> {
+        ParsedField {
+            name: Cow::Owned(field.name.into_owned()),
+            value: ParsedValue::from_owned_value(field.value, None, None),
+            raw: None,
+            source: None,
+            name_source: None,
+            value_source: None,
+        }
+    }
 }
 
 /// Parsed entry plus optional source-preserving metadata.
@@ -569,6 +594,28 @@ impl<'a> ParsedEntry<'a> {
         }
     }
 
+    pub(crate) fn from_entry_owned(
+        entry: Entry<'a>,
+        source: Option<SourceSpan>,
+    ) -> ParsedEntry<'static> {
+        ParsedEntry {
+            ty: entry.ty.into_owned(),
+            key: Cow::Owned(entry.key.into_owned()),
+            fields: entry
+                .fields
+                .into_iter()
+                .map(ParsedField::from_owned_field)
+                .collect(),
+            status: ParsedEntryStatus::Complete,
+            source,
+            entry_type_source: None,
+            key_source: None,
+            delimiter: None,
+            raw: None,
+            diagnostics: Vec::new(),
+        }
+    }
+
     pub(crate) fn from_stream_entry(
         entry: Entry<'a>,
         source: SourceSpan,
@@ -581,14 +628,11 @@ impl<'a> ParsedEntry<'a> {
         parsed
     }
 
-    pub(crate) fn from_located_stream_entry(
+    pub(crate) fn from_located_stream_entry_owned(
         located: crate::parser::entry::LocatedEntry<'a>,
         source: SourceSpan,
-        raw: &'a str,
-        source_map: &SourceMap<'a>,
         span_cursor: &mut SourceCursor<'_, 'a>,
-        preserve_raw: bool,
-    ) -> Self {
+    ) -> ParsedEntry<'static> {
         let entry = located.entry;
         let entry_type_source = span_cursor.span(located.entry_type.0, located.entry_type.1);
         let key_source = span_cursor.span(located.key.0, located.key.1);
@@ -601,23 +645,13 @@ impl<'a> ParsedEntry<'a> {
                 let name_source = span_cursor.span(location.name.0, location.name.1);
                 let value_source = span_cursor.span(location.value.0, location.value.1);
                 ParsedField {
-                    name: field.name,
-                    value: ParsedValue {
-                        value: field.value,
-                        raw: if preserve_raw {
-                            source_map.slice(value_source).map(Cow::Borrowed)
-                        } else {
-                            None
-                        },
-                        source: Some(value_source),
-                        expanded: None,
-                        delimiter: Some(location.value_delimiter),
-                    },
-                    raw: if preserve_raw {
-                        source_map.slice(field_source).map(Cow::Borrowed)
-                    } else {
-                        None
-                    },
+                    name: Cow::Owned(field.name.into_owned()),
+                    value: ParsedValue::from_owned_value(
+                        field.value,
+                        Some(value_source),
+                        Some(location.value_delimiter),
+                    ),
+                    raw: None,
                     source: Some(field_source),
                     name_source: Some(name_source),
                     value_source: Some(value_source),
@@ -625,16 +659,16 @@ impl<'a> ParsedEntry<'a> {
             })
             .collect();
 
-        Self {
-            ty: entry.ty,
-            key: entry.key,
+        ParsedEntry {
+            ty: entry.ty.into_owned(),
+            key: Cow::Owned(entry.key.into_owned()),
             fields,
             status: ParsedEntryStatus::Complete,
             source: Some(source),
             entry_type_source: Some(entry_type_source),
             key_source: Some(key_source),
             delimiter: Some(located.delimiter),
-            raw: preserve_raw.then_some(Cow::Borrowed(raw)),
+            raw: None,
             diagnostics: Vec::new(),
         }
     }
@@ -952,6 +986,21 @@ impl<'a> ParsedString<'a> {
             raw: self.raw.map(|raw| Cow::Owned(raw.into_owned())),
         }
     }
+
+    pub(crate) fn from_stream_definition_owned(
+        name: &'a str,
+        value: Value<'a>,
+        source: SourceSpan,
+        raw: &'a str,
+    ) -> ParsedString<'static> {
+        let value_raw = locate_definition_value(raw);
+        ParsedString {
+            name: Cow::Owned(name.to_string()),
+            value: ParsedValue::from_owned_value(value, None, value_raw.map(value_delimiter)),
+            source: Some(source),
+            raw: None,
+        }
+    }
 }
 
 /// Parsed preamble plus optional source-preserving metadata.
@@ -1009,6 +1058,19 @@ impl<'a> ParsedPreamble<'a> {
             raw: self.raw.map(|raw| Cow::Owned(raw.into_owned())),
         }
     }
+
+    pub(crate) fn from_stream_preamble_owned(
+        value: Value<'a>,
+        source: SourceSpan,
+        raw: &'a str,
+    ) -> ParsedPreamble<'static> {
+        let value_raw = locate_preamble_value(raw);
+        ParsedPreamble {
+            value: ParsedValue::from_owned_value(value, None, value_raw.map(value_delimiter)),
+            source: Some(source),
+            raw: None,
+        }
+    }
 }
 
 /// Parsed comment plus optional source-preserving metadata.
@@ -1053,6 +1115,17 @@ impl<'a> ParsedComment<'a> {
             text: Cow::Owned(self.text.into_owned()),
             source: self.source,
             raw: self.raw.map(|raw| Cow::Owned(raw.into_owned())),
+        }
+    }
+
+    pub(crate) fn from_stream_comment_owned(
+        text: &'a str,
+        source: SourceSpan,
+    ) -> ParsedComment<'static> {
+        ParsedComment {
+            text: Cow::Owned(text.to_string()),
+            source: Some(source),
+            raw: None,
         }
     }
 }

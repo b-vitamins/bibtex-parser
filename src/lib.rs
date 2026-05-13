@@ -139,6 +139,10 @@ pub mod latex_unicode;
 mod library;
 mod writer;
 
+#[cfg(feature = "python-extension")]
+#[global_allocator]
+static PYTHON_EXTENSION_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 pub use corpus::{
     CorpusEvent, CorpusSource, DuplicateKeyGroup, DuplicateKeyOccurrence, ParsedCorpus,
 };

@@ -56,21 +56,21 @@ These instructions apply to this repository.
 
   ```sh
   guix shell -m manifest.scm -- pre-commit run --all-files
-  cargo fmt --all -- --check
+  guix shell -m manifest.scm -- cargo fmt --all -- --check
   guix shell -m manifest.scm -- actionlint
-  cargo clippy --locked --all-targets --all-features -- -D warnings
-  cargo test --locked --all-features
+  guix shell -m manifest.scm -- env CC=gcc cargo clippy --locked --all-targets --all-features -- -D warnings
+  guix shell -m manifest.scm -- env CC=gcc cargo test --locked --all-features
   ```
 
 - Before a release, additionally run:
 
   ```sh
-  cargo test --locked --all-features -- --ignored
-  cargo bench --locked --all-features --no-run
+  guix shell -m manifest.scm -- env CC=gcc cargo test --locked --all-features -- --ignored
+  guix shell -m manifest.scm -- env CC=gcc cargo bench --locked --all-features --no-run
   cargo package --locked
   cargo publish --dry-run --locked
   rm -rf target/wheels target/python-test
-  guix shell -m manifest.scm -- maturin build --release --out target/wheels
+  guix shell -m manifest.scm -- env CC=gcc maturin build --release --out target/wheels
   python3 -c 'from pathlib import Path; from zipfile import ZipFile; wheel = sorted(Path("target/wheels").glob("citerra-*.whl"))[-1]; target = Path("target/python-test"); target.mkdir(parents=True, exist_ok=True); ZipFile(wheel).extractall(target)'
   guix shell -m manifest.scm -- env PYTHONPATH=target/python-test python3 -m pytest tests/python
   ```
