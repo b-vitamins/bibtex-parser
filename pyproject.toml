@@ -4,9 +4,9 @@ build-backend = "maturin"
 
 [project]
 name = "citerra"
-version = "0.2.1"
-description = "Python API for the bibtex-parser Rust core"
-readme = "README.md"
+version = "0.2.2"
+description = "BibTeX parser for Python"
+readme = "PYTHON.md"
 requires-python = ">=3.8"
 license = { text = "MIT OR Apache-2.0" }
 authors = [{ name = "Ayan Das", email = "bvits@riseup.net" }]
@@ -32,7 +32,8 @@ classifiers = [
 [project.urls]
 Homepage = "https://github.com/b-vitamins/bibtex-parser"
 Repository = "https://github.com/b-vitamins/bibtex-parser"
-Documentation = "https://docs.rs/bibtex-parser"
+Documentation = "https://github.com/b-vitamins/bibtex-parser/blob/master/PYTHON.md"
+Changelog = "https://github.com/b-vitamins/bibtex-parser/blob/master/CHANGELOG.md"
 
 [tool.maturin]
 bindings = "pyo3"

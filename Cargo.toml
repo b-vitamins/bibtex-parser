@@ -1,10 +1,10 @@
 [package]
 name = "bibtex-parser"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 rust-version = "1.75"
 authors = ["Ayan Das <bvits@riseup.net>"]
-description = "BibTeX parser with Rust and Python APIs"
+description = "BibTeX parser for Rust"
 documentation = "https://docs.rs/bibtex-parser"
 repository = "https://github.com/b-vitamins/bibtex-parser"
 homepage = "https://github.com/b-vitamins/bibtex-parser"

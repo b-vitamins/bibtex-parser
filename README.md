@@ -3,55 +3,80 @@
 [![CI](https://github.com/b-vitamins/bibtex-parser/actions/workflows/ci.yml/badge.svg)](https://github.com/b-vitamins/bibtex-parser/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/bibtex-parser.svg)](https://crates.io/crates/bibtex-parser)
 [![docs.rs](https://img.shields.io/docsrs/bibtex-parser.svg)](https://docs.rs/bibtex-parser)
-[![PyPI](https://img.shields.io/pypi/v/citerra.svg)](https://pypi.org/project/citerra/)
 [![License](https://img.shields.io/crates/l/bibtex-parser.svg)](LICENSE)
 
-BibTeX parsing for Rust and Python applications.
+BibTeX parser for Rust.
 
-`bibtex-parser` provides a Rust parser and library API, plus a Python package
-built with PyO3 and maturin. It supports strict parsing, explicit tolerant
-recovery, source locations, raw-text preservation, semantic helpers, editing
-primitives, streaming, multi-file corpus parsing, and configurable
-serialization.
+`bibtex-parser` parses BibTeX into structured Rust types. It supports strict
+parsing by default, opt-in tolerant recovery, source locations, raw-text
+retention, semantic helpers, editing primitives, streaming, multi-file corpus
+parsing, and configurable serialization.
+
+## Performance Snapshot
+
+Measured on `tests/fixtures/tugboat.bib`: 2,701,551 bytes, 73,993 lines, and
+3,644 entries. Hardware was AMD Ryzen 5 5600G, 6 cores / 12 threads. Measured
+on 2026-05-13 with Rust `1.93.0`; throughput is input-size normalized.
+
+The first table compares parser modes that return reusable bibliography data.
+The second table keeps narrower throughput baselines separate because those
+rows intentionally do less work than a full document parse.
+
+| Rust parser / mode | Version | Median time | Throughput | Output retained |
+| --- | ---: | ---: | ---: | --- |
+| `bibtex-parser` strict `Library` | 0.2.2 | 5.234 ms | 492.3 MiB/s | Entries, fields, strings, comments, preambles |
+| `serde_bibtex` borrowed entries | 0.7.1 | 6.872 ms | 374.9 MiB/s | Borrowed entries |
+| `bibtex-parser` tolerant `Library` | 0.2.2 | 7.015 ms | 367.3 MiB/s | Recovery and failed-block tracking |
+| `biblatex` raw bibliography | 0.11.0 | 10.839 ms | 237.7 MiB/s | Raw BibLaTeX bibliography |
+| `serde_bibtex` owned entries | 0.7.1 | 13.469 ms | 191.3 MiB/s | Owned entries with month macros |
+| `bibtex-parser` streaming events | 0.2.2 | 21.943 ms | 117.4 MiB/s | Source-order callback events |
+| `bibtex-parser` source-preserving document | 0.2.2 | 31.862 ms | 80.9 MiB/s | Raw text, source locations, diagnostics model |
+| `nom-bibtex` | 0.6.0 | 34.334 ms | 75.0 MiB/s | Parsed bibliography |
+
+| Narrow baseline | Version | Median time | Throughput | Scope |
+| --- | ---: | ---: | ---: | --- |
+| `serde_bibtex` ignore | 0.7.1 | 2.411 ms | 1.04 GiB/s | Parse and discard |
+| `serde_bibtex` selected struct | 0.7.1 | 4.143 ms | 621.9 MiB/s | Deserialize selected fields |
+
+| Rust writer mode | Version | Median time | Throughput |
+| --- | ---: | ---: | ---: |
+| Raw-preserving document write | 0.2.2 | 1.816 ms | 1.39 GiB/s |
+| Normalized `Library` write | 0.2.2 | 5.325 ms | 483.8 MiB/s |
+
+Reproduction commands are listed in [Reproducing Benchmarks](#reproducing-benchmarks).
 
 ## Install
-
-Rust:
 
 ```toml
 [dependencies]
 bibtex-parser = "0.2"
 ```
 
-Python:
+Enable optional functionality as needed:
 
-```sh
-pip install citerra
+```toml
+[dependencies]
+bibtex-parser = { version = "0.2", features = ["parallel", "latex_to_unicode"] }
 ```
 
-The Python distribution and import name are both `citerra`:
+- `parallel`: Rayon-backed parsing for multiple files.
+- `latex_to_unicode`: LaTeX accent-to-Unicode conversion helpers.
+- `python-extension`: PyO3 extension module used by the `citerra` package.
 
-```python
-import citerra
-```
+## Core Types
 
-## Core Concepts
-
-- `Library` is the compact Rust bibliography collection API for application
-  code that wants entries, fields, strings, comments, preambles, validation,
-  transforms, and writing.
-- `ParsedDocument` is the Rust model for tooling that needs diagnostics,
-  source-order blocks, raw source text, partial entries, failed blocks, and
-  source locations.
-- `citerra.Document` is the Python document model. It exposes source-order
-  blocks, diagnostics, raw text, editing operations, and writing through Python
-  classes and functions.
+- `Library` is the compact bibliography collection for application code that
+  needs entries, fields, strings, comments, preambles, validation, transforms,
+  and writing.
+- `ParsedDocument` is the source-preserving document for tooling that needs
+  diagnostics, source-order blocks, raw source text, partial entries, failed
+  blocks, and source locations.
 - `Parser` configures strict versus tolerant parsing, source capture, raw-text
   preservation, expanded values, streaming, and multi-source parsing.
 
 Strict parsing is the default. Tolerant parsing is explicit.
 
-## Rust Quick Start
+## Parse
 
 ```rust
 use bibtex_parser::{Library, Result};
@@ -77,10 +102,10 @@ fn main() -> Result<()> {
 }
 ```
 
-## Rust Tolerant Parsing And Diagnostics
+## Tolerant Parsing
 
-Use tolerant mode when a corpus may contain malformed entries but
-valid entries before or after those regions should still be returned.
+Use tolerant mode when a corpus may contain malformed entries but valid entries
+before or after those regions should still be returned.
 
 ```rust
 use bibtex_parser::{Block, Library, Result};
@@ -108,7 +133,10 @@ fn main() -> Result<()> {
 }
 ```
 
-For diagnostics and source-preserving output, parse into `ParsedDocument`:
+## Diagnostics And Source Locations
+
+Parse into `ParsedDocument` when callers need source-order blocks,
+diagnostics, locations, partial entries, or raw text.
 
 ```rust
 use bibtex_parser::{ParseStatus, Parser, Result};
@@ -135,7 +163,7 @@ fn main() -> Result<()> {
 }
 ```
 
-## Rust Query, Edit, And Write
+## Query, Edit, And Write
 
 ```rust
 use bibtex_parser::{Library, Result, Writer, WriterConfig};
@@ -180,7 +208,7 @@ let bibtex = library.to_bibtex()?;
 library.write_file("references.bib")?;
 ```
 
-## Rust Semantic Helpers
+## Semantic Helpers
 
 ```rust
 use bibtex_parser::{Library, ResourceKind, Result};
@@ -206,7 +234,7 @@ fn main() -> Result<()> {
 Helpers include name parsing, date extraction, DOI normalization, field
 normalization, resource classification, duplicate-key detection, and validation.
 
-## Rust Streaming And Multi-File Parsing
+## Streaming And Multi-File Parsing
 
 Streaming lets callers process source-order events without building a full
 intermediate collection:
@@ -253,131 +281,8 @@ fn main() -> Result<()> {
 }
 ```
 
-Enable the `parallel` feature for Rayon-backed parsing of multiple files from
-disk with `Parser::parse_files`.
-
-## Python Quick Start
-
-```python
-import citerra
-
-document = citerra.parse(
-    '@article{paper, author = "Jane Doe", title = "Example Paper", year = 2026}',
-    expand_values=True,
-)
-
-entry = document.entry("paper")
-assert entry is not None
-assert entry.entry_type == "article"
-assert entry.get("title") == "Example Paper"
-assert entry.date_parts().year == 2026
-```
-
-`load`, `loads`, `dump`, and `dumps` are available for file-like workflows:
-
-```python
-from pathlib import Path
-import citerra
-
-document = citerra.parse_path("references.bib", tolerant=True)
-Path("normalized.bib").write_text(citerra.dumps(document), encoding="utf-8")
-```
-
-## Python Diagnostics, Source, And Raw Text
-
-```python
-import citerra
-
-document = citerra.parse(
-    text,
-    tolerant=True,
-    capture_source=True,
-    preserve_raw=True,
-    source="refs/main.bib",
-)
-
-if document.status != "ok":
-    for diagnostic in document.diagnostics:
-        location = diagnostic.source
-        if location is not None:
-            print(diagnostic.code, location.line, location.column, diagnostic.message)
-        else:
-            print(diagnostic.code, diagnostic.message)
-
-entry = document.entry("paper")
-if entry is not None:
-    print(entry.raw)
-    print(entry.field("title").raw_value)
-```
-
-## Python Mutation And Writing
-
-```python
-import citerra
-
-document = citerra.parse_path("references.bib", tolerant=True)
-
-document.rename_key("paper", "paper-v2")
-document.set_field("paper-v2", "note", "accepted")
-document.remove_export_fields(["abstract", "keywords"])
-
-config = citerra.WriterConfig(
-    preserve_raw=True,
-    trailing_comma=True,
-)
-
-output = document.write(config)
-```
-
-Use `preserve_raw=True` for low-churn source-preserving writes. Use
-`preserve_raw=False` when normalized formatting is desired.
-
-## Python Plain Records
-
-Some application code wants ordinary dictionaries for filtering, indexing, or
-bulk transforms. The Python package provides explicit helpers for that shape
-without changing the native document model:
-
-```python
-import citerra
-
-document = citerra.parse_path("references.bib")
-records = citerra.document_to_dicts(document)
-
-selected = [record for record in records if record.get("year") == "2026"]
-text = citerra.write_entries(
-    selected,
-    field_order=["author", "title", "journal", "year", "doi"],
-    sort_by=["ID"],
-    trailing_comma=True,
-)
-```
-
-## Python Helpers
-
-```python
-import citerra
-
-assert citerra.normalize_doi("https://doi.org/10.1000/XYZ.") == "10.1000/xyz"
-assert citerra.latex_to_unicode("Jos\\'e") == "José"
-
-names = citerra.parse_names("Jane Doe and {Research Group}")
-assert names[1].literal == "Research Group"
-
-date = citerra.parse_date("2026-05-13")
-assert (date.year, date.month, date.day) == (2026, 5, 13)
-```
-
-## Feature Flags
-
-```toml
-[dependencies]
-bibtex-parser = { version = "0.2", features = ["parallel", "latex_to_unicode"] }
-```
-
-- `parallel`: enables Rayon-backed `Parser::parse_files` for multi-file workloads.
-- `latex_to_unicode`: enables LaTeX accent-to-Unicode conversion helpers.
-- `python-extension`: builds the PyO3 extension module used by the Python package.
+Use `Parser::parse_files` with the `parallel` feature for Rayon-backed parsing
+of multiple files from disk.
 
 ## Semantics
 
@@ -391,6 +296,26 @@ bibtex-parser = { version = "0.2", features = ["parallel", "latex_to_unicode"] }
   for exact source slicing.
 - Writer defaults preserve source order. Sorting, alignment, trailing commas,
   and normalized output are explicit choices.
+
+## Reproducing Benchmarks
+
+The repository includes Criterion benchmarks for parser throughput, tolerant
+parsing, source-preserving parsing, streaming, writing, corpus parsing, common
+library operations, and memory-oriented workloads.
+
+Run the parser table:
+
+```sh
+cargo bench --bench performance --all-features -- --noplot throughput
+```
+
+Run the writing table:
+
+```sh
+cargo bench --bench performance --all-features -- --noplot writing
+```
+
+Python benchmark notes are in [PYTHON.md](PYTHON.md).
 
 ## Local Development
 
@@ -408,12 +333,12 @@ guix shell -m manifest.scm -- actionlint
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-features
 cargo bench --all-features --no-run
-guix shell -m manifest.scm -- maturin build --release --out target/wheels
 ```
 
-Python wheel smoke test without installing into the user environment:
+Build and test the Python wheel:
 
 ```sh
+guix shell -m manifest.scm -- maturin build --release --out target/wheels
 rm -rf target/python-test
 python3 - <<'PY'
 from pathlib import Path
@@ -428,6 +353,10 @@ PY
 guix shell -m manifest.scm -- env PYTHONPATH=target/python-test python3 -m pytest tests/python
 ```
 
+## Python Package
+
+The Python package is `citerra`. See [PYTHON.md](PYTHON.md).
+
 ## Release Process
 
 The release workflow builds the Rust crate, Python source distribution, and
@@ -437,73 +366,6 @@ PyPI when the required repository environments and secrets are configured.
 
 See [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) for the exact release gates
 and setup requirements.
-
-## Benchmarks And Comparisons
-
-The repository includes Criterion benchmarks for parser throughput, tolerant
-parsing, source-preserving parsing, streaming, writing, corpus parsing, common
-library operations, and memory-oriented workloads. The tables below are one run
-on `tests/fixtures/tugboat.bib`:
-
-- 2,701,551 bytes, 73,993 lines, 3,644 entries.
-- AMD Ryzen 5 5600G, 6 cores / 12 threads.
-- Rust `1.93.0`, Python `3.11.14`.
-- Measured on 2026-05-13. Throughput is input-size normalized.
-
-Reproduce the Rust parser table:
-
-```sh
-cargo bench --bench performance --all-features -- --noplot throughput
-```
-
-| Rust parser / mode | Version | Median time | Throughput | Notes |
-| --- | ---: | ---: | ---: | --- |
-| `serde_bibtex` ignore | 0.7.1 | 2.411 ms | 1.04 GiB/s | Parses and discards data |
-| `serde_bibtex` selected struct | 0.7.1 | 4.143 ms | 621.9 MiB/s | Deserializes selected fields |
-| `bibtex-parser` strict `Library` | 0.2.1 | 5.234 ms | 492.3 MiB/s | Entries, fields, strings, comments, preambles |
-| `serde_bibtex` borrowed entries | 0.7.1 | 6.872 ms | 374.9 MiB/s | Borrowed parsed entries |
-| `bibtex-parser` tolerant `Library` | 0.2.1 | 7.015 ms | 367.3 MiB/s | Recovery and failed-block tracking |
-| `biblatex` raw bibliography | 0.11.0 | 10.839 ms | 237.7 MiB/s | Raw BibLaTeX bibliography |
-| `serde_bibtex` owned entries | 0.7.1 | 13.469 ms | 191.3 MiB/s | Owned entries with month macros |
-| `bibtex-parser` streaming events | 0.2.1 | 21.943 ms | 117.4 MiB/s | Source-order callback events |
-| `bibtex-parser` source-preserving document | 0.2.1 | 31.862 ms | 80.9 MiB/s | Raw text, source locations, diagnostics model |
-| `nom-bibtex` | 0.6.0 | 34.334 ms | 75.0 MiB/s | Parsed bibliography |
-
-Reproduce the Rust writing table:
-
-```sh
-cargo bench --bench performance --all-features -- --noplot writing
-```
-
-| Rust writer mode | Version | Median time | Throughput |
-| --- | ---: | ---: | ---: |
-| Raw-preserving document write | 0.2.1 | 1.816 ms | 1.39 GiB/s |
-| Normalized `Library` write | 0.2.1 | 5.325 ms | 483.8 MiB/s |
-
-The Python comparison used the local `citerra` wheel plus `bibtexparser` 1.4.4,
-`bibtexparser` 2.0.0b9, and `pybtex` 0.26.1. The comparison script uses
-whichever optional packages are installed in the active environment:
-
-```sh
-python python/benchmarks/compare_parsers.py tests/fixtures/tugboat.bib
-python python/benchmarks/compare_parsers.py tests/fixtures/tugboat.bib --write
-```
-
-| Python parser / mode | Version | Median parse time | Throughput | Relative time |
-| --- | ---: | ---: | ---: | ---: |
-| `citerra` structured parse | 0.2.1 | 0.058 s | 44.3 MiB/s | 1.0x |
-| `citerra` source-preserving parse | 0.2.1 | 0.065 s | 39.9 MiB/s | 1.1x |
-| `bibtexparser` parse | 2.0.0b9 | 0.372 s | 6.9 MiB/s | 6.4x |
-| `pybtex` parse | 0.26.1 | 0.859 s | 3.0 MiB/s | 14.8x |
-| `bibtexparser` parse | 1.4.4 | 10.483 s | 0.2 MiB/s | 180.1x |
-
-| Python writer / mode | Version | Median write time | Throughput | Relative time |
-| --- | ---: | ---: | ---: | ---: |
-| `citerra` raw-preserving write | 0.2.1 | 0.003 s | 953.2 MiB/s | 1.0x |
-| `citerra` normalized write | 0.2.1 | 0.014 s | 181.3 MiB/s | 5.3x |
-| `bibtexparser` write | 1.4.4 | 0.106 s | 24.3 MiB/s | 39.2x |
-| `bibtexparser` write | 2.0.0b9 | 0.493 s | 5.2 MiB/s | 182.2x |
-| `pybtex` write | 0.26.1 | 3.942 s | 0.7 MiB/s | 1458.5x |
 
 ## License
 

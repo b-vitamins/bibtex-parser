@@ -1,7 +1,7 @@
 #![deny(clippy::all)]
 //! # bibtex-parser
 //!
-//! BibTeX parsing with a Rust [`Library`] API.
+//! BibTeX parser for Rust.
 //!
 //! `bibtex-parser` supports strict parsing by default, explicit tolerant
 //! recovery for malformed input, string and month expansion, comments and

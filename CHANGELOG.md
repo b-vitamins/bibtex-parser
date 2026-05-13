@@ -4,6 +4,15 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+## 0.2.2 - 2026-05-13
+
+### Changed
+
+- Split Rust and Python package documentation so crates.io presents
+  `bibtex-parser` and PyPI presents `citerra`.
+- Updated package descriptions and Python package metadata to describe each
+  package as a parser in its own language ecosystem.
+
 ## 0.2.1 - 2026-05-13
 
 ### Fixed
