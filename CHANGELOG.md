@@ -4,6 +4,13 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+## 0.3.1 - 2026-05-14
+
+### Fixed
+
+- Preserve string and month expansion when Python parsing is called with both
+  `expand_values=True` and `latex_to_unicode=True`.
+
 ## 0.3.0 - 2026-05-14
 
 ### Performance

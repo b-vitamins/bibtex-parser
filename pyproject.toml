@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "citerra"
-version = "0.3.0"
+version = "0.3.1"
 description = "BibTeX parser for Python"
 readme = "README.md"
 requires-python = ">=3.8"
