@@ -1,9 +1,8 @@
-//! Tooling-oriented parsed bibliography model.
+//! Parsed bibliography model with source metadata.
 //!
-//! [`Library`] remains the compact, ergonomic API for normal
-//! bibliography work. [`ParsedDocument`] is the richer model for tools that
-//! need source-order blocks, per-item metadata, retained raw text, diagnostics,
-//! or partial parse results.
+//! [`Library`] is the compact API for bibliography data. [`ParsedDocument`]
+//! contains source-order blocks, per-item metadata, retained raw text,
+//! diagnostics, and partial parse results.
 
 use crate::library::BlockKind;
 use crate::library::RawBuildItem;
@@ -790,7 +789,7 @@ impl<'a> ParsedEntry<'a> {
             .map(|value| crate::parse_date_parts(&value))
     }
 
-    /// Return the best available issued date parts for this entry.
+    /// Return issued date parts for this entry.
     #[must_use]
     pub fn date_parts(&self) -> Option<std::result::Result<DateParts, DateParseError>> {
         self.clone().into_entry().date_parts()

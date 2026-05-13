@@ -1,4 +1,4 @@
-"""Native Python API for the Rust ``bibtex-parser`` crate."""
+"""Python API for the Rust ``bibtex-parser`` crate."""
 
 from __future__ import annotations
 

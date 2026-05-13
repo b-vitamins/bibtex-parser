@@ -405,7 +405,7 @@ impl Parser {
         }
     }
 
-    /// Parse a single input string into the richer document model.
+    /// Parse a single input string into the parsed document model.
     ///
     /// Use this when a caller needs source-order blocks, diagnostics, raw-text
     /// slots, or partial parse results. Use [`Self::parse`] for the compact
@@ -415,7 +415,7 @@ impl Parser {
         self.parse_document_with_source_id(SourceId::new(0), None, input)
     }
 
-    /// Parse a named source into the richer document model.
+    /// Parse a named source into the parsed document model.
     ///
     /// The parser does not read files itself; callers provide the source name
     /// or path-like label together with the already-loaded input text.

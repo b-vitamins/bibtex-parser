@@ -10,7 +10,7 @@ def test_parse_inspect_mutate_write_parse_counts() -> None:
 @string{venue = "ToolConf"}
 @article{paper,
   author = "Jos\\'e Garc\\'ia and {Research Group}",
-  title = "Fast BibTeX",
+  title = "Example Paper",
   journal = venue,
   year = 2026,
   doi = "https://doi.org/10.1000/XYZ."
@@ -37,17 +37,17 @@ def test_parse_inspect_mutate_write_parse_counts() -> None:
     assert entry.doi() == "10.1000/xyz"
     assert entry.authors()[1].literal == "Research Group"
     assert entry.date_parts().year == 2026
-    assert entry.field("title").raw_value == '"Fast BibTeX"'
+    assert entry.field("title").raw_value == '"Example Paper"'
     assert entry.source.line == 3
 
     assert document.rename_key("paper", "paper2")
-    assert document.set_field("paper2", "title", "Faster BibTeX")
+    assert document.set_field("paper2", "title", "Updated Paper")
     assert document.add_field("paper2", "note", citerra.Value.literal("accepted"))
     output = document.write()
 
     reparsed = citerra.parse(output)
     assert reparsed.keys() == ["paper2"]
-    assert reparsed.entry("paper2").get("title") == "Faster BibTeX"
+    assert reparsed.entry("paper2").get("title") == "Updated Paper"
     assert reparsed.stats()["comments"] == 1
     assert reparsed.stats()["preambles"] == 1
     assert reparsed.stats()["strings"] == 1

@@ -112,8 +112,8 @@ python3 -m venv /tmp/citerra-release-check
 /tmp/citerra-release-check/bin/python - <<'PY'
 import citerra
 
-document = citerra.parse('@article{paper, title = "Fast BibTeX"}')
-assert document.entry("paper").get("title") == "Fast BibTeX"
+document = citerra.parse('@article{paper, title = "Example Paper"}')
+assert document.entry("paper").get("title") == "Example Paper"
 print("ok")
 PY
 ```

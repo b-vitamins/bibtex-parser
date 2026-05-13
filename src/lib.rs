@@ -1,11 +1,10 @@
 #![deny(clippy::all)]
 //! # bibtex-parser
 //!
-//! Fast BibTeX parsing with a Rust-first [`Library`] API.
+//! BibTeX parsing with a Rust [`Library`] API.
 //!
-//! `bibtex-parser` is built for applications that need both throughput and a
-//! practical user-facing API: strict parsing by default, explicit tolerant
-//! recovery when a corpus is messy, string and month expansion, comments and
+//! `bibtex-parser` supports strict parsing by default, explicit tolerant
+//! recovery for malformed input, string and month expansion, comments and
 //! preambles, validation, query/edit helpers, and configurable writing.
 //!
 //! ## Features
@@ -28,7 +27,7 @@
 //!     @string{venue = "VLDB"}
 //!     @article{paper,
 //!         author = "Jane Doe and John Smith",
-//!         title = "Fast BibTeX",
+//!         title = "Example Paper",
 //!         journal = venue,
 //!         year = 2026
 //!     }
@@ -72,7 +71,7 @@
 //! ```
 //! use bibtex_parser::{Library, Writer, WriterConfig};
 //!
-//! let library = Library::parse(r#"@article{paper, title = "Fast BibTeX"}"#)?;
+//! let library = Library::parse(r#"@article{paper, title = "Example Paper"}"#)?;
 //! let mut output = Vec::new();
 //! let config = WriterConfig {
 //!     align_values: true,
@@ -95,7 +94,7 @@
 //!
 //! let input = r#"
 //!     % retained comment
-//!     @article{paper, title = "Fast BibTeX"}
+//!     @article{paper, title = "Example Paper"}
 //! "#;
 //!
 //! let document = Parser::new()

@@ -28,7 +28,7 @@ def main() -> None:
     print(f"bytes={len(text)}")
     print(f"iterations={args.iterations}")
     print(f"median_gb_s={statistics.median(measurements):.3f}")
-    print(f"best_gb_s={max(measurements):.3f}")
+    print(f"max_gb_s={max(measurements):.3f}")
 
 
 if __name__ == "__main__":

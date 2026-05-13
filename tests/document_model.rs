@@ -10,7 +10,7 @@ fn parsed_document_preserves_library_relationship_and_block_order() {
 @preamble{"preface"}
 % retained comment
 @article{paper,
-  title = "Fast BibTeX",
+  title = "Example Paper",
   journal = venue,
   year = 2026
 }
@@ -89,7 +89,7 @@ fn parsed_document_exposes_failed_blocks_and_diagnostics() {
 
 #[test]
 fn parsed_entry_round_trips_to_structured_entry() {
-    let input = r#"@article{paper, title = "Fast BibTeX", year = 2026}"#;
+    let input = r#"@article{paper, title = "Example Paper", year = 2026}"#;
     let document = Parser::new().parse_document(input).unwrap();
 
     let parsed_entry: ParsedEntry<'_> = document.entries()[0].clone();
@@ -97,5 +97,5 @@ fn parsed_entry_round_trips_to_structured_entry() {
 
     assert_eq!(structured.key(), "paper");
     assert_eq!(structured.fields().len(), 2);
-    assert_eq!(structured.get("title"), Some("Fast BibTeX"));
+    assert_eq!(structured.get("title"), Some("Example Paper"));
 }

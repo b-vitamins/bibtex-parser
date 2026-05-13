@@ -1,5 +1,5 @@
 // Performance benchmark suite for bibtex-parser
-// Follows best practices for reliable, reproducible benchmarking
+// Uses fixed Criterion settings for reproducible benchmarking.
 
 #![allow(clippy::too_many_lines)]
 
@@ -43,29 +43,29 @@ fn detect_benchmark_cpu() -> usize {
         return 0;
     };
 
-    let mut best_cpu = first_cpu;
-    let mut best_elapsed = Duration::MAX;
+    let mut selected_cpu = first_cpu;
+    let mut selected_elapsed = Duration::MAX;
 
     for cpu in candidate_cpus {
         set_thread_affinity(cpu);
 
         // A short empirical probe is more reliable on DVFS-heavy systems than
         // a single frequency snapshot from sysfs.
-        let mut fastest_probe = Duration::MAX;
+        let mut shortest_probe = Duration::MAX;
         for _ in 0..3 {
             let start = Instant::now();
             let library = Library::parser().parse(black_box(TUGBOAT_BIB)).unwrap();
             black_box(&library);
-            fastest_probe = fastest_probe.min(start.elapsed());
+            shortest_probe = shortest_probe.min(start.elapsed());
         }
 
-        if fastest_probe < best_elapsed {
-            best_elapsed = fastest_probe;
-            best_cpu = cpu;
+        if shortest_probe < selected_elapsed {
+            selected_elapsed = shortest_probe;
+            selected_cpu = cpu;
         }
     }
 
-    best_cpu
+    selected_cpu
 }
 
 #[cfg(target_os = "linux")]
@@ -91,7 +91,7 @@ fn collect_candidate_cpus() -> Vec<usize> {
             let siblings = siblings.trim().to_string();
 
             // Keep one representative per physical core and let the empirical
-            // probe decide which core is actually fastest.
+            // probe select a low-latency core for this benchmark run.
             if !seen_siblings.insert(siblings) {
                 continue;
             }
@@ -133,12 +133,11 @@ fn bench_parser_comparison(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("throughput");
 
-    // Configure for stable measurements
-    group.measurement_time(Duration::from_secs(20)); // Longer measurement time
-    group.warm_up_time(Duration::from_secs(12)); // Longer warmup for DVFS-heavy systems
-    group.sample_size(200); // More samples for statistics
-    group.significance_level(0.01); // Stricter significance testing
-    group.confidence_level(0.99); // Higher confidence requirement
+    group.measurement_time(Duration::from_secs(20));
+    group.warm_up_time(Duration::from_secs(12));
+    group.sample_size(200);
+    group.significance_level(0.01);
+    group.confidence_level(0.99);
     group.noise_threshold(0.02); // 2% noise threshold
 
     let input_bytes = TUGBOAT_BIB.len() as u64;
@@ -273,7 +272,7 @@ fn bench_writing(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark serde_bibtex parser - ignore mode (fastest, discards all data)
+/// Benchmark serde_bibtex parser - ignore mode (discards all data)
 fn bench_serde_bibtex_ignore(
     group: &mut criterion::BenchmarkGroup<criterion::measurement::WallTime>,
 ) {

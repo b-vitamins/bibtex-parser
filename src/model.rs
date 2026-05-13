@@ -34,7 +34,7 @@ pub enum ValidationSeverity {
     Error,
     /// Should be fixed but might work
     Warning,
-    /// Informational, best practices
+    /// Informational note
     Info,
 }
 
@@ -505,7 +505,7 @@ impl<'a> Entry<'a> {
             .map(|value| parse_date_parts(&value))
     }
 
-    /// Return the best available issued date parts for this entry.
+    /// Return issued date parts for this entry.
     ///
     /// `date`, `issued`, `eventdate`, `origdate`, and `urldate` are checked
     /// before falling back to `year` plus an optional `month` field.
@@ -761,13 +761,13 @@ impl<'a> Entry<'a> {
 
         // Author and editor shouldn't both be missing for some types (but not books, handled above)
         match self.ty {
-            EntryType::InBook | EntryType::InProceedings | EntryType::InCollection => {
-                if !self.has_any_field(&["author", "editor"]) {
-                    errors.push(ValidationError::warning(
-                        None,
-                        "Entry should have either 'author' or 'editor' field",
-                    ));
-                }
+            EntryType::InBook | EntryType::InProceedings | EntryType::InCollection
+                if !self.has_any_field(&["author", "editor"]) =>
+            {
+                errors.push(ValidationError::warning(
+                    None,
+                    "Entry should have either 'author' or 'editor' field",
+                ));
             }
             _ => {}
         }

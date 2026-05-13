@@ -2,7 +2,7 @@ use bibtex_parser::{Parser, SourceId, SourceMap};
 
 #[test]
 fn parsed_document_tracks_anonymous_and_named_sources() {
-    let input = r#"@article{paper, title = "Fast BibTeX"}"#;
+    let input = r#"@article{paper, title = "Example Paper"}"#;
 
     let anonymous = Parser::new().parse_document(input).unwrap();
     assert_eq!(anonymous.sources()[0].id, SourceId::new(0));

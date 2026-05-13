@@ -36,5 +36,5 @@ All notable changes to this project are documented here.
 ### Performance
 
 - Default strict parsing keeps the optimized sequential path.
-- Tolerant parsing and source-span capture use richer paths only when explicitly requested.
+- Tolerant parsing and source-span capture use separate paths only when explicitly requested.
 - Python bindings use the Rust parser core through a native extension.

@@ -81,10 +81,7 @@ fn expect_byte<'a>(input: &mut &'a str, byte: u8) -> PResult<'a, ()> {
 fn parse_fields<'a>(input: &mut &'a str, closing_delimiter: u8) -> PResult<'a, Vec<Field<'a>>> {
     let mut fields = Vec::with_capacity(DEFAULT_FIELD_CAPACITY);
 
-    loop {
-        let Some(first) = lexer::skip_whitespace_peek(input) else {
-            break;
-        };
+    while let Some(first) = lexer::skip_whitespace_peek(input) {
         if first == closing_delimiter {
             break;
         }

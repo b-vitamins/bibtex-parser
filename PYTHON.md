@@ -16,14 +16,14 @@ built as ABI3 extensions for Python 3.8 and newer.
 import citerra
 
 document = citerra.parse(
-    '@article{paper, author = "Jane Doe", title = "Fast BibTeX", year = 2026}',
+    '@article{paper, author = "Jane Doe", title = "Example Paper", year = 2026}',
     expand_values=True,
 )
 
 entry = document.entry("paper")
 assert entry is not None
 assert entry.entry_type == "article"
-assert entry.get("title") == "Fast BibTeX"
+assert entry.get("title") == "Example Paper"
 assert entry.date_parts().year == 2026
 ```
 
@@ -135,6 +135,6 @@ Recorded on this workspace for the default source-preserving Python parse mode:
 path=tests/fixtures/tugboat.bib
 bytes=2701551
 iterations=20
-median_gb_s=0.060
-best_gb_s=0.062
+median_gb_s=0.053
+max_gb_s=0.057
 ```

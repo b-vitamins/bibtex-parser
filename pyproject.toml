@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "citerra"
 version = "0.2.0"
-description = "Native Python API for the bibtex-parser Rust core"
+description = "Python API for the bibtex-parser Rust core"
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT OR Apache-2.0" }
