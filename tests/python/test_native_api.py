@@ -115,7 +115,7 @@ def test_unmodified_document_writes_preserved_source_text() -> None:
 
 def test_structured_parse_can_skip_source_capture_and_project_records() -> None:
     text = """@string{venue = "VLDB"}
-@article{paper, title = venue, month = jan, year = 2026}"""
+@article{paper, author = "Jos\\'e", title = venue, month = jan, year = 2026}"""
 
     document = citerra.parse(text, capture_source=False, preserve_raw=False)
     entry = document.entry("paper")
@@ -128,6 +128,7 @@ def test_structured_parse_can_skip_source_capture_and_project_records() -> None:
         {
             "ENTRYTYPE": "article",
             "ID": "paper",
+            "author": "Jos\\'e",
             "title": "venue",
             "month": "jan",
             "year": "2026",
@@ -143,6 +144,17 @@ def test_structured_parse_can_skip_source_capture_and_project_records() -> None:
     )
     assert expanded.entry("paper").get("title") == "VLDB"
     assert expanded.entry("paper").get("month") == "January"
+
+    expanded_unicode = citerra.parse(
+        text,
+        capture_source=False,
+        preserve_raw=False,
+        expand_values=True,
+        latex_to_unicode=True,
+    )
+    assert expanded_unicode.entry("paper").get("author") == "José"
+    assert expanded_unicode.entry("paper").get("title") == "VLDB"
+    assert expanded_unicode.entry("paper").get("month") == "January"
 
 
 def test_plain_record_helpers_cover_rebuild_and_selected_entry_workflows() -> None:

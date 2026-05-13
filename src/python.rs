@@ -1548,7 +1548,10 @@ fn value_from_py(value: &Bound<'_, PyAny>) -> PyResult<Value<'static>> {
 fn apply_latex_to_unicode(document: &mut ParsedDocument<'static>) -> PyResult<()> {
     for entry in document.entries_mut() {
         for field in &mut entry.fields {
-            let text = latex_to_unicode(&field.value.value.to_plain_string())?;
+            let text = match field.value.expanded.as_deref() {
+                Some(expanded) => latex_to_unicode(expanded)?,
+                None => latex_to_unicode(&field.value.value.to_plain_string())?,
+            };
             field.value.value = Value::Literal(Cow::Owned(text));
             field.value.raw = None;
             field.value.expanded = None;
