@@ -98,6 +98,38 @@ def test_semantic_text_deindents_wrapped_lines_but_keeps_raw_value() -> None:
     )
 
 
+def test_structured_parse_can_skip_source_capture_and_project_records() -> None:
+    text = """@string{venue = "VLDB"}
+@article{paper, title = venue, month = jan, year = 2026}"""
+
+    document = citerra.parse(text, capture_source=False, preserve_raw=False)
+    entry = document.entry("paper")
+
+    assert entry.source is None
+    assert entry.field("title").raw_value is None
+    assert entry.get("title") == "venue"
+    assert entry.get("month") == "jan"
+    assert document.to_dicts() == [
+        {
+            "ENTRYTYPE": "article",
+            "ID": "paper",
+            "title": "venue",
+            "month": "jan",
+            "year": "2026",
+        }
+    ]
+    assert citerra.document_to_dicts(document) == document.to_dicts()
+
+    expanded = citerra.parse(
+        text,
+        capture_source=False,
+        preserve_raw=False,
+        expand_values=True,
+    )
+    assert expanded.entry("paper").get("title") == "VLDB"
+    assert expanded.entry("paper").get("month") == "January"
+
+
 def test_plain_record_helpers_cover_rebuild_and_selected_entry_workflows() -> None:
     document = citerra.parse(
         """@comment{keep}

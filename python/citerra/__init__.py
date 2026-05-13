@@ -24,6 +24,7 @@ from ._native import (
     ValidationIssue,
     Value,
     WriterConfig,
+    _document_to_dicts,
     latex_to_unicode,
     normalize_doi,
     parse_date,
@@ -125,7 +126,7 @@ def entry_to_dict(entry: Entry) -> dict[str, str]:
 
 def document_to_dicts(document: Document) -> list[dict[str, str]]:
     """Project all entries into plain records in document order."""
-    return [entry_to_dict(entry) for entry in document.entries]
+    return _document_to_dicts(document)
 
 
 def document_from_entries(

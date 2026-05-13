@@ -20,7 +20,7 @@ use crate::{
 };
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict, PyModule, PyType};
+use pyo3::types::{PyAny, PyDict, PyList, PyModule, PyType};
 use std::borrow::Cow;
 
 pyo3::create_exception!(_native, BibtexParserError, pyo3::exceptions::PyException);
@@ -47,6 +47,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parse_text, m)?)?;
     m.add_function(wrap_pyfunction!(parse_file, m)?)?;
     m.add_function(wrap_pyfunction!(write, m)?)?;
+    m.add_function(wrap_pyfunction!(document_to_dicts_py, m)?)?;
     m.add_function(wrap_pyfunction!(normalize_doi_py, m)?)?;
     m.add_function(wrap_pyfunction!(parse_names_py, m)?)?;
     m.add_function(wrap_pyfunction!(parse_date_py, m)?)?;
@@ -135,14 +136,19 @@ impl PyParser {
     }
 
     #[pyo3(signature = (text, source=None))]
-    fn parse(&self, text: &str, source: Option<String>) -> PyResult<PyDocument> {
-        parse_document_with_options(self, text, source)
+    fn parse(&self, py: Python<'_>, text: &str, source: Option<String>) -> PyResult<PyDocument> {
+        let options = self.clone();
+        py.detach(move || parse_document_with_options(&options, text, source))
     }
 
     #[pyo3(signature = (path))]
-    fn parse_file(&self, path: &str) -> PyResult<PyDocument> {
-        let text = std::fs::read_to_string(path).map_err(map_error)?;
-        self.parse(&text, Some(path.to_string()))
+    fn parse_file(&self, py: Python<'_>, path: &str) -> PyResult<PyDocument> {
+        let options = self.clone();
+        let path = path.to_string();
+        py.detach(move || {
+            let text = std::fs::read_to_string(&path).map_err(map_error)?;
+            parse_document_with_options(&options, &text, Some(path))
+        })
     }
 
     fn __repr__(&self) -> String {
@@ -285,6 +291,10 @@ impl PyDocument {
             .collect()
     }
 
+    fn to_dicts<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        document_to_dicts_for_py(py, &self.inner)
+    }
+
     fn rename_key(&mut self, old: &str, new: String) -> bool {
         self.inner.rename_key(old, Cow::Owned(new))
     }
@@ -335,13 +345,16 @@ impl PyDocument {
     }
 
     #[pyo3(signature = (config=None))]
-    fn write(&self, config: Option<&PyWriterConfig>) -> PyResult<String> {
-        write_document(&self.inner, config.map(PyWriterConfig::to_rust))
+    fn write(&self, py: Python<'_>, config: Option<&PyWriterConfig>) -> PyResult<String> {
+        let config = config.map(PyWriterConfig::to_rust);
+        py.detach(move || write_document(&self.inner, config))
     }
 
-    fn write_selected(&self, keys: Vec<String>) -> PyResult<String> {
-        let borrowed = keys.iter().map(String::as_str).collect::<Vec<_>>();
-        selected_entries_to_string(&self.inner, &borrowed).map_err(map_error)
+    fn write_selected(&self, py: Python<'_>, keys: Vec<String>) -> PyResult<String> {
+        py.detach(move || {
+            let borrowed = keys.iter().map(String::as_str).collect::<Vec<_>>();
+            selected_entries_to_string(&self.inner, &borrowed).map_err(map_error)
+        })
     }
 
     #[pyo3(signature = (level="standard"))]
@@ -1152,6 +1165,7 @@ impl From<ResourceField> for PyResourceField {
 #[pyfunction]
 #[pyo3(signature = (text, tolerant=false, capture_source=true, preserve_raw=true, expand_values=false, latex_to_unicode=false, source=None))]
 fn parse_text(
+    py: Python<'_>,
     text: &str,
     tolerant: bool,
     capture_source: bool,
@@ -1167,12 +1181,13 @@ fn parse_text(
         expand_values,
         latex_to_unicode,
     );
-    parser.parse(text, source)
+    py.detach(move || parse_document_with_options(&parser, text, source))
 }
 
 #[pyfunction]
 #[pyo3(signature = (path, tolerant=false, capture_source=true, preserve_raw=true, expand_values=false, latex_to_unicode=false))]
 fn parse_file(
+    py: Python<'_>,
     path: &str,
     tolerant: bool,
     capture_source: bool,
@@ -1187,13 +1202,30 @@ fn parse_file(
         expand_values,
         latex_to_unicode,
     );
-    parser.parse_file(path)
+    let path = path.to_string();
+    py.detach(move || {
+        let text = std::fs::read_to_string(&path).map_err(map_error)?;
+        parse_document_with_options(&parser, &text, Some(path))
+    })
 }
 
 #[pyfunction]
 #[pyo3(signature = (document, config=None))]
-fn write(document: &PyDocument, config: Option<&PyWriterConfig>) -> PyResult<String> {
-    document.write(config)
+fn write(
+    py: Python<'_>,
+    document: &PyDocument,
+    config: Option<&PyWriterConfig>,
+) -> PyResult<String> {
+    let config = config.map(PyWriterConfig::to_rust);
+    py.detach(move || write_document(&document.inner, config))
+}
+
+#[pyfunction(name = "_document_to_dicts")]
+fn document_to_dicts_py<'py>(
+    py: Python<'py>,
+    document: &PyDocument,
+) -> PyResult<Bound<'py, PyList>> {
+    document_to_dicts_for_py(py, &document.inner)
 }
 
 #[pyfunction(name = "normalize_doi")]
@@ -1240,7 +1272,9 @@ fn parse_document_with_options(
         parser = parser.expand_values();
     }
 
-    let document = if let Some(source) = source {
+    let document = if !options.tolerant && !options.capture_source && !options.preserve_raw {
+        parser.parse_compact_document(source.map(Cow::Owned), text)
+    } else if let Some(source) = source {
         parser.parse_source(source, text)
     } else {
         parser.parse_document(text)
@@ -1266,6 +1300,23 @@ fn write_document(
     } else {
         document_to_string(document).map_err(map_error)
     }
+}
+
+fn document_to_dicts_for_py<'py>(
+    py: Python<'py>,
+    document: &ParsedDocument<'_>,
+) -> PyResult<Bound<'py, PyList>> {
+    let records = PyList::empty(py);
+    for entry in document.entries() {
+        let record = PyDict::new(py);
+        record.set_item("ENTRYTYPE", entry.ty.to_string())?;
+        record.set_item("ID", entry.key())?;
+        for field in &entry.fields {
+            record.set_item(field.name.as_ref(), field_text(field))?;
+        }
+        records.append(record)?;
+    }
+    Ok(records)
 }
 
 fn value_from_py(value: &Bound<'_, PyAny>) -> PyResult<Value<'static>> {

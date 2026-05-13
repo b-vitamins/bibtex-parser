@@ -1150,6 +1150,29 @@ impl<'a> ParsedDocument<'a> {
         }
     }
 
+    pub(crate) const fn from_parsed_parts(
+        library: Library<'a>,
+        sources: Vec<ParsedSource<'a>>,
+        entries: Vec<ParsedEntry<'a>>,
+        strings: Vec<ParsedString<'a>>,
+        preambles: Vec<ParsedPreamble<'a>>,
+        comments: Vec<ParsedComment<'a>>,
+        blocks: Vec<ParsedBlock>,
+    ) -> Self {
+        Self {
+            library,
+            sources,
+            entries,
+            strings,
+            preambles,
+            comments,
+            failed_blocks: Vec::new(),
+            blocks,
+            diagnostics: Vec::new(),
+            status: ParseStatus::Ok,
+        }
+    }
+
     pub(crate) fn apply_entry_locations(
         &mut self,
         entry_index: usize,
@@ -1264,6 +1287,41 @@ impl<'a> ParsedDocument<'a> {
                 }
                 RawBuildItem::Parsed(crate::parser::ParsedItem::Comment(_), _, _)
                 | RawBuildItem::Failed(_) => {}
+            }
+        }
+    }
+
+    pub(crate) fn apply_parsed_items(&mut self, items: &[crate::parser::ParsedItem<'a>]) {
+        let mut entry_index = 0;
+        let mut string_index = 0;
+        let mut preamble_index = 0;
+
+        for item in items {
+            match item {
+                crate::parser::ParsedItem::Entry(raw_entry) => {
+                    if let Some(entry) = self.entries.get_mut(entry_index) {
+                        for (field, raw_field) in entry.fields.iter_mut().zip(&raw_entry.fields) {
+                            field.value.value = raw_field.value.clone();
+                            field.value.expanded = None;
+                        }
+                    }
+                    entry_index += 1;
+                }
+                crate::parser::ParsedItem::String(_, value) => {
+                    if let Some(parsed) = self.strings.get_mut(string_index) {
+                        parsed.value.value = value.clone();
+                        parsed.value.expanded = None;
+                    }
+                    string_index += 1;
+                }
+                crate::parser::ParsedItem::Preamble(value) => {
+                    if let Some(parsed) = self.preambles.get_mut(preamble_index) {
+                        parsed.value.value = value.clone();
+                        parsed.value.expanded = None;
+                    }
+                    preamble_index += 1;
+                }
+                crate::parser::ParsedItem::Comment(_) => {}
             }
         }
     }

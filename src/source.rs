@@ -84,7 +84,12 @@ impl<'a> SourceMap<'a> {
             Err(index) => index - 1,
         };
         let line_start = self.line_starts[line_index];
-        let column = self.input[line_start..byte].chars().count() + 1;
+        let line_prefix = &self.input[line_start..byte];
+        let column = if line_prefix.is_ascii() {
+            byte - line_start + 1
+        } else {
+            line_prefix.chars().count() + 1
+        };
         (line_index + 1, column)
     }
 

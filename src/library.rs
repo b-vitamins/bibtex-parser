@@ -2,7 +2,7 @@
 
 use crate::{
     canonical_biblatex_field_alias, normalize_doi, CorpusEvent, CorpusSource, Entry, Error,
-    ParseEvent, ParseFlow, ParsedComment, ParsedCorpus, ParsedDocument, ParsedEntry,
+    ParseEvent, ParseFlow, ParsedBlock, ParsedComment, ParsedCorpus, ParsedDocument, ParsedEntry,
     ParsedFailedBlock, ParsedPreamble, ParsedSource, ParsedString, Result, SourceId, SourceMap,
     SourceSpan, StreamingSummary, ValidationError, ValidationLevel, Value,
 };
@@ -778,6 +778,132 @@ impl Parser {
         if self.tolerant {
             document.recover_partial_entries(&source_map, self.document.preserve_raw);
         }
+        if self.document.expand_values {
+            document.populate_expanded_values(crate::ExpansionOptions::default())?;
+        }
+        Ok(document)
+    }
+
+    pub(crate) fn parse_compact_document<'a>(
+        &self,
+        source_name: Option<Cow<'a, str>>,
+        input: &'a str,
+    ) -> Result<ParsedDocument<'a>> {
+        self.parse_document_without_source(SourceId::new(0), source_name, input)
+    }
+
+    fn parse_document_without_source<'a>(
+        &self,
+        source_id: SourceId,
+        source_name: Option<Cow<'a, str>>,
+        input: &'a str,
+    ) -> Result<ParsedDocument<'a>> {
+        let sources = vec![ParsedSource {
+            id: source_id,
+            name: source_name,
+        }];
+        let input_scan = scan_input(input);
+        if !input_scan.may_contain_string_definition {
+            return self.parse_document_without_source_no_strings(sources, input, input_scan);
+        }
+
+        let items = crate::parser::parse_bibtex(input)?;
+        let library = match Library::from_parsed_items(items.clone()) {
+            Ok(library) => library,
+            Err(Error::UndefinedVariable(_) | Error::CircularReference(_))
+                if !self.document.expand_values =>
+            {
+                Library::from_parsed_items_unexpanded(items.clone())
+            }
+            Err(error) => return Err(error),
+        };
+        let mut document = ParsedDocument::from_library_with_sources(library, sources);
+        document.apply_parsed_items(&items);
+        if self.document.expand_values {
+            document.populate_expanded_values(crate::ExpansionOptions::default())?;
+        }
+        Ok(document)
+    }
+
+    fn parse_document_without_source_no_strings<'a>(
+        &self,
+        sources: Vec<ParsedSource<'a>>,
+        input: &'a str,
+        input_scan: InputScan,
+    ) -> Result<ParsedDocument<'a>> {
+        let mut library = Library::new();
+        library.entries.reserve(input_scan.at_count);
+        library.block_order.reserve(input_scan.at_count);
+
+        let mut entries = Vec::with_capacity(input_scan.at_count);
+        let mut strings = Vec::new();
+        let mut preambles = Vec::new();
+        let mut comments = Vec::new();
+        let mut blocks = Vec::with_capacity(input_scan.at_count);
+
+        let has_user_strings = false;
+        let month_constants_shadowed = false;
+        let mut expanded_variables = ExpansionCache::with_capacity(0);
+        let mut expansion_stack = Vec::new();
+        let mut concat_cache = ConcatCache::new();
+
+        crate::parser::parse_bibtex_stream(input, |item| {
+            match item {
+                crate::parser::ParsedItem::Entry(entry) => {
+                    let mut expanded = entry.clone();
+                    for field in &mut expanded.fields {
+                        library.expand_value_for_parse(
+                            &mut field.value,
+                            has_user_strings,
+                            month_constants_shadowed,
+                            &mut expanded_variables,
+                            &mut expansion_stack,
+                            &mut concat_cache,
+                        )?;
+                    }
+                    let index = library.entries.len();
+                    library.push_entry_with_source(expanded, None);
+                    entries.push(ParsedEntry::from_entry(entry, None));
+                    blocks.push(ParsedBlock::Entry(index));
+                }
+                crate::parser::ParsedItem::Preamble(value) => {
+                    let mut expanded = value.clone();
+                    library.expand_value_for_parse(
+                        &mut expanded,
+                        has_user_strings,
+                        month_constants_shadowed,
+                        &mut expanded_variables,
+                        &mut expansion_stack,
+                        &mut concat_cache,
+                    )?;
+                    let index = library.preambles.len();
+                    library.push_preamble_with_source(expanded, None);
+                    preambles.push(ParsedPreamble::from_preamble(Preamble::new(value)));
+                    blocks.push(ParsedBlock::Preamble(index));
+                }
+                crate::parser::ParsedItem::Comment(text) => {
+                    let index = library.comments.len();
+                    library.push_comment_with_source(Cow::Borrowed(text), None);
+                    comments.push(ParsedComment::from_comment(Comment::new(text)));
+                    blocks.push(ParsedBlock::Comment(index));
+                }
+                crate::parser::ParsedItem::String(name, value) => {
+                    let index = library.strings.len();
+                    library.push_string_with_source(Cow::Borrowed(name), value.clone(), None);
+                    strings.push(ParsedString::from_definition(StringDefinition {
+                        name: Cow::Borrowed(name),
+                        value,
+                        source: None,
+                    }));
+                    blocks.push(ParsedBlock::String(index));
+                }
+            }
+            Ok(())
+        })?;
+
+        let mut document = ParsedDocument::from_parsed_parts(
+            library, sources, entries, strings, preambles, comments, blocks,
+        );
         if self.document.expand_values {
             document.populate_expanded_values(crate::ExpansionOptions::default())?;
         }
@@ -1610,6 +1736,85 @@ impl<'a> Library<'a> {
                     library.push_comment_with_source(Cow::Borrowed(text), Some(span));
                 }
                 RawBuildItem::Failed(failed) => library.push_failed_block(failed),
+            }
+        }
+
+        library
+    }
+
+    fn from_parsed_items(items: Vec<crate::parser::ParsedItem<'a>>) -> Result<Self> {
+        let mut library = Self::new();
+
+        for item in &items {
+            if let crate::parser::ParsedItem::String(name, value) = item {
+                library.register_string_definition(Cow::Borrowed(name), value.clone(), None);
+            }
+        }
+
+        let has_user_strings = !library.strings.is_empty();
+        let month_constants_shadowed =
+            has_user_strings && user_strings_shadow_month_constants(&library.strings);
+        let mut expanded_variables = ExpansionCache::with_capacity(library.strings.len());
+        let mut expansion_stack = Vec::new();
+        let mut concat_cache = ConcatCache::new();
+        let mut string_index = 0;
+
+        for item in items {
+            match item {
+                crate::parser::ParsedItem::Entry(mut entry) => {
+                    for field in &mut entry.fields {
+                        library.expand_value_for_parse(
+                            &mut field.value,
+                            has_user_strings,
+                            month_constants_shadowed,
+                            &mut expanded_variables,
+                            &mut expansion_stack,
+                            &mut concat_cache,
+                        )?;
+                    }
+                    library.push_entry_with_source(entry, None);
+                }
+                crate::parser::ParsedItem::String(_, _) => {
+                    library.block_order.push(BlockKind::String(string_index));
+                    string_index += 1;
+                }
+                crate::parser::ParsedItem::Preamble(mut value) => {
+                    library.expand_value_for_parse(
+                        &mut value,
+                        has_user_strings,
+                        month_constants_shadowed,
+                        &mut expanded_variables,
+                        &mut expansion_stack,
+                        &mut concat_cache,
+                    )?;
+                    library.push_preamble_with_source(value, None);
+                }
+                crate::parser::ParsedItem::Comment(text) => {
+                    library.push_comment_with_source(Cow::Borrowed(text), None);
+                }
+            }
+        }
+
+        Ok(library)
+    }
+
+    fn from_parsed_items_unexpanded(items: Vec<crate::parser::ParsedItem<'a>>) -> Self {
+        let mut library = Self::new();
+
+        for item in items {
+            match item {
+                crate::parser::ParsedItem::Entry(entry) => {
+                    library.push_entry_with_source(entry, None);
+                }
+                crate::parser::ParsedItem::String(name, value) => {
+                    library.push_string_with_source(Cow::Borrowed(name), value, None);
+                }
+                crate::parser::ParsedItem::Preamble(value) => {
+                    library.push_preamble_with_source(value, None);
+                }
+                crate::parser::ParsedItem::Comment(text) => {
+                    library.push_comment_with_source(Cow::Borrowed(text), None);
+                }
             }
         }
 
