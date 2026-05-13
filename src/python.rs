@@ -1279,7 +1279,7 @@ fn value_from_py(value: &Bound<'_, PyAny>) -> PyResult<Value<'static>> {
         return Ok(Value::Number(number));
     }
     Err(PyTypeError::new_err(
-        "expected a bibtex_parser.Value, str, or int",
+        "expected a citerra.Value, str, or int",
     ))
 }
 

@@ -5,7 +5,7 @@ import statistics
 import time
 from pathlib import Path
 
-import bibtex_parser
+import citerra
 
 
 def main() -> None:
@@ -19,7 +19,7 @@ def main() -> None:
     measurements = []
     for _ in range(args.iterations):
         start = time.perf_counter()
-        document = bibtex_parser.parse(text, tolerant=args.tolerant)
+        document = citerra.parse(text, tolerant=args.tolerant)
         elapsed = time.perf_counter() - start
         measurements.append(len(text) / elapsed / 1_000_000_000)
         assert len(document.entries) > 0

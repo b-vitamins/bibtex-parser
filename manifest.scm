@@ -7,6 +7,7 @@
    "maturin"
    "python-pytest"
    "python-rich"
+   "actionlint"
    "git"
    "make"
    "coreutils"

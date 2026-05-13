@@ -3,6 +3,17 @@
 **/*.rs.bk
 *.pdb
 
+# Python build and test artifacts
+/dist/
+/wheelhouse/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+__pycache__/
+*.py[cod]
+
 # Cargo lock file (comment out if this is a library)
 # Cargo.lock
 

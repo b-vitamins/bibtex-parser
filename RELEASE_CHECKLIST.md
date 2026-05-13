@@ -1,21 +1,50 @@
 # Release Checklist
 
-Run these gates before cutting a release:
+This checklist is for publishing a coordinated Rust crate and Python package
+release.
+
+## One-Time Repository Setup
+
+- GitHub branch protection should require the `CI` workflow on `master`.
+- Create a GitHub environment named `crates-io`.
+- Add `CARGO_REGISTRY_TOKEN` to the `crates-io` environment secrets.
+- Create a GitHub environment named `pypi`.
+- Configure PyPI Trusted Publishing for:
+  - owner: `b-vitamins`
+  - repository: `bibtex-parser`
+  - workflow: `release.yml`
+  - environment: `pypi`
+- Confirm the PyPI project name is `citerra`.
+
+The release workflow uses PyPI Trusted Publishing through OIDC. It does not
+need a PyPI password or long-lived PyPI token when the publisher is configured.
+
+## Pre-Release Local Gates
+
+Run these from a clean worktree before tagging:
 
 ```sh
+git status --short
 cargo fmt --all -- --check
+guix shell -m manifest.scm -- actionlint
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-features
 cargo test --all-features -- --ignored
 cargo bench --all-features --no-run
-cargo bench --bench performance --all-features
+cargo package --locked
+cargo publish --dry-run --locked
+```
+
+Build and test the Python wheel locally:
+
+```sh
+rm -rf target/wheels target/python-test
 guix shell -m manifest.scm -- maturin build --release --out target/wheels
-rm -rf target/python-test
 python3 - <<'PY'
 from pathlib import Path
 from zipfile import ZipFile
 
-wheel = sorted(Path("target/wheels").glob("bibtex_parser-*.whl"))[-1]
+wheel = sorted(Path("target/wheels").glob("citerra-*.whl"))[-1]
 target = Path("target/python-test")
 target.mkdir(parents=True, exist_ok=True)
 with ZipFile(wheel) as archive:
@@ -24,23 +53,75 @@ PY
 guix shell -m manifest.scm -- env PYTHONPATH=target/python-test python3 -m pytest tests/python
 ```
 
-The default test suite covers strict parsing, tolerant recovery, diagnostics,
-source locations, raw preservation, value views, low-churn writing, editing
-helpers, semantic helpers, streaming, multi-file corpus parsing, and
-parse-write-parse safety.
+Check package contents:
 
-The ignored tests in `tests/tooling_regression_corpus.rs` are release-scale
-stress checks for hundred-thousand-entry collection and million-entry streaming
-workloads. They are intentionally excluded from routine test runs.
+```sh
+cargo package --locked --list
+python3 - <<'PY'
+from pathlib import Path
+from zipfile import ZipFile
 
-Criterion reports release-critical modes separately:
+wheel = sorted(Path("target/wheels").glob("citerra-*.whl"))[-1]
+with ZipFile(wheel) as archive:
+    for name in archive.namelist():
+        if name.endswith(("METADATA", "WHEEL")) or name.startswith("citerra/"):
+            print(name)
+PY
+```
 
-- `throughput/bibtex-parser`
-- `throughput/bibtex-parser-tolerant`
-- `throughput/bibtex-parser-source-preserving`
-- `throughput/bibtex-parser-streaming`
-- `writing/library_to_string`
-- `writing/raw_document_to_string`
-- `corpus/parse_sources`
+The crate package should not contain local caches, virtual environments, build
+artifacts, editor files, or generated benchmark reports.
 
-Python benchmark results are recorded in `PYTHON.md`.
+## Version And Changelog
+
+- `Cargo.toml` and `pyproject.toml` must have the same version.
+- `Cargo.lock` must reflect the package version.
+- `CHANGELOG.md` must have an entry for the release.
+- `README.md` install snippets must reference the intended minor version.
+- The tag must be exactly `vX.Y.Z` for package version `X.Y.Z`.
+
+## Release
+
+After the final release-prep commit is on `master`:
+
+```sh
+git pull --ff-only origin master
+git tag -a v0.2.0 -m "Release v0.2.0"
+git push origin master
+git push origin v0.2.0
+```
+
+Pushing the tag runs `.github/workflows/release.yml`. The workflow:
+
+- validates version metadata and release gates
+- builds the Rust crate package
+- builds the Python source distribution
+- builds ABI3 wheels for Linux x86_64, Linux aarch64, macOS x86_64,
+  macOS aarch64, and Windows x64
+- creates a GitHub release with all Python artifacts
+- publishes the Rust crate to crates.io
+- publishes the Python distribution to PyPI
+
+## Post-Release Verification
+
+```sh
+cargo search bibtex-parser
+python3 -m venv /tmp/citerra-release-check
+/tmp/citerra-release-check/bin/python -m pip install --upgrade pip
+/tmp/citerra-release-check/bin/python -m pip install citerra==0.2.0
+/tmp/citerra-release-check/bin/python - <<'PY'
+import citerra
+
+document = citerra.parse('@article{paper, title = "Fast BibTeX"}')
+assert document.entry("paper").get("title") == "Fast BibTeX"
+print("ok")
+PY
+```
+
+Confirm:
+
+- GitHub release exists and has wheels plus source distribution.
+- crates.io shows the new crate version.
+- docs.rs successfully builds the new docs.
+- PyPI shows the new Python version.
+- `pip install citerra` works on a fresh environment.

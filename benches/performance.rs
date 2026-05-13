@@ -1,4 +1,4 @@
-// High-quality performance benchmark suite for bibtex-parser
+// Performance benchmark suite for bibtex-parser
 // Follows best practices for reliable, reproducible benchmarking
 
 #![allow(clippy::too_many_lines)]
@@ -133,7 +133,7 @@ fn bench_parser_comparison(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("throughput");
 
-    // Configure for high-quality measurements
+    // Configure for stable measurements
     group.measurement_time(Duration::from_secs(20)); // Longer measurement time
     group.warm_up_time(Duration::from_secs(12)); // Longer warmup for DVFS-heavy systems
     group.sample_size(200); // More samples for statistics

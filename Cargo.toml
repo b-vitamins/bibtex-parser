@@ -1,6 +1,6 @@
 [package]
 name = "bibtex-parser"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.75"
 authors = ["Ayan Das <bvits@riseup.net>"]
@@ -13,18 +13,18 @@ keywords = ["bibtex", "parser", "latex", "bibliography", "citation"]
 categories = ["parser-implementations", "text-processing"]
 license = "MIT OR Apache-2.0"
 include = [
-    "Cargo.toml",
-    "README.md",
-    "LICENSE",
-    "CHANGELOG.md",
-    "PYTHON.md",
-    "RELEASE_CHECKLIST.md",
-    "src/**",
-    "examples/**",
-    "benches/**",
-    "tests/**",
-    "python/**",
-    "pyproject.toml",
+    "/Cargo.toml",
+    "/README.md",
+    "/LICENSE",
+    "/CHANGELOG.md",
+    "/PYTHON.md",
+    "/RELEASE_CHECKLIST.md",
+    "/src/**",
+    "/examples/**",
+    "/benches/**",
+    "/tests/**",
+    "/python/**",
+    "/pyproject.toml",
 ]
 
 [lib]

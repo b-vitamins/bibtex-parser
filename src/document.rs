@@ -1,6 +1,6 @@
 //! Tooling-oriented parsed bibliography model.
 //!
-//! [`Library`](crate::Library) remains the compact, ergonomic API for normal
+//! [`Library`] remains the compact, ergonomic API for normal
 //! bibliography work. [`ParsedDocument`] is the richer model for tools that
 //! need source-order blocks, per-item metadata, retained raw text, diagnostics,
 //! or partial parse results.

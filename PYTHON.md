@@ -1,58 +1,58 @@
 # Python API
 
-`bibtex-parser` exposes the native Rust document model to Python through PyO3
-and maturin. The package name is `bibtex_parser`.
-
-## Build
-
-Use the project manifest for local development:
+The Python package is named `citerra` on PyPI and imported as
+`citerra`.
 
 ```sh
-guix shell -m manifest.scm -- maturin build --release --out target/wheels
+pip install citerra
 ```
 
-For local tests without installing through pip, unpack the built wheel into a
-temporary import directory and run pytest with that directory on `PYTHONPATH`:
+The package exposes the native Rust document model through PyO3. Wheels are
+built as ABI3 extensions for Python 3.8 and newer.
 
-```sh
-rm -rf target/python-test
-python3 - <<'PY'
-from pathlib import Path
-from zipfile import ZipFile
-
-wheel = sorted(Path("target/wheels").glob("bibtex_parser-*.whl"))[-1]
-target = Path("target/python-test")
-target.mkdir(parents=True, exist_ok=True)
-with ZipFile(wheel) as archive:
-    archive.extractall(target)
-PY
-guix shell -m manifest.scm -- env PYTHONPATH=target/python-test python3 -m pytest tests/python
-```
-
-## Parse And Inspect
+## Parse
 
 ```python
-import bibtex_parser
+import citerra
 
-document = bibtex_parser.parse(
+document = citerra.parse(
     '@article{paper, author = "Jane Doe", title = "Fast BibTeX", year = 2026}',
     expand_values=True,
 )
 
 entry = document.entry("paper")
+assert entry is not None
 assert entry.entry_type == "article"
 assert entry.get("title") == "Fast BibTeX"
 assert entry.date_parts().year == 2026
 ```
 
-## Tolerant Parsing
+File-like helpers are available:
 
 ```python
-document = bibtex_parser.parse(text, tolerant=True)
+with open("references.bib", encoding="utf-8") as handle:
+    document = citerra.load(handle, tolerant=True)
 
-if document.status != "ok":
-    for diagnostic in document.diagnostics:
-        print(diagnostic.code, diagnostic.message, diagnostic.source)
+text = citerra.dumps(document)
+```
+
+## Tolerant Parsing And Diagnostics
+
+```python
+document = citerra.parse(
+    text,
+    tolerant=True,
+    capture_source=True,
+    preserve_raw=True,
+    source="refs/main.bib",
+)
+
+for diagnostic in document.diagnostics:
+    span = diagnostic.source
+    if span is None:
+        print(diagnostic.code, diagnostic.message)
+    else:
+        print(diagnostic.code, span.line, span.column, diagnostic.message)
 ```
 
 ## Mutate And Write
@@ -62,20 +62,64 @@ document.rename_key("paper", "paper-v2")
 document.set_field("paper-v2", "note", "accepted")
 document.remove_export_fields(["abstract", "keywords"])
 
-output = document.write()
+config = citerra.WriterConfig(
+    preserve_raw=True,
+    trailing_comma=True,
+)
+output = document.write(config)
 ```
 
 Use `WriterConfig(preserve_raw=True)` for low-churn source-preserving output and
 `WriterConfig(preserve_raw=False)` for normalized structured output.
 
+## Plain Records
+
+```python
+records = citerra.document_to_dicts(document)
+records.sort(key=lambda record: record.get("year", ""))
+
+text = citerra.write_entries(
+    records,
+    field_order=["author", "title", "journal", "year", "doi"],
+    sort_by=["ID"],
+)
+```
+
 ## Helpers
 
 ```python
-assert bibtex_parser.normalize_doi("https://doi.org/10.1000/XYZ.") == "10.1000/xyz"
-assert bibtex_parser.latex_to_unicode("Jos\\'e") == "José"
+assert citerra.normalize_doi("https://doi.org/10.1000/XYZ.") == "10.1000/xyz"
+assert citerra.latex_to_unicode("Jos\\'e") == "José"
 
-names = bibtex_parser.parse_names("Jane Doe and {Research Group}")
+names = citerra.parse_names("Jane Doe and {Research Group}")
 assert names[1].literal == "Research Group"
+```
+
+## Local Build
+
+Use the project manifest for local development:
+
+```sh
+guix shell -m manifest.scm -- maturin build --release --out target/wheels
+```
+
+For local tests without installing into the user environment, unpack the built
+wheel into a temporary import directory and run pytest with that directory on
+`PYTHONPATH`:
+
+```sh
+rm -rf target/python-test
+python3 - <<'PY'
+from pathlib import Path
+from zipfile import ZipFile
+
+wheel = sorted(Path("target/wheels").glob("citerra-*.whl"))[-1]
+target = Path("target/python-test")
+target.mkdir(parents=True, exist_ok=True)
+with ZipFile(wheel) as archive:
+    archive.extractall(target)
+PY
+guix shell -m manifest.scm -- env PYTHONPATH=target/python-test python3 -m pytest tests/python
 ```
 
 ## Benchmark
