@@ -33,4 +33,4 @@ Implemented core capabilities:
 - No network metadata fetching.
 - No full Biber engine.
 - No default heavyweight LaTeX parser.
-- No compatibility aliases for pre-release API names.
+- No aliases for abandoned pre-release API names.

@@ -852,7 +852,7 @@ impl<'a> Entry<'a> {
         }
     }
 
-    /// Check if entry has all required fields for its type (backward compatible)
+    /// Check whether the entry has the minimal required fields for its type.
     #[must_use]
     pub fn is_valid(&self) -> bool {
         self.validate(ValidationLevel::Minimal).is_ok()

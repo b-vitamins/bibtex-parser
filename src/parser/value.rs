@@ -139,7 +139,7 @@ fn parse_number_or_digit_string<'a>(input: &mut &'a str) -> PResult<'a, Value<'a
     let token_bytes = token.as_bytes();
 
     // Signed values must be strict integers (e.g., +42, -1).
-    // Non-digit suffixes after a sign are rejected for compatibility.
+    // Non-digit suffixes after a sign are rejected.
     if first == b'+' || first == b'-' {
         if token_bytes.len() <= 1 || !token_bytes[1..].iter().all(u8::is_ascii_digit) {
             return super::backtrack();

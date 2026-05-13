@@ -137,16 +137,11 @@ pub mod source;
 #[cfg(feature = "latex_to_unicode")]
 pub mod latex_unicode;
 
-mod database;
+mod library;
 mod writer;
 
 pub use corpus::{
     CorpusEvent, CorpusSource, DuplicateKeyGroup, DuplicateKeyOccurrence, ParsedCorpus,
-};
-pub use database::{
-    Block, Comment, FailedBlock, FieldNameCase, FieldNormalizeOptions, IssueSummary, Library,
-    LibraryBuilder, LibraryStats, MonthStyle, Parser, Preamble, SortOptions, StringDefinition,
-    ValidationReport,
 };
 pub use document::{
     Diagnostic, DiagnosticCode, DiagnosticSeverity, DiagnosticTarget, EntryDelimiter,
@@ -156,6 +151,11 @@ pub use document::{
     ValueDelimiter,
 };
 pub use error::{Error, Result, SourceId, SourceSpan};
+pub use library::{
+    Block, Comment, FailedBlock, FieldNameCase, FieldNormalizeOptions, IssueSummary, Library,
+    LibraryBuilder, LibraryStats, MonthStyle, Parser, Preamble, SortOptions, StringDefinition,
+    ValidationReport,
+};
 pub use model::{
     canonical_biblatex_field_alias, classify_resource_field, normalize_biblatex_field_name,
     normalize_doi, normalize_field_name_ascii, parse_date_parts, parse_names, DateParseError,

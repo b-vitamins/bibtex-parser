@@ -1,6 +1,5 @@
 // src/fixtures.rs
 // Realistic BibTeX test fixtures based on actual academic entries
-// Simplified for compatibility with multiple parsers
 
 /// String constants for common publishers/series
 pub static COMMON_STRINGS: &str = r#"

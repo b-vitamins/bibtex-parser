@@ -18,7 +18,7 @@ All notable changes to this project are documented here.
 
 ### Changed
 
-- Replaced the pre-release `Database`/`ParseOptions` naming with `Library`/`Parser`.
+- Standardized the public parsing surface around `Library` and `Parser`.
 - Writer API now exposes `Writer`, `WriterConfig`, and `Writer::write_library` from the crate root.
 - Writer preserves block order by default and uses sorted grouped output only when sorting is requested.
 - `strings()`, `preambles()`, and `comments()` now return typed block records instead of raw storage internals.

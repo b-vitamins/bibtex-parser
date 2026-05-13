@@ -5,8 +5,8 @@
 //! need source-order blocks, per-item metadata, retained raw text, diagnostics,
 //! or partial parse results.
 
-use crate::database::BlockKind;
-use crate::database::RawBuildItem;
+use crate::library::BlockKind;
+use crate::library::RawBuildItem;
 use crate::model::normalize_text_projection;
 use crate::{
     normalize_doi, Comment, DateParseError, DateParts, Entry, EntryType, FailedBlock, Field,

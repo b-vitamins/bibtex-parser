@@ -1278,14 +1278,14 @@ impl<'a> Library<'a> {
     /// Parse a BibTeX library from a string (single-threaded implementation)
     #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_sequential(input: &'a str) -> Result<Self> {
-        let mut db = Self::new();
+        let mut library = Self::new();
         let input_scan = scan_input(input);
 
         // Fast path for common corpora (like tugboat) with no user-defined strings.
         // This avoids buffering all entries before expansion.
         if !input_scan.may_contain_string_definition {
-            db.entries.reserve(input_scan.at_count);
-            db.block_order.reserve(input_scan.at_count);
+            library.entries.reserve(input_scan.at_count);
+            library.block_order.reserve(input_scan.at_count);
             let has_user_strings = false;
             let month_constants_shadowed = false;
             let mut expanded_variables = ExpansionCache::with_capacity(0);
@@ -1296,7 +1296,7 @@ impl<'a> Library<'a> {
                 match item {
                     crate::parser::ParsedItem::Entry(mut entry) => {
                         for field in &mut entry.fields {
-                            db.expand_value_for_parse(
+                            library.expand_value_for_parse(
                                 &mut field.value,
                                 has_user_strings,
                                 month_constants_shadowed,
@@ -1305,11 +1305,11 @@ impl<'a> Library<'a> {
                                 &mut concat_cache,
                             )?;
                         }
-                        db.push_entry_with_source(entry, None);
+                        library.push_entry_with_source(entry, None);
                     }
                     crate::parser::ParsedItem::Preamble(value) => {
                         let mut expanded = value;
-                        db.expand_value_for_parse(
+                        library.expand_value_for_parse(
                             &mut expanded,
                             has_user_strings,
                             month_constants_shadowed,
@@ -1317,23 +1317,23 @@ impl<'a> Library<'a> {
                             &mut expansion_stack,
                             &mut concat_cache,
                         )?;
-                        db.push_preamble_with_source(expanded, None);
+                        library.push_preamble_with_source(expanded, None);
                     }
                     crate::parser::ParsedItem::Comment(text) => {
-                        db.push_comment_with_source(Cow::Borrowed(text), None);
+                        library.push_comment_with_source(Cow::Borrowed(text), None);
                     }
                     crate::parser::ParsedItem::String(name, value) => {
                         // Defensive fallback for scanner false negatives.
-                        db.push_string_with_source(Cow::Borrowed(name), value, None);
+                        library.push_string_with_source(Cow::Borrowed(name), value, None);
                     }
                 }
                 Ok(())
             })?;
 
-            return Ok(db);
+            return Ok(library);
         }
 
-        db.block_order.reserve(input_scan.at_count);
+        library.block_order.reserve(input_scan.at_count);
 
         // Single-pass path when all @string definitions appear before regular
         // entries. This keeps correctness while avoiding buffering entries and
@@ -1348,13 +1348,14 @@ impl<'a> Library<'a> {
             crate::parser::parse_bibtex_stream(input, |item| {
                 match item {
                     crate::parser::ParsedItem::Entry(mut entry) => {
-                        let has_user_strings = !db.strings.is_empty();
+                        let has_user_strings = !library.strings.is_empty();
                         let month_constants_shadowed = *month_constants_shadowed
                             .get_or_insert_with(|| {
-                                has_user_strings && user_strings_shadow_month_constants(&db.strings)
+                                has_user_strings
+                                    && user_strings_shadow_month_constants(&library.strings)
                             });
                         for field in &mut entry.fields {
-                            db.expand_value_for_parse(
+                            library.expand_value_for_parse(
                                 &mut field.value,
                                 has_user_strings,
                                 month_constants_shadowed,
@@ -1363,28 +1364,28 @@ impl<'a> Library<'a> {
                                 &mut concat_cache,
                             )?;
                         }
-                        db.push_entry_with_source(entry, None);
+                        library.push_entry_with_source(entry, None);
                     }
                     crate::parser::ParsedItem::Preamble(value) => {
-                        let index = db.push_preamble_with_source(value, None);
+                        let index = library.push_preamble_with_source(value, None);
                         pending_preambles.push(index);
                     }
                     crate::parser::ParsedItem::String(name, value) => {
-                        db.push_string_with_source(Cow::Borrowed(name), value, None);
+                        library.push_string_with_source(Cow::Borrowed(name), value, None);
                     }
                     crate::parser::ParsedItem::Comment(text) => {
-                        db.push_comment_with_source(Cow::Borrowed(text), None);
+                        library.push_comment_with_source(Cow::Borrowed(text), None);
                     }
                 }
                 Ok(())
             })?;
 
-            let has_user_strings = !db.strings.is_empty();
+            let has_user_strings = !library.strings.is_empty();
             let month_constants_shadowed =
-                has_user_strings && user_strings_shadow_month_constants(&db.strings);
+                has_user_strings && user_strings_shadow_month_constants(&library.strings);
             for index in pending_preambles {
-                let mut expanded = std::mem::take(&mut db.preambles[index].value);
-                db.expand_value_for_parse(
+                let mut expanded = std::mem::take(&mut library.preambles[index].value);
+                library.expand_value_for_parse(
                     &mut expanded,
                     has_user_strings,
                     month_constants_shadowed,
@@ -1392,10 +1393,10 @@ impl<'a> Library<'a> {
                     &mut expansion_stack,
                     &mut concat_cache,
                 )?;
-                db.preambles[index].value = expanded;
+                library.preambles[index].value = expanded;
             }
 
-            return Ok(db);
+            return Ok(library);
         }
 
         let mut entry_indices = Vec::new();
@@ -1404,38 +1405,38 @@ impl<'a> Library<'a> {
         crate::parser::parse_bibtex_stream(input, |item| {
             match item {
                 crate::parser::ParsedItem::Entry(entry) => {
-                    let index = db.entries.len();
-                    db.push_entry_with_source(entry, None);
+                    let index = library.entries.len();
+                    library.push_entry_with_source(entry, None);
                     entry_indices.push(index);
                 }
                 crate::parser::ParsedItem::Preamble(value) => {
-                    let index = db.push_preamble_with_source(value, None);
+                    let index = library.push_preamble_with_source(value, None);
                     preamble_indices.push(index);
                 }
                 crate::parser::ParsedItem::String(name, value) => {
-                    db.push_string_with_source(Cow::Borrowed(name), value, None);
+                    library.push_string_with_source(Cow::Borrowed(name), value, None);
                 }
                 crate::parser::ParsedItem::Comment(text) => {
-                    db.push_comment_with_source(Cow::Borrowed(text), None);
+                    library.push_comment_with_source(Cow::Borrowed(text), None);
                 }
             }
             Ok(())
         })?;
 
         // Expand after parsing so all @string definitions are available globally.
-        let has_user_strings = !db.strings.is_empty();
+        let has_user_strings = !library.strings.is_empty();
         let month_constants_shadowed =
-            has_user_strings && user_strings_shadow_month_constants(&db.strings);
-        let mut expanded_variables = ExpansionCache::with_capacity(db.strings.len());
+            has_user_strings && user_strings_shadow_month_constants(&library.strings);
+        let mut expanded_variables = ExpansionCache::with_capacity(library.strings.len());
         let mut expansion_stack = Vec::new();
         let mut concat_cache = ConcatCache::new();
 
         for entry_index in entry_indices {
-            let field_count = db.entries[entry_index].fields.len();
+            let field_count = library.entries[entry_index].fields.len();
             for field_index in 0..field_count {
                 let mut value =
-                    std::mem::take(&mut db.entries[entry_index].fields[field_index].value);
-                db.expand_value_for_parse(
+                    std::mem::take(&mut library.entries[entry_index].fields[field_index].value);
+                library.expand_value_for_parse(
                     &mut value,
                     has_user_strings,
                     month_constants_shadowed,
@@ -1443,13 +1444,13 @@ impl<'a> Library<'a> {
                     &mut expansion_stack,
                     &mut concat_cache,
                 )?;
-                db.entries[entry_index].fields[field_index].value = value;
+                library.entries[entry_index].fields[field_index].value = value;
             }
         }
 
         for preamble_index in preamble_indices {
-            let mut expanded = std::mem::take(&mut db.preambles[preamble_index].value);
-            db.expand_value_for_parse(
+            let mut expanded = std::mem::take(&mut library.preambles[preamble_index].value);
+            library.expand_value_for_parse(
                 &mut expanded,
                 has_user_strings,
                 month_constants_shadowed,
@@ -1457,10 +1458,10 @@ impl<'a> Library<'a> {
                 &mut expansion_stack,
                 &mut concat_cache,
             )?;
-            db.preambles[preamble_index].value = expanded;
+            library.preambles[preamble_index].value = expanded;
         }
 
-        Ok(db)
+        Ok(library)
     }
 
     fn parse_with_spans(input: &'a str) -> Result<Self> {
@@ -1985,7 +1986,7 @@ impl<'a> Library<'a> {
         }
     }
 
-    /// Get a fully expanded string value (for compatibility)
+    /// Get a fully expanded string value.
     pub fn get_expanded_string(&self, value: &Value<'a>) -> Result<String> {
         match value {
             Value::Literal(s) => Ok(s.to_string()),
@@ -2495,7 +2496,7 @@ const fn month_abbreviation(month: i64) -> &'static str {
 /// Builder for creating libraries programmatically
 #[derive(Debug, Default)]
 pub struct LibraryBuilder<'a> {
-    db: Library<'a>,
+    library: Library<'a>,
 }
 
 impl<'a> LibraryBuilder<'a> {
@@ -2508,35 +2509,35 @@ impl<'a> LibraryBuilder<'a> {
     /// Add an entry
     #[must_use]
     pub fn entry(mut self, entry: Entry<'a>) -> Self {
-        self.db.add_entry(entry);
+        self.library.add_entry(entry);
         self
     }
 
     /// Add a string definition
     #[must_use]
     pub fn string(mut self, name: &'a str, value: Value<'a>) -> Self {
-        self.db.add_string(name, value);
+        self.library.add_string(name, value);
         self
     }
 
     /// Add a preamble
     #[must_use]
     pub fn preamble(mut self, value: Value<'a>) -> Self {
-        self.db.add_preamble(value);
+        self.library.add_preamble(value);
         self
     }
 
     /// Add a comment
     #[must_use]
     pub fn comment(mut self, text: &'a str) -> Self {
-        self.db.add_comment(text);
+        self.library.add_comment(text);
         self
     }
 
     /// Build the library
     #[must_use]
     pub fn build(self) -> Library<'a> {
-        self.db
+        self.library
     }
 }
 
@@ -2626,8 +2627,8 @@ mod tests {
             }
         "#;
 
-        let db = Library::parser().parse(input).unwrap();
-        let entry = &db.entries()[0];
+        let library = Library::parser().parse(input).unwrap();
+        let entry = &library.entries()[0];
 
         assert_eq!(entry.fields.len(), 10);
         assert!(
@@ -2693,9 +2694,9 @@ mod tests {
 
         let paths: Vec<PathBuf> = vec![path1.clone(), path2.clone()];
 
-        let db = Library::parser().threads(2).parse_files(&paths).unwrap();
+        let library = Library::parser().threads(2).parse_files(&paths).unwrap();
 
-        assert_eq!(db.entries().len(), 2);
+        assert_eq!(library.entries().len(), 2);
 
         let _ = std::fs::remove_file(path1);
         let _ = std::fs::remove_file(path2);
@@ -2710,8 +2711,8 @@ mod tests {
         assert_eq!(db1.entries().len(), 1);
 
         // Using parser builder
-        let db2 = Library::parser().threads(1).parse(input).unwrap();
-        assert_eq!(db2.entries().len(), 1);
+        let library2 = Library::parser().threads(1).parse(input).unwrap();
+        assert_eq!(library2.entries().len(), 1);
 
         #[cfg(feature = "parallel")]
         {

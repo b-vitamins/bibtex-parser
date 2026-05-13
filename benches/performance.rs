@@ -54,8 +54,8 @@ fn detect_benchmark_cpu() -> usize {
         let mut fastest_probe = Duration::MAX;
         for _ in 0..3 {
             let start = Instant::now();
-            let db = Library::parser().parse(black_box(TUGBOAT_BIB)).unwrap();
-            black_box(&db);
+            let library = Library::parser().parse(black_box(TUGBOAT_BIB)).unwrap();
+            black_box(&library);
             fastest_probe = fastest_probe.min(start.elapsed());
         }
 
@@ -122,8 +122,8 @@ fn stabilize_system() {
 
     let deadline = Instant::now() + Duration::from_secs(3);
     while Instant::now() < deadline {
-        let db = Library::parser().parse(black_box(TUGBOAT_BIB)).unwrap();
-        black_box(&db);
+        let library = Library::parser().parse(black_box(TUGBOAT_BIB)).unwrap();
+        black_box(&library);
     }
 }
 
@@ -154,21 +154,21 @@ fn bench_parser_comparison(c: &mut Criterion) {
     // Our parser - core performance
     group.bench_function("bibtex-parser", |b| {
         b.iter(|| {
-            let db = Library::parser().parse(black_box(TUGBOAT_BIB)).unwrap();
+            let library = Library::parser().parse(black_box(TUGBOAT_BIB)).unwrap();
             // Ensure result is not optimized away
-            black_box(&db);
-            assert!(!db.entries().is_empty());
+            black_box(&library);
+            assert!(!library.entries().is_empty());
         });
     });
 
     group.bench_function("bibtex-parser-tolerant", |b| {
         b.iter(|| {
-            let db = Library::parser()
+            let library = Library::parser()
                 .tolerant()
                 .parse(black_box(TUGBOAT_BIB))
                 .unwrap();
-            black_box(&db);
-            assert!(!db.entries().is_empty());
+            black_box(&library);
+            assert!(!library.entries().is_empty());
         });
     });
 
@@ -463,7 +463,7 @@ fn bench_critical_operations(c: &mut Criterion) {
     group.sample_size(150);
 
     // Pre-parse library for operation benchmarks
-    let db = Library::parser().parse(TUGBOAT_BIB).unwrap();
+    let library = Library::parser().parse(TUGBOAT_BIB).unwrap();
 
     stabilize_system();
 
@@ -471,7 +471,7 @@ fn bench_critical_operations(c: &mut Criterion) {
     group.bench_function("entry_iteration", |b| {
         b.iter(|| {
             let mut count = 0;
-            for entry in db.entries() {
+            for entry in library.entries() {
                 if !entry.key().is_empty() {
                     count += 1;
                 }
@@ -484,7 +484,7 @@ fn bench_critical_operations(c: &mut Criterion) {
     group.bench_function("field_access", |b| {
         b.iter(|| {
             let mut total_len = 0;
-            for entry in db.entries().iter().take(1000) {
+            for entry in library.entries().iter().take(1000) {
                 if let Some(author) = entry.get("author") {
                     total_len += author.len();
                 }
@@ -501,7 +501,7 @@ fn bench_critical_operations(c: &mut Criterion) {
         use bibtex_parser::EntryType;
 
         // Pre-collect to avoid iterator overhead in measurement
-        let entries: Vec<_> = db.entries().iter().collect();
+        let entries: Vec<_> = library.entries().iter().collect();
 
         b.iter(|| {
             let mut articles = 0;
@@ -543,10 +543,10 @@ fn bench_memory_efficiency(c: &mut Criterion) {
             input.as_str(),
             |b, input| {
                 b.iter(|| {
-                    let db = Library::parser().parse(black_box(input)).unwrap();
+                    let library = Library::parser().parse(black_box(input)).unwrap();
                     // Verify parsing succeeded
-                    assert!(!db.entries().is_empty());
-                    black_box(&db);
+                    assert!(!library.entries().is_empty());
+                    black_box(&library);
                 });
             },
         );
