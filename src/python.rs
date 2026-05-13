@@ -177,14 +177,12 @@ impl PyDocument {
     }
 
     #[getter]
-    fn entries(&self) -> Vec<PyEntry> {
-        self.inner
-            .entries()
-            .iter()
-            .cloned()
-            .map(|inner| PyEntry {
-                inner: inner.into_owned(),
-            })
+    fn entries(slf: PyRef<'_, Self>) -> Vec<PyEntry> {
+        let len = slf.inner.entries().len();
+        let py = slf.py();
+        let document: Py<PyDocument> = slf.into();
+        (0..len)
+            .map(|index| PyEntry::view(document.clone_ref(py), index))
             .collect()
     }
 
@@ -272,15 +270,15 @@ impl PyDocument {
         Ok(dict)
     }
 
-    fn entry(&self, key: &str) -> Option<PyEntry> {
-        self.inner
+    fn entry(slf: PyRef<'_, Self>, key: &str) -> Option<PyEntry> {
+        let index = slf
+            .inner
             .entries()
             .iter()
-            .find(|entry| entry.key() == key)
-            .cloned()
-            .map(|inner| PyEntry {
-                inner: inner.into_owned(),
-            })
+            .position(|entry| entry.key() == key)?;
+        let py = slf.py();
+        let document: Py<PyDocument> = slf.into();
+        Some(PyEntry::view(document.clone_ref(py), index))
     }
 
     fn keys(&self) -> Vec<String> {
@@ -415,114 +413,147 @@ impl PyDocument {
 }
 
 #[pyclass(name = "Entry")]
-#[derive(Debug, Clone)]
 struct PyEntry {
-    inner: ParsedEntry<'static>,
+    inner: PyEntryInner,
+}
+
+enum PyEntryInner {
+    View {
+        document: Py<PyDocument>,
+        index: usize,
+    },
+}
+
+impl PyEntry {
+    fn view(document: Py<PyDocument>, index: usize) -> Self {
+        Self {
+            inner: PyEntryInner::View { document, index },
+        }
+    }
+
+    fn with_entry<R>(
+        &self,
+        py: Python<'_>,
+        on_entry: impl FnOnce(&ParsedEntry<'static>) -> R,
+    ) -> PyResult<R> {
+        match &self.inner {
+            PyEntryInner::View { document, index } => {
+                let document = document.borrow(py);
+                let entry = document.inner.entries().get(*index).ok_or_else(|| {
+                    PyRuntimeError::new_err("entry view no longer points to a valid entry")
+                })?;
+                Ok(on_entry(entry))
+            }
+        }
+    }
 }
 
 #[pymethods]
 impl PyEntry {
     #[getter]
-    fn key(&self) -> String {
-        self.inner.key().to_string()
+    fn key(&self, py: Python<'_>) -> PyResult<String> {
+        self.with_entry(py, |entry| entry.key().to_string())
     }
 
     #[getter]
-    fn entry_type(&self) -> String {
-        self.inner.ty.to_string()
+    fn entry_type(&self, py: Python<'_>) -> PyResult<String> {
+        self.with_entry(py, |entry| entry.ty.to_string())
     }
 
     #[getter]
-    fn status(&self) -> &'static str {
-        match self.inner.status {
+    fn status(&self, py: Python<'_>) -> PyResult<&'static str> {
+        self.with_entry(py, |entry| match entry.status {
             ParsedEntryStatus::Complete => "complete",
             ParsedEntryStatus::Partial => "partial",
-        }
+        })
     }
 
     #[getter]
-    fn fields(&self) -> Vec<PyField> {
-        self.inner
-            .fields
-            .iter()
-            .cloned()
-            .map(PyField::from)
-            .collect()
+    fn fields(&self, py: Python<'_>) -> PyResult<Vec<PyField>> {
+        self.with_entry(py, |entry| {
+            entry.fields.iter().cloned().map(PyField::from).collect()
+        })
     }
 
     #[getter]
-    fn raw(&self) -> Option<String> {
-        self.inner.raw.as_deref().map(ToOwned::to_owned)
+    fn raw(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        self.with_entry(py, |entry| entry.raw.as_deref().map(ToOwned::to_owned))
     }
 
     #[getter]
-    fn source(&self) -> Option<PySourceSpan> {
-        self.inner.source.map(PySourceSpan::from)
+    fn source(&self, py: Python<'_>) -> PyResult<Option<PySourceSpan>> {
+        self.with_entry(py, |entry| entry.source.map(PySourceSpan::from))
     }
 
-    fn get(&self, name: &str) -> Option<String> {
-        self.inner.field_ignore_case(name).map(field_text)
+    fn get(&self, py: Python<'_>, name: &str) -> PyResult<Option<String>> {
+        self.with_entry(py, |entry| entry.field_ignore_case(name).map(field_text))
     }
 
-    fn field(&self, name: &str) -> Option<PyField> {
-        self.inner
-            .field_ignore_case(name)
-            .cloned()
-            .map(PyField::from)
+    fn field(&self, py: Python<'_>, name: &str) -> PyResult<Option<PyField>> {
+        self.with_entry(py, |entry| {
+            entry.field_ignore_case(name).cloned().map(PyField::from)
+        })
     }
 
-    fn authors(&self) -> Vec<PyPersonName> {
-        self.inner
-            .authors()
-            .into_iter()
-            .map(PyPersonName::from)
-            .collect()
+    fn authors(&self, py: Python<'_>) -> PyResult<Vec<PyPersonName>> {
+        self.with_entry(py, |entry| {
+            entry
+                .authors()
+                .into_iter()
+                .map(PyPersonName::from)
+                .collect()
+        })
     }
 
-    fn editors(&self) -> Vec<PyPersonName> {
-        self.inner
-            .editors()
-            .into_iter()
-            .map(PyPersonName::from)
-            .collect()
+    fn editors(&self, py: Python<'_>) -> PyResult<Vec<PyPersonName>> {
+        self.with_entry(py, |entry| {
+            entry
+                .editors()
+                .into_iter()
+                .map(PyPersonName::from)
+                .collect()
+        })
     }
 
-    fn translators(&self) -> Vec<PyPersonName> {
-        self.inner
-            .translators()
-            .into_iter()
-            .map(PyPersonName::from)
-            .collect()
+    fn translators(&self, py: Python<'_>) -> PyResult<Vec<PyPersonName>> {
+        self.with_entry(py, |entry| {
+            entry
+                .translators()
+                .into_iter()
+                .map(PyPersonName::from)
+                .collect()
+        })
     }
 
-    fn date_parts(&self) -> PyResult<Option<PyDateParts>> {
-        Ok(self
-            .inner
-            .date_parts()
-            .transpose()
-            .map_err(date_error)?
-            .map(PyDateParts::from))
+    fn date_parts(&self, py: Python<'_>) -> PyResult<Option<PyDateParts>> {
+        self.with_entry(py, |entry| entry.date_parts().transpose())?
+            .map_err(date_error)
+            .map(|parts| parts.map(PyDateParts::from))
     }
 
-    fn doi(&self) -> Option<String> {
-        self.inner.doi()
+    fn doi(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        self.with_entry(py, ParsedEntry::doi)
     }
 
-    fn resource_fields(&self) -> Vec<PyResourceField> {
-        self.inner
-            .resource_fields()
-            .into_iter()
-            .map(PyResourceField::from)
-            .collect()
+    fn resource_fields(&self, py: Python<'_>) -> PyResult<Vec<PyResourceField>> {
+        self.with_entry(py, |entry| {
+            entry
+                .resource_fields()
+                .into_iter()
+                .map(PyResourceField::from)
+                .collect()
+        })
     }
 
-    fn __repr__(&self) -> String {
-        format!(
-            "Entry(key={:?}, entry_type={:?}, fields={})",
-            self.inner.key(),
-            self.inner.ty,
-            self.inner.fields.len()
-        )
+    fn __repr__(&self, py: Python<'_>) -> PyResult<String> {
+        self.with_entry(py, |entry| {
+            format!(
+                "Entry(key={:?}, entry_type={:?}, fields={})",
+                entry.key(),
+                entry.ty,
+                entry.fields.len()
+            )
+        })
     }
 }
 
