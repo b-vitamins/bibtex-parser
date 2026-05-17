@@ -38,7 +38,7 @@ fn duplicate_field_occurrences_are_addressable_without_collapsing() {
     assert!(document.entries_mut()[0].remove_field_at("tag", 0));
     let output = document_to_string(&document).unwrap();
     assert!(output.contains("tag = {beta}"));
-    assert!(output.contains("tag = {c}"));
+    assert!(output.contains("tag = \"c\""));
     assert!(!output.contains("tag = {a}"));
     assert_eq!(
         Library::parse(&output).unwrap().entries()[0].fields.len(),

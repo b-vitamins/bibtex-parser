@@ -303,7 +303,7 @@ impl<W: Write> Writer<W> {
         raw_source: Option<&str>,
     ) -> io::Result<()> {
         if self.config.raw_write_mode == RawWriteMode::Preserve {
-            if let Some(raw) = patched_entry_raw(entry, raw_source) {
+            if let Some(raw) = patched_entry_raw(entry, raw_source, &self.config) {
                 self.writer.write_all(raw.as_bytes())?;
                 return Ok(());
             }
@@ -344,40 +344,9 @@ impl<W: Write> Writer<W> {
 
     /// Write a value
     fn write_value(&mut self, value: &Value) -> io::Result<()> {
-        match value {
-            Value::Literal(s) => {
-                // Quote if contains special characters
-                if needs_quoting(s) {
-                    write!(self.writer, "\"{}\"", escape_quotes(s))?;
-                } else {
-                    write!(self.writer, "{{{s}}}")?;
-                }
-            }
-            Value::Number(n) => write!(self.writer, "{n}")?,
-            Value::Variable(name) => write!(self.writer, "{name}")?,
-            Value::Concat(parts) => {
-                for (i, part) in parts.iter().enumerate() {
-                    if i > 0 {
-                        write!(self.writer, " # ")?;
-                    }
-                    self.write_value(part)?;
-                }
-            }
-        }
+        self.writer.write_all(value.to_bibtex_source().as_bytes())?;
         Ok(())
     }
-}
-
-/// Check if a string needs quoting
-#[must_use]
-fn needs_quoting(s: &str) -> bool {
-    s.contains(['{', '}', ',', '='])
-}
-
-/// Escape quotes in a string
-#[must_use]
-fn escape_quotes(s: &str) -> String {
-    s.replace('"', "\\\"")
 }
 
 fn raw_text_with_source<'a>(
@@ -396,6 +365,7 @@ fn source_slice(raw_source: Option<&str>, span: crate::SourceSpan) -> Option<&st
 fn patched_entry_raw<'entry>(
     entry: &'entry ParsedEntry<'_>,
     raw_source: Option<&'entry str>,
+    config: &WriterConfig,
 ) -> Option<Cow<'entry, str>> {
     let source = entry.source?;
     let raw = raw_text_with_source(entry.raw.as_deref(), raw_source, Some(source))?;
@@ -418,7 +388,24 @@ fn patched_entry_raw<'entry>(
         |raw_key| raw_key == entry.key,
     )?;
 
+    for removed in entry.removed_field_sources() {
+        let start = removed.byte_start.checked_sub(source.byte_start)?;
+        let end = removed.byte_end.checked_sub(source.byte_start)?;
+        replacements.push((start, end, String::new()));
+    }
+
+    let mut added_fields = Vec::new();
     for field in &entry.fields {
+        if field.source.is_none()
+            && field.name_source.is_none()
+            && field.value_source.is_none()
+            && field.raw.is_none()
+            && field.value.raw.is_none()
+        {
+            added_fields.push(field);
+            continue;
+        }
+
         push_token_replacement(
             &mut replacements,
             raw,
@@ -438,6 +425,19 @@ fn patched_entry_raw<'entry>(
         }
     }
 
+    if !entry.removed_field_sources().is_empty() && !added_fields.is_empty() {
+        return None;
+    }
+
+    if !added_fields.is_empty() {
+        let close = entry_close_offset(raw)?;
+        let (comma_insert, added_source) = render_added_fields(raw, close, &added_fields, config)?;
+        if let Some(comma_insert) = comma_insert {
+            replacements.push((comma_insert, comma_insert, ",".to_string()));
+        }
+        replacements.push((close, close, added_source));
+    }
+
     if replacements.is_empty() {
         return Some(Cow::Borrowed(raw));
     }
@@ -455,6 +455,51 @@ fn patched_entry_raw<'entry>(
     }
     output.push_str(&raw[cursor..]);
     Some(Cow::Owned(output))
+}
+
+fn entry_close_offset(raw: &str) -> Option<usize> {
+    let trimmed = raw.trim_end_matches(char::is_whitespace);
+    let close = trimmed.len().checked_sub(1)?;
+    matches!(raw.as_bytes().get(close), Some(b'}' | b')')).then_some(close)
+}
+
+fn render_added_fields(
+    raw: &str,
+    close: usize,
+    fields: &[&crate::ParsedField<'_>],
+    config: &WriterConfig,
+) -> Option<(Option<usize>, String)> {
+    let prefix = raw.get(..close)?;
+    let previous = prefix
+        .bytes()
+        .enumerate()
+        .rfind(|(_, byte)| !byte.is_ascii_whitespace());
+    let mut output = String::new();
+
+    let comma_insert = if matches!(previous, Some((_, b',' | b'{'))) {
+        None
+    } else if prefix.ends_with('\n') {
+        Some(previous?.0 + 1)
+    } else {
+        output.push(',');
+        None
+    };
+    if !prefix.ends_with('\n') {
+        output.push('\n');
+    }
+
+    for (index, field) in fields.iter().enumerate() {
+        output.push_str(&config.indent);
+        output.push_str(&field.name);
+        output.push_str(" = ");
+        output.push_str(&field.value.value.to_bibtex_source());
+        if index < fields.len() - 1 || config.trailing_comma == TrailingComma::Always {
+            output.push(',');
+        }
+        output.push('\n');
+    }
+
+    Some((comma_insert, output))
 }
 
 fn push_token_replacement(

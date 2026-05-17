@@ -15,13 +15,13 @@ use crate::{
     normalize_doi, parse_date_parts, parse_names, DateParseError, DateParts, Diagnostic,
     DiagnosticSeverity, DiagnosticTarget, EntryType, ParsedBlock, ParsedComment, ParsedDocument,
     ParsedEntry, ParsedEntryStatus, ParsedFailedBlock, ParsedField, ParsedPreamble, ParsedString,
-    Parser, RawWriteMode, ResourceField, SourceSpan, TrailingComma, ValidationLevel,
+    ParsedValue, Parser, RawWriteMode, ResourceField, SourceSpan, TrailingComma, ValidationLevel,
     ValidationSeverity, Value, Writer, WriterConfig,
 };
-use ahash::AHashMap;
+use ahash::{AHashMap, AHashSet};
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict, PyList, PyModule, PyString, PyType};
+use pyo3::types::{PyAny, PyDict, PyIterator, PyList, PyModule, PyString, PyTuple, PyType};
 use std::borrow::Cow;
 use std::sync::Arc;
 
@@ -50,6 +50,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parse_file, m)?)?;
     m.add_function(wrap_pyfunction!(write, m)?)?;
     m.add_function(wrap_pyfunction!(document_to_dicts_py, m)?)?;
+    m.add_function(wrap_pyfunction!(write_entries_py, m)?)?;
     m.add_function(wrap_pyfunction!(normalize_doi_py, m)?)?;
     m.add_function(wrap_pyfunction!(parse_names_py, m)?)?;
     m.add_function(wrap_pyfunction!(parse_date_py, m)?)?;
@@ -311,8 +312,28 @@ impl PyDocument {
             .collect()
     }
 
-    fn to_dicts<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        document_to_dicts_for_py(py, &self.inner)
+    #[pyo3(signature = (value_mode="plain"))]
+    fn to_dicts<'py>(&self, py: Python<'py>, value_mode: &str) -> PyResult<Bound<'py, PyList>> {
+        document_to_dicts_for_py(py, &self.inner, value_mode)
+    }
+
+    #[pyo3(signature = (records, remove_missing=false, create_missing=false))]
+    fn update_from_dicts<'py>(
+        &mut self,
+        py: Python<'py>,
+        records: &Bound<'_, PyAny>,
+        remove_missing: bool,
+        create_missing: bool,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        self.materialize_raw_source();
+        let summary = update_document_from_dicts(
+            py,
+            &mut self.inner,
+            records,
+            remove_missing,
+            create_missing,
+        )?;
+        summary.to_py_dict(py)
     }
 
     fn rename_key(&mut self, old: &str, new: String) -> bool {
@@ -737,6 +758,15 @@ impl PyValue {
         Self {
             inner: Value::from_plain_string(Cow::Owned(text)),
         }
+    }
+
+    #[classmethod]
+    fn from_bibtex_source(_cls: &Bound<'_, PyType>, source: &str) -> PyResult<Self> {
+        Ok(Self {
+            inner: Value::from_bibtex_source(source)
+                .map_err(|error| PyValueError::new_err(error.to_string()))?
+                .into_owned(),
+        })
     }
 
     #[getter]
@@ -1354,11 +1384,39 @@ fn write(
 }
 
 #[pyfunction(name = "_document_to_dicts")]
+#[pyo3(signature = (document, value_mode="plain"))]
 fn document_to_dicts_py<'py>(
     py: Python<'py>,
     document: &PyDocument,
+    value_mode: &str,
 ) -> PyResult<Bound<'py, PyList>> {
-    document_to_dicts_for_py(py, &document.inner)
+    document_to_dicts_for_py(py, &document.inner, value_mode)
+}
+
+#[pyfunction(name = "_write_entries")]
+#[pyo3(signature = (entries, comments=None, preambles=None, strings=None, field_order=None, sort_by=None, reverse=false, trailing_comma=false, entry_separator="\n\n"))]
+fn write_entries_py(
+    entries: &Bound<'_, PyAny>,
+    comments: Option<&Bound<'_, PyAny>>,
+    preambles: Option<&Bound<'_, PyAny>>,
+    strings: Option<&Bound<'_, PyAny>>,
+    field_order: Option<Vec<String>>,
+    sort_by: Option<Vec<String>>,
+    reverse: bool,
+    trailing_comma: bool,
+    entry_separator: &str,
+) -> PyResult<String> {
+    render_plain_entries(
+        entries,
+        comments,
+        preambles,
+        strings,
+        field_order.as_deref(),
+        sort_by.as_deref(),
+        reverse,
+        trailing_comma,
+        entry_separator,
+    )
 }
 
 #[pyfunction(name = "normalize_doi")]
@@ -1475,10 +1533,400 @@ fn selected_entries_to_string(document: &PyDocument, keys: &[&str]) -> PyResult<
     String::from_utf8(buffer).map_err(|error| PyRuntimeError::new_err(error.to_string()))
 }
 
+#[derive(Debug)]
+struct PlainRecord {
+    entry_type: Option<String>,
+    key: String,
+    fields: Vec<(String, Value<'static>)>,
+}
+
+fn render_plain_entries(
+    entries: &Bound<'_, PyAny>,
+    comments: Option<&Bound<'_, PyAny>>,
+    preambles: Option<&Bound<'_, PyAny>>,
+    strings: Option<&Bound<'_, PyAny>>,
+    field_order: Option<&[String]>,
+    sort_by: Option<&[String]>,
+    reverse: bool,
+    trailing_comma: bool,
+    entry_separator: &str,
+) -> PyResult<String> {
+    let mut rendered = Vec::new();
+
+    render_comments(&mut rendered, comments)?;
+    render_preambles(&mut rendered, preambles)?;
+    render_strings(&mut rendered, strings)?;
+
+    let mut records = plain_records_from_py(entries, field_order)?;
+    if let Some(sort_by) = sort_by {
+        records.sort_by_cached_key(|record| sort_record_key(record, sort_by));
+        if reverse {
+            records.reverse();
+        }
+    }
+
+    rendered.extend(
+        records
+            .iter()
+            .map(|record| render_plain_record(record, trailing_comma)),
+    );
+
+    Ok(rendered
+        .into_iter()
+        .filter(|block| !block.is_empty())
+        .collect::<Vec<_>>()
+        .join(entry_separator))
+}
+
+fn render_comments(
+    rendered: &mut Vec<String>,
+    comments: Option<&Bound<'_, PyAny>>,
+) -> PyResult<()> {
+    let Some(comments) = comments else {
+        return Ok(());
+    };
+    for comment in PyIterator::from_object(comments)? {
+        let text = comment?.str()?.to_string();
+        let stripped = text.trim_start();
+        if stripped.starts_with('%') || stripped.starts_with('@') {
+            rendered.push(text);
+        } else {
+            rendered.push(format!("@comment{{{text}}}"));
+        }
+    }
+    Ok(())
+}
+
+fn render_preambles(
+    rendered: &mut Vec<String>,
+    preambles: Option<&Bound<'_, PyAny>>,
+) -> PyResult<()> {
+    let Some(preambles) = preambles else {
+        return Ok(());
+    };
+    for preamble in PyIterator::from_object(preambles)? {
+        let value = value_from_py(&preamble?)?;
+        rendered.push(format!("@preamble{{{}}}", value.to_bibtex_source()));
+    }
+    Ok(())
+}
+
+fn render_strings(rendered: &mut Vec<String>, strings: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+    let Some(strings) = strings else {
+        return Ok(());
+    };
+
+    if let Ok(dict) = strings.cast::<PyDict>() {
+        for (name, value) in dict.iter() {
+            let name = name.str()?.to_string();
+            let value = value_from_py(&value)?;
+            rendered.push(format!("@string{{{name} = {}}}", value.to_bibtex_source()));
+        }
+        return Ok(());
+    }
+
+    for item in PyIterator::from_object(strings)? {
+        let item = item?;
+        let pair = item.cast::<PyTuple>().map_err(|_| {
+            PyTypeError::new_err("strings must be a dict or an iterable of (name, value) pairs")
+        })?;
+        if pair.len() != 2 {
+            return Err(PyValueError::new_err(
+                "string definition pairs must contain exactly two items",
+            ));
+        }
+        let name = pair.get_item(0)?.str()?.to_string();
+        let value = value_from_py(&pair.get_item(1)?)?;
+        rendered.push(format!("@string{{{name} = {}}}", value.to_bibtex_source()));
+    }
+    Ok(())
+}
+
+fn plain_records_from_py(
+    entries: &Bound<'_, PyAny>,
+    field_order: Option<&[String]>,
+) -> PyResult<Vec<PlainRecord>> {
+    let mut records = Vec::new();
+    for item in PyIterator::from_object(entries)? {
+        let item = item?;
+        let dict = item
+            .cast::<PyDict>()
+            .map_err(|_| PyTypeError::new_err("entries must be dictionaries"))?;
+        records.push(plain_record_from_dict(dict, field_order)?);
+    }
+    Ok(records)
+}
+
+fn plain_record_from_dict(
+    dict: &Bound<'_, PyDict>,
+    field_order: Option<&[String]>,
+) -> PyResult<PlainRecord> {
+    let entry_type = dict
+        .get_item("ENTRYTYPE")?
+        .map(|value| value.str().map(|s| s.to_string().trim().to_string()))
+        .transpose()?;
+    let key = dict
+        .get_item("ID")?
+        .map_or_else(String::new, |value| {
+            value.str().map(|s| s.to_string()).unwrap_or_default()
+        })
+        .trim()
+        .to_string();
+
+    let mut fields = Vec::new();
+    let mut seen = AHashSet::new();
+    seen.insert("ENTRYTYPE".to_string());
+    seen.insert("ID".to_string());
+
+    if let Some(field_order) = field_order {
+        for field in field_order {
+            if seen.contains(field) {
+                continue;
+            }
+            if let Some(value) = dict.get_item(field)? {
+                fields.push((field.clone(), value_from_py(&value)?));
+                seen.insert(field.clone());
+            }
+        }
+    }
+
+    for (name, value) in dict.iter() {
+        let name = name.str()?.to_string();
+        if seen.contains(&name) {
+            continue;
+        }
+        fields.push((name.clone(), value_from_py(&value)?));
+        seen.insert(name);
+    }
+
+    Ok(PlainRecord {
+        entry_type,
+        key,
+        fields,
+    })
+}
+
+fn render_plain_record(record: &PlainRecord, trailing_comma: bool) -> String {
+    let entry_type = record.entry_type.as_deref().unwrap_or("article");
+    let entry_type = if entry_type.is_empty() {
+        "article"
+    } else {
+        entry_type
+    };
+    let mut output = format!("@{entry_type}{{{},", record.key);
+    for (index, (name, value)) in record.fields.iter().enumerate() {
+        output.push('\n');
+        output.push_str("  ");
+        output.push_str(name);
+        output.push_str(" = ");
+        output.push_str(&value.to_bibtex_source());
+        if index < record.fields.len() - 1 || trailing_comma {
+            output.push(',');
+        }
+    }
+    output.push_str("\n}");
+    output
+}
+
+fn sort_record_key(record: &PlainRecord, sort_by: &[String]) -> Vec<String> {
+    sort_by
+        .iter()
+        .map(|name| {
+            if name == "ENTRYTYPE" {
+                return record.entry_type.clone().unwrap_or_default();
+            }
+            if name == "ID" {
+                return record.key.clone();
+            }
+            record
+                .fields
+                .iter()
+                .find(|(field, _)| field == name)
+                .map_or_else(String::new, |(_, value)| value.to_plain_string())
+        })
+        .collect()
+}
+
+#[derive(Debug, Default)]
+struct RecordUpdateSummary {
+    matched_entries: usize,
+    added_entries: usize,
+    changed_entry_types: usize,
+    added_fields: usize,
+    changed_fields: usize,
+    unchanged_fields: usize,
+    removed_fields: usize,
+}
+
+impl RecordUpdateSummary {
+    fn to_py_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let dict = PyDict::new(py);
+        dict.set_item("matched_entries", self.matched_entries)?;
+        dict.set_item("added_entries", self.added_entries)?;
+        dict.set_item("changed_entry_types", self.changed_entry_types)?;
+        dict.set_item("added_fields", self.added_fields)?;
+        dict.set_item("changed_fields", self.changed_fields)?;
+        dict.set_item("unchanged_fields", self.unchanged_fields)?;
+        dict.set_item("removed_fields", self.removed_fields)?;
+        Ok(dict)
+    }
+}
+
+fn update_document_from_dicts(
+    _py: Python<'_>,
+    document: &mut ParsedDocument<'static>,
+    records: &Bound<'_, PyAny>,
+    remove_missing: bool,
+    create_missing: bool,
+) -> PyResult<RecordUpdateSummary> {
+    let records = plain_records_from_py(records, None)?;
+    let mut seen_records = AHashSet::new();
+    for record in &records {
+        validate_record(record)?;
+        if !seen_records.insert(record.key.clone()) {
+            return Err(PyValueError::new_err(format!(
+                "duplicate record ID {:?}",
+                record.key
+            )));
+        }
+    }
+
+    let mut key_index = AHashMap::new();
+    for (index, entry) in document.entries().iter().enumerate() {
+        key_index.entry(entry.key().to_string()).or_insert(index);
+    }
+
+    let mut summary = RecordUpdateSummary::default();
+    for record in records {
+        if let Some(index) = key_index.get(&record.key).copied() {
+            summary.matched_entries += 1;
+            let entry = &mut document.entries_mut()[index];
+            apply_record_to_entry(entry, &record, remove_missing, &mut summary);
+        } else if create_missing {
+            let entry = parsed_entry_from_record(record);
+            document.push_entry(entry);
+            summary.added_entries += 1;
+        } else {
+            return Err(PyValueError::new_err(format!(
+                "record ID {:?} does not match an existing entry",
+                record.key
+            )));
+        }
+    }
+
+    Ok(summary)
+}
+
+fn validate_record(record: &PlainRecord) -> PyResult<()> {
+    if record.key.is_empty() {
+        return Err(PyValueError::new_err("record ID must not be empty"));
+    }
+    for (field, _) in &record.fields {
+        if !is_valid_bibtex_identifier(field) {
+            return Err(PyValueError::new_err(format!(
+                "invalid BibTeX field name {field:?}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn apply_record_to_entry(
+    entry: &mut ParsedEntry<'static>,
+    record: &PlainRecord,
+    remove_missing: bool,
+    summary: &mut RecordUpdateSummary,
+) {
+    if let Some(record_entry_type) = &record.entry_type {
+        let entry_type = crate::EntryType::parse(record_entry_type).into_owned();
+        if entry.ty != entry_type {
+            entry.set_entry_type(entry_type);
+            summary.changed_entry_types += 1;
+        }
+    }
+
+    let mut present = AHashSet::new();
+    for (field_name, value) in &record.fields {
+        present.insert(field_name.as_str());
+        if let Some(field) = entry
+            .fields
+            .iter_mut()
+            .find(|field| field.name == *field_name)
+        {
+            if parsed_field_value_matches(field, value) {
+                summary.unchanged_fields += 1;
+            } else {
+                field.value.value = value.clone();
+                field.value.raw = None;
+                field.value.expanded = None;
+                field.raw = None;
+                summary.changed_fields += 1;
+            }
+        } else {
+            entry.add_field(Cow::Owned(field_name.clone()), value.clone());
+            summary.added_fields += 1;
+        }
+    }
+
+    if remove_missing {
+        let mut index = 0usize;
+        while index < entry.fields.len() {
+            if present.contains(entry.fields[index].name.as_ref()) {
+                index += 1;
+            } else {
+                let _ = entry.remove_field_by_index(index);
+                summary.removed_fields += 1;
+            }
+        }
+    }
+}
+
+fn parsed_entry_from_record(record: PlainRecord) -> ParsedEntry<'static> {
+    let entry_type = record
+        .entry_type
+        .as_deref()
+        .filter(|entry_type| !entry_type.is_empty())
+        .unwrap_or("article");
+    ParsedEntry {
+        ty: crate::EntryType::parse(entry_type).into_owned(),
+        key: Cow::Owned(record.key),
+        fields: record
+            .fields
+            .into_iter()
+            .map(|(name, value)| ParsedField {
+                name: Cow::Owned(name),
+                value: ParsedValue::new(value),
+                raw: None,
+                source: None,
+                name_source: None,
+                value_source: None,
+            })
+            .collect(),
+        status: ParsedEntryStatus::Complete,
+        source: None,
+        entry_type_source: None,
+        key_source: None,
+        delimiter: None,
+        raw: None,
+        removed_field_sources: None,
+        diagnostics: Vec::new(),
+    }
+}
+
+fn parsed_field_value_matches(field: &ParsedField<'_>, value: &Value<'_>) -> bool {
+    field.value.value == *value || field.value.plain_text() == value.to_plain_string()
+}
+
+fn is_valid_bibtex_identifier(name: &str) -> bool {
+    !name.is_empty() && crate::parser::simd::scan_identifier(name.as_bytes()) == name.len()
+}
+
 fn document_to_dicts_for_py<'py>(
     py: Python<'py>,
     document: &ParsedDocument<'_>,
+    value_mode: &str,
 ) -> PyResult<Bound<'py, PyList>> {
+    let value_mode = RecordValueMode::parse(value_mode)?;
     let records = PyList::empty(py);
     let entry_type_key = PyString::new(py, "ENTRYTYPE");
     let id_key = PyString::new(py, "ID");
@@ -1489,7 +1937,7 @@ fn document_to_dicts_for_py<'py>(
         record.set_item(&id_key, entry.key())?;
         for field in &entry.fields {
             let key = cached_py_string(py, &mut field_keys, field.name.as_ref());
-            set_record_field_text(&record, key.bind(py), field)?;
+            set_record_field_text(py, &record, key.bind(py), field, value_mode)?;
         }
         records.append(record)?;
     }
@@ -1511,22 +1959,61 @@ fn cached_py_string<'a>(
 }
 
 fn set_record_field_text(
+    py: Python<'_>,
     record: &Bound<'_, PyDict>,
     key: &Bound<'_, PyString>,
     field: &ParsedField<'_>,
+    value_mode: RecordValueMode,
 ) -> PyResult<()> {
-    if let Some(expanded) = field.value.expanded.as_deref() {
-        return record.set_item(key, expanded);
+    match value_mode {
+        RecordValueMode::Plain => match &field.value.value {
+            Value::Literal(text) if !needs_text_projection(text) => {
+                record.set_item(key, text.as_ref())
+            }
+            Value::Variable(name) => record.set_item(key, name.as_ref()),
+            Value::Number(number) => {
+                let mut buffer = itoa::Buffer::new();
+                record.set_item(key, buffer.format(*number))
+            }
+            Value::Concat(_) | Value::Literal(_) => record.set_item(key, field.value.plain_text()),
+        },
+        RecordValueMode::Expanded => record.set_item(
+            key,
+            field
+                .value
+                .expanded
+                .as_deref()
+                .map_or_else(|| field.value.plain_text(), ToOwned::to_owned),
+        ),
+        RecordValueMode::Value => record.set_item(
+            key,
+            Py::new(
+                py,
+                PyValue {
+                    inner: field.value.value.clone().into_owned(),
+                },
+            )?,
+        ),
     }
+}
 
-    match &field.value.value {
-        Value::Literal(text) if !needs_text_projection(text) => record.set_item(key, text.as_ref()),
-        Value::Variable(name) => record.set_item(key, name.as_ref()),
-        Value::Number(number) => {
-            let mut buffer = itoa::Buffer::new();
-            record.set_item(key, buffer.format(*number))
+#[derive(Debug, Clone, Copy)]
+enum RecordValueMode {
+    Plain,
+    Expanded,
+    Value,
+}
+
+impl RecordValueMode {
+    fn parse(value: &str) -> PyResult<Self> {
+        match value {
+            "plain" => Ok(Self::Plain),
+            "expanded" => Ok(Self::Expanded),
+            "value" => Ok(Self::Value),
+            _ => Err(PyValueError::new_err(
+                "value_mode must be 'plain', 'expanded', or 'value'",
+            )),
         }
-        Value::Concat(_) | Value::Literal(_) => record.set_item(key, field.value.plain_text()),
     }
 }
 

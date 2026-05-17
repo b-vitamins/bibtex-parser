@@ -109,6 +109,7 @@
 //! ```
 
 #![forbid(unsafe_code)]
+#![cfg_attr(not(feature = "python"), allow(dead_code))]
 #![warn(
     clippy::all,
     clippy::pedantic,

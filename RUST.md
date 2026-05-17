@@ -47,14 +47,14 @@ Reproduction commands are listed in [Reproducing Benchmarks](#reproducing-benchm
 
 ```toml
 [dependencies]
-bibtex-parser = "0.2"
+bibtex-parser = "0.4"
 ```
 
 Enable optional functionality as needed:
 
 ```toml
 [dependencies]
-bibtex-parser = { version = "0.2", features = ["parallel", "latex_to_unicode"] }
+bibtex-parser = { version = "0.4", features = ["parallel", "latex_to_unicode"] }
 ```
 
 - `parallel`: Rayon-backed parsing for multiple files.
@@ -288,6 +288,8 @@ of multiple files from disk.
 - `Parser::tolerant()` recovers valid blocks after malformed input and records
   failures and diagnostics.
 - `Library` expands string definitions and month constants for field access.
+- `Value::from_bibtex_source` parses macro and concatenation-aware value
+  fragments for application code that needs to preserve BibTeX value structure.
 - `ParsedDocument` can retain raw entry, field, value, comment, preamble, string,
   and failed-block text when `preserve_raw()` is enabled.
 - Source columns are 1-based Unicode scalar columns. Byte spans are also exposed

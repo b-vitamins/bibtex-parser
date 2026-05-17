@@ -193,6 +193,111 @@ def test_plain_record_helpers_cover_rebuild_and_selected_entry_workflows() -> No
     assert citerra.parse(latex_output).entry("latex").get("title") == "Jos\\'e and \\alpha"
 
 
+def test_write_entries_serializes_latex_rich_plain_strings_parse_clean() -> None:
+    output = citerra.write_entries(
+        [
+            {
+                "ENTRYTYPE": "article",
+                "ID": "latex-rich",
+                "title": r"Learning with $\mathrm{SO}(3)$ and {Protected Words}",
+                "abstract": (
+                    "First line\n"
+                    r"Second line with \mathrm{X}, https://example.test/a?b={c}, "
+                    r"and escaped \{braces\}"
+                ),
+                "note": 'stray closing } and "quoted" text',
+            }
+        ],
+        trailing_comma=True,
+    )
+
+    reparsed = citerra.parse(output, tolerant=True)
+
+    assert reparsed.stats()["entries"] == 1
+    assert reparsed.stats()["diagnostics"] == 0
+    entry = reparsed.entry("latex-rich")
+    assert entry.get("title") == r"Learning with $\mathrm{SO}(3)$ and {Protected Words}"
+    assert r"\mathrm{X}" in entry.get("abstract")
+    assert entry.get("note") == r"stray closing } and \"quoted\" text"
+
+
+def test_document_record_overlay_preserves_blocks_and_unchanged_latex_source() -> None:
+    text = r"""@string{venue = "ICLR"}
+% keep this comment
+@preamble{"prefix"}
+@article{paper,
+  title = {Learning with $\mathrm{SO}(3)$ and {Protected Words}},
+  abstract = {First line
+    Second line with \mathrm{X} and {nested text}},
+  booktitle = venue
+}
+"""
+    document = citerra.parse(text)
+    records = document.to_dicts()
+    records[0]["pdf"] = "paper.pdf"
+    records[0]["eprint"] = citerra.Value.from_bibtex_source("arxiv_id # {v2}")
+
+    summary = document.update_from_dicts(records)
+    output = document.write()
+    reparsed = citerra.parse(output, tolerant=True)
+
+    assert summary["matched_entries"] == 1
+    assert summary["added_fields"] == 2
+    assert summary["unchanged_fields"] >= 3
+    assert "title = {Learning with $\\mathrm{SO}(3)$ and {Protected Words}}" in output
+    assert "abstract = {First line" in output
+    assert "@string{venue = \"ICLR\"}" in output
+    assert "% keep this comment" in output
+    assert "@preamble{\"prefix\"}" in output
+    assert reparsed.stats()["diagnostics"] == 0
+    assert reparsed.stats()["entries"] == 1
+    assert reparsed.stats()["strings"] == 1
+    assert reparsed.stats()["preambles"] == 1
+    assert reparsed.stats()["comments"] == 1
+    assert reparsed.entry("paper").get("pdf") == "paper.pdf"
+    assert reparsed.entry("paper").field("eprint").value.kind == "concat"
+
+
+def test_value_mode_records_preserve_macros_and_support_new_entries() -> None:
+    document = citerra.parse(
+        """@string{venue = "VLDB"}
+@article{paper, title = venue # " 2026", year = 2026}"""
+    )
+
+    records = document.to_dicts(value_mode="value")
+    assert records[0]["title"].kind == "concat"
+    assert records[0]["title"].to_plain_string() == "venue 2026"
+    records.append(
+        {
+            "ENTRYTYPE": "misc",
+            "ID": "new",
+            "title": citerra.Value.from_bibtex_source("venue # { extended}"),
+        }
+    )
+
+    summary = document.update_from_dicts(records, create_missing=True)
+    output = document.write()
+    reparsed = citerra.parse(output, tolerant=True)
+
+    assert summary["added_entries"] == 1
+    assert reparsed.stats()["diagnostics"] == 0
+    assert reparsed.keys() == ["paper", "new"]
+    assert reparsed.entry("new").field("title").value.kind == "concat"
+
+
+def test_update_from_dicts_partial_record_keeps_existing_entry_type() -> None:
+    document = citerra.parse("@book{paper, title = {Before}}")
+
+    summary = document.update_from_dicts([{"ID": "paper", "title": "After"}])
+    output = document.write()
+    reparsed = citerra.parse(output, tolerant=True)
+
+    assert summary["changed_entry_types"] == 0
+    assert reparsed.stats()["diagnostics"] == 0
+    assert reparsed.entry("paper").entry_type == "book"
+    assert reparsed.entry("paper").get("title") == "After"
+
+
 def test_helpers_are_native_and_typed() -> None:
     assert citerra.normalize_doi("https://doi.org/10.1000/XYZ.") == "10.1000/xyz"
     assert citerra.parse_date("2026-05-13").month == 5

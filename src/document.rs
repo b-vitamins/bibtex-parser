@@ -328,6 +328,30 @@ pub enum ParsedEntryStatus {
     Partial,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum RemovedFieldSources {
+    One(SourceSpan),
+    Many(Vec<SourceSpan>),
+}
+
+impl RemovedFieldSources {
+    fn push(&mut self, source: SourceSpan) {
+        match self {
+            Self::One(first) => {
+                *self = Self::Many(vec![*first, source]);
+            }
+            Self::Many(sources) => sources.push(source),
+        }
+    }
+
+    fn as_slice(&self) -> &[SourceSpan] {
+        match self {
+            Self::One(source) => std::slice::from_ref(source),
+            Self::Many(sources) => sources.as_slice(),
+        }
+    }
+}
+
 /// Delimiter used by a BibTeX entry body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryDelimiter {
@@ -568,6 +592,7 @@ pub struct ParsedEntry<'a> {
     pub delimiter: Option<EntryDelimiter>,
     /// Exact raw entry text, when retained by the parser mode.
     pub raw: Option<Cow<'a, str>>,
+    pub(crate) removed_field_sources: Option<Box<RemovedFieldSources>>,
     /// Diagnostics attached to this entry.
     pub diagnostics: Vec<Diagnostic>,
 }
@@ -590,6 +615,7 @@ impl<'a> ParsedEntry<'a> {
             key_source: None,
             delimiter: None,
             raw: None,
+            removed_field_sources: None,
             diagnostics: Vec::new(),
         }
     }
@@ -612,6 +638,7 @@ impl<'a> ParsedEntry<'a> {
             key_source: None,
             delimiter: None,
             raw: None,
+            removed_field_sources: None,
             diagnostics: Vec::new(),
         }
     }
@@ -669,6 +696,7 @@ impl<'a> ParsedEntry<'a> {
             key_source: Some(key_source),
             delimiter: Some(located.delimiter),
             raw: None,
+            removed_field_sources: None,
             diagnostics: Vec::new(),
         }
     }
@@ -737,7 +765,7 @@ impl<'a> ParsedEntry<'a> {
         self.ty = ty;
     }
 
-    /// Add a field and switch this entry to structured writing.
+    /// Add a field while preserving surrounding source text when possible.
     pub fn add_field(&mut self, name: impl Into<Cow<'a, str>>, value: Value<'a>) {
         self.fields.push(ParsedField {
             name: name.into(),
@@ -747,7 +775,6 @@ impl<'a> ParsedEntry<'a> {
             name_source: None,
             value_source: None,
         });
-        self.raw = None;
     }
 
     /// Replace the first field value whose name matches exactly.
@@ -793,11 +820,15 @@ impl<'a> ParsedEntry<'a> {
     /// Remove all fields whose name matches exactly.
     #[must_use]
     pub fn remove_field(&mut self, name: &str) -> usize {
-        let original_len = self.fields.len();
-        self.fields.retain(|field| field.name != name);
-        let removed = original_len - self.fields.len();
-        if removed > 0 {
-            self.raw = None;
+        let mut removed = 0usize;
+        let mut index = 0usize;
+        while index < self.fields.len() {
+            if self.fields[index].name == name {
+                self.remove_field_index(index);
+                removed += 1;
+            } else {
+                index += 1;
+            }
         }
         removed
     }
@@ -808,25 +839,57 @@ impl<'a> ParsedEntry<'a> {
         let Some(index) = nth_field_index(&self.fields, name, occurrence) else {
             return false;
         };
-        self.fields.remove(index);
-        self.raw = None;
+        self.remove_field_index(index);
+        true
+    }
+
+    /// Remove a field by absolute field index.
+    #[must_use]
+    pub fn remove_field_by_index(&mut self, index: usize) -> bool {
+        if index >= self.fields.len() {
+            return false;
+        }
+        self.remove_field_index(index);
         true
     }
 
     /// Remove configured export-only fields from this entry.
     #[must_use]
     pub fn remove_export_fields(&mut self, names: &[&str]) -> usize {
-        let original_len = self.fields.len();
-        self.fields.retain(|field| {
-            !names
+        let mut removed = 0usize;
+        let mut index = 0usize;
+        while index < self.fields.len() {
+            if names
                 .iter()
-                .any(|name| field.name.eq_ignore_ascii_case(name))
-        });
-        let removed = original_len - self.fields.len();
-        if removed > 0 {
-            self.raw = None;
+                .any(|name| self.fields[index].name.eq_ignore_ascii_case(name))
+            {
+                self.remove_field_index(index);
+                removed += 1;
+            } else {
+                index += 1;
+            }
         }
         removed
+    }
+
+    fn remove_field_index(&mut self, index: usize) {
+        let field = self.fields.remove(index);
+        if let Some(source) = field.source {
+            match &mut self.removed_field_sources {
+                Some(sources) => sources.push(source),
+                None => {
+                    self.removed_field_sources = Some(Box::new(RemovedFieldSources::One(source)));
+                }
+            }
+        } else {
+            self.raw = None;
+        }
+    }
+
+    pub(crate) fn removed_field_sources(&self) -> &[SourceSpan] {
+        self.removed_field_sources
+            .as_deref()
+            .map_or(&[], RemovedFieldSources::as_slice)
     }
 
     /// Return the first field matching `name`, ignoring ASCII case.
@@ -911,6 +974,7 @@ impl<'a> ParsedEntry<'a> {
             key_source: self.key_source,
             delimiter: self.delimiter,
             raw: self.raw.map(|raw| Cow::Owned(raw.into_owned())),
+            removed_field_sources: self.removed_field_sources,
             diagnostics: self.diagnostics,
         }
     }
@@ -1656,6 +1720,13 @@ impl<'a> ParsedDocument<'a> {
         &mut self.entries
     }
 
+    /// Append an entry at the end of the document block order.
+    pub fn push_entry(&mut self, entry: ParsedEntry<'a>) {
+        let index = self.entries.len();
+        self.entries.push(entry);
+        self.blocks.push(ParsedBlock::Entry(index));
+    }
+
     /// Return a mutable entry by citation key.
     #[must_use]
     pub fn entry_mut_by_key(&mut self, key: &str) -> Option<&mut ParsedEntry<'a>> {
@@ -2034,6 +2105,7 @@ fn recover_partial_entry<'a>(
         key_source: header.key_source,
         delimiter: Some(header.delimiter),
         raw: preserve_raw.then(|| failed.raw.clone()),
+        removed_field_sources: None,
         diagnostics: vec![diagnostic],
     })
 }

@@ -95,6 +95,20 @@ fn public_value_text_projections_cover_core_value_shapes() {
     assert_eq!(concat.to_plain_string(), "venue 2026");
     assert_eq!(Value::from_plain_string("plain").as_str(), Some("plain"));
     assert_eq!(concat.to_bibtex_source(), "venue # { 2026}");
+    assert_eq!(
+        Value::from_bibtex_source(r#"venue # { 2026}"#)
+            .unwrap()
+            .to_plain_string(),
+        "venue 2026"
+    );
+    assert_eq!(
+        Value::Literal(Cow::Borrowed(r"$\mathrm{SO}(3)$ and {Words}")).to_bibtex_source(),
+        r"{$\mathrm{SO}(3)$ and {Words}}"
+    );
+    assert_eq!(
+        Value::Literal(Cow::Borrowed(r#"stray } and "quote""#)).to_bibtex_source(),
+        r#""stray } and \"quote\"""#
+    );
 }
 
 #[test]

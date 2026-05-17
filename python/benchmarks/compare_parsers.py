@@ -61,6 +61,7 @@ def load_cases(text: str, *, write: bool) -> list[Case]:
         if write:
             raw_document = citerra.parse(text, capture_source=True, preserve_raw=True)
             structured_document = citerra.parse(text, capture_source=False, preserve_raw=False)
+            plain_records = raw_document.to_dicts()
             cases.append(
                 Case(
                     "citerra raw-preserving write",
@@ -73,6 +74,20 @@ def load_cases(text: str, *, write: bool) -> list[Case]:
                     "citerra normalized write",
                     package_version("citerra"),
                     lambda: citerra.dumps(structured_document),
+                )
+            )
+            cases.append(
+                Case(
+                    "citerra plain-record write",
+                    package_version("citerra"),
+                    lambda: citerra.write_entries(plain_records),
+                )
+            )
+            cases.append(
+                Case(
+                    "citerra parse-record-update-write",
+                    package_version("citerra"),
+                    lambda: parse_record_update_write(citerra, text),
                 )
             )
         else:
@@ -151,6 +166,15 @@ def load_cases(text: str, *, write: bool) -> list[Case]:
         pass
 
     return cases
+
+
+def parse_record_update_write(citerra: object, text: str) -> str:
+    document = citerra.parse(text, capture_source=True, preserve_raw=True)
+    records = document.to_dicts()
+    for record in records:
+        record.setdefault("note", "accepted")
+    document.update_from_dicts(records)
+    return document.write()
 
 
 def main() -> None:

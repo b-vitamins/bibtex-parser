@@ -4,6 +4,36 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+## 0.4.0 - 2026-05-17
+
+### Added
+
+- Added native Python plain-record writing for `write_entries()`.
+- Added `Document.update_from_dicts()` for applying plain-record edits back to a
+  source-preserving document.
+- Added `value_mode` to `Document.to_dicts()` and `document_to_dicts()` so
+  callers can choose plain, expanded, or `Value` record projections.
+- Added `Value.from_bibtex_source()` for macro and concatenation-aware value
+  construction.
+
+### Fixed
+
+- Made plain-record serialization emit parse-clean BibTeX for LaTeX-rich text
+  with balanced braces, math fragments, URLs, multiline values, escaped braces,
+  quotes, and stray closing braces.
+- Kept unchanged raw fields intact when document-level record overlays add
+  fields to source-preserving entries.
+- Preserved comments, preambles, string definitions, and source-order blocks
+  across source-preserving document writes.
+
+### Changed
+
+- Low-churn field removal now uses retained source spans when available and
+  falls back to normalized entry output for mixed add/remove edits that cannot
+  be patched safely.
+- Extended writer benchmarks to include native plain-record output and
+  parse-record-update-write workflows.
+
 ## 0.3.1 - 2026-05-14
 
 ### Fixed

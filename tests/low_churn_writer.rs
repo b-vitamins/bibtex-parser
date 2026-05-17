@@ -30,6 +30,42 @@ fn one_field_edit_preserves_surrounding_entry_text() {
 }
 
 #[test]
+fn added_field_is_patched_into_raw_entry_without_reserializing_latex_fields() {
+    let input = r#"@article{paper,
+  title = {Learning with $\mathrm{SO}(3)$ and {Protected Words}},
+  abstract = {First line
+    Second line with \mathrm{X}},
+  year = 2026
+}"#;
+    let mut document = Parser::new().preserve_raw().parse_document(input).unwrap();
+
+    document.entries_mut()[0].add_field("pdf", Value::from_plain_string("paper.pdf"));
+
+    let output = document_to_string(&document).unwrap();
+    assert!(output.contains(r#"title = {Learning with $\mathrm{SO}(3)$ and {Protected Words}}"#));
+    assert!(output.contains(r#"abstract = {First line"#));
+    assert!(output.contains("  pdf = {paper.pdf}\n}"));
+    assert!(Library::parse(&output).is_ok());
+}
+
+#[test]
+fn removed_field_is_cut_from_raw_entry_when_source_span_is_available() {
+    let input = r#"@article{paper,
+  title = {Keep {This}},
+  file = {drop.pdf},
+  year = 2026
+}"#;
+    let mut document = Parser::new().preserve_raw().parse_document(input).unwrap();
+
+    assert_eq!(document.entries_mut()[0].remove_export_fields(&["file"]), 1);
+
+    let output = document_to_string(&document).unwrap();
+    assert!(output.contains("title = {Keep {This}}"));
+    assert!(!output.contains("drop.pdf"));
+    assert!(Library::parse(&output).is_ok());
+}
+
+#[test]
 fn normalized_document_output_is_explicitly_configured() {
     let input = "@article{paper,title=\"Fast\",year=2026}";
     let document = Parser::new().preserve_raw().parse_document(input).unwrap();

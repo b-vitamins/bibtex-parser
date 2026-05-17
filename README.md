@@ -188,7 +188,8 @@ output = document.write(config)
 
 Some application code wants ordinary dictionaries for filtering, indexing, or
 bulk transforms. `citerra` provides explicit helpers for that shape without
-changing the document model:
+changing the document model. Use `write_entries()` for new normalized output
+from records:
 
 ```python
 document = citerra.parse_path("references.bib")
@@ -204,6 +205,33 @@ text = citerra.write_entries(
 ```
 
 Plain records use `ENTRYTYPE` and `ID` keys for the entry type and citation key.
+Values may be plain strings, integers, or `Value` objects.
+
+For low-churn edits to a whole parsed document, overlay records back onto the
+document and then write the document. This preserves retained comments,
+preambles, string definitions, source order, and unchanged raw field text where
+possible:
+
+```python
+document = citerra.parse_path("references.bib")
+records = document.to_dicts()
+
+for record in records:
+    if record.get("doi"):
+        record["note"] = "checked"
+
+summary = document.update_from_dicts(records)
+text = document.write()
+```
+
+Use `value_mode="value"` when applications need macro and concatenation-aware
+records:
+
+```python
+records = document.to_dicts(value_mode="value")
+records[0]["title"] = citerra.Value.from_bibtex_source('venue # " 2026"')
+document.update_from_dicts(records)
+```
 
 ## Helpers
 
@@ -240,7 +268,7 @@ The Rust crate is published as `bibtex-parser` on crates.io:
 
 ```toml
 [dependencies]
-bibtex-parser = "0.2"
+bibtex-parser = "0.4"
 ```
 
 See [RUST.md](RUST.md) for Rust usage.

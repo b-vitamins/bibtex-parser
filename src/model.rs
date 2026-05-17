@@ -1,6 +1,7 @@
 //! Data models for BibTeX entries
 
 use ahash::AHashMap;
+use memchr::memchr2;
 use std::borrow::Cow;
 use std::fmt;
 
@@ -1457,6 +1458,26 @@ impl Value<'_> {
         Value::Literal(text.into())
     }
 
+    /// Parse a BibTeX value fragment into a structured value.
+    ///
+    /// The input should be a field-value fragment such as `{Title}`, `venue`, or
+    /// `"Part " # suffix`. Leading and trailing whitespace are accepted, but
+    /// any other trailing text is rejected.
+    pub fn from_bibtex_source(source: &str) -> crate::Result<Value<'_>> {
+        let mut input = source;
+        crate::parser::lexer::skip_whitespace(&mut input);
+        let value = crate::parser::value::parse_value(&mut input)
+            .map_err(|_| crate::Error::WinnowError("invalid BibTeX value source".to_string()))?;
+        crate::parser::lexer::skip_whitespace(&mut input);
+        if input.is_empty() {
+            Ok(value)
+        } else {
+            Err(crate::Error::WinnowError(format!(
+                "trailing text after BibTeX value: {input:?}"
+            )))
+        }
+    }
+
     /// Serialize this value as a BibTeX value fragment.
     ///
     /// This is a normalized source projection. Use source-preserving parsing
@@ -1464,7 +1485,7 @@ impl Value<'_> {
     #[must_use]
     pub fn to_bibtex_source(&self) -> String {
         match self {
-            Self::Literal(text) => format!("{{{text}}}"),
+            Self::Literal(text) => literal_to_bibtex_source(text),
             Self::Number(number) => number.to_string(),
             Self::Variable(name) => name.to_string(),
             Self::Concat(parts) => parts
@@ -1499,6 +1520,60 @@ impl Value<'_> {
             ),
         }
     }
+}
+
+fn literal_to_bibtex_source(text: &str) -> String {
+    if is_balanced_braced_literal_content(text) {
+        format!("{{{text}}}")
+    } else {
+        format!("\"{}\"", escape_quoted_literal(text))
+    }
+}
+
+fn is_balanced_braced_literal_content(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut depth = 0usize;
+    let mut pos = 0usize;
+
+    while let Some(offset) = memchr2(b'{', b'}', &bytes[pos..]) {
+        let idx = pos + offset;
+        if is_escaped_delimiter(bytes, idx) {
+            pos = idx + 1;
+            continue;
+        }
+
+        match bytes[idx] {
+            b'{' => depth += 1,
+            b'}' => {
+                let Some(new_depth) = depth.checked_sub(1) else {
+                    return false;
+                };
+                depth = new_depth;
+            }
+            _ => unreachable!(),
+        }
+        pos = idx + 1;
+    }
+
+    depth == 0
+}
+
+fn is_escaped_delimiter(input: &[u8], delimiter: usize) -> bool {
+    if delimiter == 0 || input[delimiter - 1] != b'\\' {
+        return false;
+    }
+
+    let mut slash_count = 0usize;
+    let mut pos = delimiter;
+    while pos > 0 && input[pos - 1] == b'\\' {
+        slash_count += 1;
+        pos -= 1;
+    }
+    slash_count % 2 == 1
+}
+
+fn escape_quoted_literal(text: &str) -> String {
+    text.replace('"', "\\\"")
 }
 
 impl fmt::Display for Value<'_> {
